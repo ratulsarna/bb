@@ -545,6 +545,7 @@ export function createAcpProviderAdapter(
         id: profile.providerId,
         displayName: profile.displayName,
         logoUrl: null,
+        supportsManualCompaction: profile.manualCompaction !== undefined,
       });
   const additionalWorkspaceWriteRoots = opts.additionalWorkspaceWriteRoots;
 
@@ -1416,6 +1417,17 @@ export function createAcpProviderAdapter(
             method: "thread/stop",
             params: { threadId: command.providerThreadId },
           };
+        case "thread/compact":
+          return profile.manualCompaction === undefined
+            ? { kind: "noop", reason: "manual compaction unsupported" }
+            : {
+                kind: "request",
+                method: "thread/compact",
+                params: {
+                  threadId: command.providerThreadId,
+                  compaction: profile.manualCompaction,
+                },
+              };
         case "thread/goal/clear":
           return { kind: "noop", reason: "goals unsupported" };
         case "thread/name/set":

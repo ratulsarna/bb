@@ -9,6 +9,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import {
   getBuiltInAgentProviderInfo,
   isAgentProviderId,
+  supportsManualCompaction,
 } from "@bb/agent-providers";
 import {
   formatCustomAcpAgentProviderId,
@@ -217,6 +218,16 @@ function buildAcpLaunchSpecForProviderId(
   }
   const knownAgent = findKnownAcpAgentForProviderId(providerId);
   return knownAgent ? normalizeHostDaemonAcpLaunchSpec(knownAgent) : undefined;
+}
+
+export function providerSupportsManualCompaction(
+  deps: Pick<AppDeps, "config">,
+  providerId: string,
+): boolean {
+  return supportsManualCompaction(
+    providerId,
+    buildAcpLaunchSpecForProviderId(deps, providerId)?.manualCompaction,
+  );
 }
 
 function resolveClaudeCodeMockCliTrafficConfig(

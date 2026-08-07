@@ -2083,6 +2083,12 @@ export function createCodexProviderAdapter(
               turnId: command.activeTurnId,
             },
           };
+        case "thread/compact":
+          return {
+            kind: "request",
+            method: "thread/compact/start",
+            params: { threadId: command.providerThreadId },
+          };
         case "thread/goal/clear":
           return {
             kind: "request",
