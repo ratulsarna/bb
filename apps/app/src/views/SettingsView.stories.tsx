@@ -340,12 +340,19 @@ function ExperimentsStory() {
       claudeCodeMockCliTrafficEnabled={
         state.experiments.claudeCodeMockCliTraffic
       }
+      cloudAiEnabled={state.experiments.cloudAi}
       disabled={false}
       newOnboardingEnabled={state.experiments.newOnboarding}
       onClaudeCodeMockCliTrafficEnabledChange={(enabled) =>
         state.setExperiments((current) => ({
           ...current,
           claudeCodeMockCliTraffic: enabled,
+        }))
+      }
+      onCloudAiEnabledChange={(enabled) =>
+        state.setExperiments((current) => ({
+          ...current,
+          cloudAi: enabled,
         }))
       }
       onNewOnboardingEnabledChange={(enabled) =>

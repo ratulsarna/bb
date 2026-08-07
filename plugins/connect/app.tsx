@@ -1,23 +1,9 @@
-// bb-plugin-connect — the frontend bundle.
-//
-// One settingsSection "Remote access", driven by the `status` rpc and live
-// `connect` realtime pushes. Four states, each matched to the redesign mock:
-// not paired (promise + two numbered steps + auto-submitting code field),
-// pairing (inline typed-code errors), connected (URL hero chip + QR toggle +
-// shared ports + isolated disconnect), reconnecting (amber wash + dimmed
-// body). Disconnect confirms in a dialog, then lands on the unpaired card
-// with a transient receipt.
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-import {
-  definePluginApp,
-  useRealtime,
-  useRpc,
-} from "@bb/plugin-sdk/app";
+// Cloud plugin frontend. Remote access and Cloud AI are separate settings
+// sections backed by one bb Cloud pairing and the same live status stream.
+// The phone action is a capability shortcut into Remote access, while the
+// plugin's own identity remains Cloud throughout plugin/settings surfaces.
+import { useCallback, useEffect, useRef, useState } from "react";
+import { definePluginApp, useRealtime, useRpc } from "@bb/plugin-sdk/app";
 import type { connectRpcContract } from "./src/rpc.js";
 import QRCode from "qrcode";
 import { Button } from "@bb/shared-ui/button";
@@ -30,11 +16,9 @@ import {
 } from "@bb/shared-ui/dialog";
 import { Icon } from "@bb/shared-ui/icon";
 import { Input } from "@bb/shared-ui/input";
+import { Switch } from "@bb/shared-ui/switch";
 import { cn } from "@bb/shared-ui/lib/utils";
-import {
-  CONNECT_REALTIME_CHANNEL,
-  type ConnectStatus,
-} from "@/src/types";
+import { CONNECT_REALTIME_CHANNEL, type ConnectStatus } from "@/src/types";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -110,6 +94,7 @@ function asStatus(payload: unknown): ConnectStatus | null {
     handle?: unknown;
     url?: unknown;
     dashboardUrl?: unknown;
+    cloudAiEnabled?: unknown;
     lastError?: unknown;
     nextRetryAt?: unknown;
     since?: unknown;
@@ -176,6 +161,8 @@ function asStatus(payload: unknown): ConnectStatus | null {
         ? record.lastRemoteActivityAt
         : null,
     shares,
+    cloudAiEnabled:
+      typeof record.cloudAiEnabled === "boolean" ? record.cloudAiEnabled : true,
   };
 }
 
@@ -215,8 +202,13 @@ function hostOf(url: string): string {
  * complete-code check that drives auto-submit).
  */
 function formatConnectCode(raw: string): string {
-  const cleaned = raw.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
-  return cleaned.length > 4 ? `${cleaned.slice(0, 4)}-${cleaned.slice(4)}` : cleaned;
+  const cleaned = raw
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 8);
+  return cleaned.length > 4
+    ? `${cleaned.slice(0, 4)}-${cleaned.slice(4)}`
+    : cleaned;
 }
 
 function isCompleteCode(formatted: string): boolean {
@@ -344,7 +336,10 @@ function UrlHero({ url, showOpen }: { url: string; showOpen: boolean }) {
         onClick={copy}
         aria-label="Copy URL"
       >
-        <Icon name={copyState === "copied" ? "Check" : "Copy"} className="size-4" />
+        <Icon
+          name={copyState === "copied" ? "Check" : "Copy"}
+          className="size-4"
+        />
         {copyState === "copied"
           ? "Copied"
           : copyState === "manual"
@@ -476,8 +471,7 @@ function PairForm({
           aria-invalid={errorCode !== null}
           className={cn(
             "font-mono tracking-widest",
-            errorCode !== null &&
-              "border-destructive ring-1 ring-destructive",
+            errorCode !== null && "border-destructive ring-1 ring-destructive",
           )}
         />
         <Button type="submit" disabled={pending || !complete}>
@@ -640,7 +634,9 @@ function SharedPortsSection({
                       <span
                         className={cn(
                           "shrink-0 font-mono text-xs tabular-nums",
-                          share.url ? "text-foreground" : "text-muted-foreground",
+                          share.url
+                            ? "text-foreground"
+                            : "text-muted-foreground",
                         )}
                       >
                         :{share.port}
@@ -680,7 +676,10 @@ function SharedPortsSection({
                         onClick={() => unexpose(share.hostId, share.port)}
                       >
                         {revokingShare === `${share.hostId}:${share.port}` ? (
-                          <Icon name="Spinner" className="size-4 animate-spin" />
+                          <Icon
+                            name="Spinner"
+                            className="size-4 animate-spin"
+                          />
                         ) : null}
                         Revoke
                       </Button>
@@ -727,8 +726,8 @@ function SharedPortsSection({
       ) : null}
 
       <p className="text-xs text-subtle-foreground/75">
-        Agents can expose their dev servers too — same owner sign-in required
-        to view.
+        Agents can expose their dev servers too — same owner sign-in required to
+        view.
       </p>
       {error !== null ? (
         <p className="text-xs text-destructive-text">{error}</p>
@@ -764,8 +763,8 @@ function DisconnectDialog({
             </DialogHeader>
             <p className="text-sm text-muted-foreground">
               <span className="font-medium text-foreground">{host}</span> will
-              stop working on all devices. Re-pairing needs a new code from
-              your getbb.app dashboard.
+              stop working on all devices. Re-pairing needs a new code from your
+              getbb.app dashboard.
             </p>
             <DialogFooter>
               <Button
@@ -844,8 +843,7 @@ function NotPairedContent({
           name="AlertTriangle"
           className="mt-px size-3.5 shrink-0 opacity-70"
         />
-        Anyone signed in to your getbb.app account gets full control of this
-        bb.
+        Anyone signed in to your getbb.app account gets full control of this bb.
       </p>
     </div>
   );
@@ -978,6 +976,69 @@ function ConnectedContent({
   );
 }
 
+function CloudAiControl({
+  status,
+  onChanged,
+}: {
+  status: ConnectStatus;
+  onChanged: () => void;
+}) {
+  const rpc = useRpc<typeof connectRpcContract>();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const setEnabled = useCallback(
+    (enabled: boolean) => {
+      setPending(true);
+      setError(null);
+      rpc.call("setCloudAi", { enabled }).then(
+        () => {
+          setPending(false);
+          onChanged();
+        },
+        (rpcError: unknown) => {
+          setPending(false);
+          setError(errorText(rpcError));
+        },
+      );
+    },
+    [rpc, onChanged],
+  );
+
+  if (!status.paired) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        <a
+          href="#remote-access"
+          className="font-medium text-foreground underline-offset-2 hover:underline"
+        >
+          Set up Remote access
+        </a>{" "}
+        to use Cloud.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-3">
+        <p className="min-w-0 flex-1 text-sm font-medium">
+          Enable for thread titles, commit messages and voice transcription
+        </p>
+        <Switch
+          checked={status.cloudAiEnabled}
+          disabled={pending}
+          onCheckedChange={setEnabled}
+          aria-label="Enable for thread titles, commit messages and voice transcription"
+        />
+      </div>
+      {error !== null ? (
+        <p className="text-xs text-destructive-text">{error}</p>
+      ) : null}
+    </div>
+  );
+}
+
 function ReconnectingContent({
   status,
   onChanged,
@@ -1071,15 +1132,14 @@ function ReconnectingContent({
 }
 
 // ---------------------------------------------------------------------------
-// Section root.
+// Shared status lifecycle. Each independently mounted settings section reads
+// the same RPC snapshot and applies full realtime snapshots without polling.
 // ---------------------------------------------------------------------------
 
-function ConnectSettingsSection() {
+function useConnectStatus() {
   const rpc = useRpc<typeof connectRpcContract>();
   const [status, setStatus] = useState<ConnectStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [flash, setFlash] = useState<string | null>(null);
-  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refetch = useCallback(() => {
     rpc.call("status").then(
@@ -1109,6 +1169,18 @@ function ConnectSettingsSection() {
       setLoadError(null);
     }
   });
+
+  return { loadError, refetch, status };
+}
+
+// ---------------------------------------------------------------------------
+// Remote-access settings section.
+// ---------------------------------------------------------------------------
+
+function RemoteAccessSettingsSection() {
+  const { loadError, refetch, status } = useConnectStatus();
+  const [flash, setFlash] = useState<string | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showDisconnected = useCallback(() => {
     // Transient inline receipt (the SDK exposes no toast on this surface):
@@ -1169,19 +1241,46 @@ function ConnectSettingsSection() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Cloud-AI settings section.
+// ---------------------------------------------------------------------------
+
+function CloudAiSettingsSection() {
+  const { loadError, refetch, status } = useConnectStatus();
+
+  if (loadError !== null) {
+    return (
+      <p className="text-sm text-destructive-text">
+        Failed to load AI feature settings: {loadError}
+      </p>
+    );
+  }
+  if (status === null) {
+    return <p className="text-sm text-muted-foreground">Loading...</p>;
+  }
+
+  return <CloudAiControl status={status} onChanged={refetch} />;
+}
+
 export default definePluginApp((app) => {
   app.slots.settingsSection({
     id: "remote-access",
+    title: "Remote access",
     description:
       "Use this bb from any device, anywhere — powered by getbb.app.",
-    component: ConnectSettingsSection,
+    component: RemoteAccessSettingsSection,
+  });
+  app.slots.settingsSection({
+    id: "cloud-ai",
+    title: "AI Gateway",
+    component: CloudAiSettingsSection,
   });
   app.slots.sidebarFooterAction({
     id: "remote-access",
     title: "Remote access",
     icon: "Smartphone",
     run({ openSettings }) {
-      openSettings();
+      openSettings({ sectionId: "remote-access" });
     },
   });
 });

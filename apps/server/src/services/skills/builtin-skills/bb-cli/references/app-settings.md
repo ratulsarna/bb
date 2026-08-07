@@ -55,3 +55,14 @@ every window and client sees the same value.
 - Enable it with `bb settings experiment newOnboarding true`.
 - Use `bb settings replay-onboarding` to enable the experiment and show the
   agent and project setup guide again.
+
+## Cloud AI
+
+- The `cloudAi` experiment defaults to false. Enable it with
+  `bb settings experiment cloudAi true`.
+- It is the outer product gate for cloud-backed thread titles, commit messages,
+  and voice transcription. While off, Cloud AI is hidden in the Cloud plugin
+  and the server does not send requests to its registered provider.
+- Remote access, pairing, and port sharing remain available while it is off.
+- Once enabled, `bb connect ai [on|off]` controls the plugin's separate inner
+  routing preference. Both the experiment and preference must be on.

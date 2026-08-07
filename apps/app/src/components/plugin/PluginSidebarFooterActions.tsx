@@ -1,8 +1,9 @@
 import { useNavigate } from "react-router-dom";
 import { cn } from "@bb/shared-ui/lib/utils";
 import { COARSE_POINTER_CHILD_ICON_BUTTON_CLASS } from "@bb/shared-ui/coarse-pointer-sizing";
+import { Icon } from "@bb/shared-ui/icon";
 import { SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar.js";
-import { PluginIcon } from "@/components/plugin/PluginIcon";
+import { pluginIconName } from "@/components/plugin/PluginIcon";
 import {
   usePluginSlots,
   type PluginSidebarFooterActionSlot,
@@ -63,7 +64,11 @@ function PluginSidebarFooterActionList({
               });
             }}
           >
-            <PluginIcon pluginId={action.pluginId} icon={action.icon} />
+            <Icon
+              name={pluginIconName(action.icon)}
+              className="size-4 shrink-0"
+              aria-hidden="true"
+            />
             <span className="sr-only">{action.title}</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
@@ -79,8 +84,12 @@ function runSidebarFooterAction({
   action: PluginSidebarFooterActionSlot;
   navigate: ReturnType<typeof useNavigate>;
 }): void {
-  const openSettings = () => {
-    void navigate(getSettingsPluginRoutePath(action.pluginId));
+  const openSettings: Parameters<typeof action.run>[0]["openSettings"] = (
+    options,
+  ) => {
+    void navigate(
+      getSettingsPluginRoutePath(action.pluginId, options?.sectionId),
+    );
   };
   const warn = (error: unknown) => {
     console.warn(

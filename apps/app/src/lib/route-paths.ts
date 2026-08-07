@@ -103,8 +103,14 @@ export function getSettingsRoutePath(section?: string): string {
     : `/settings/${encodeURIComponent(section)}`;
 }
 
-export function getSettingsPluginRoutePath(pluginId: string): string {
-  return `/settings/plugins/${encodeURIComponent(pluginId)}`;
+export function getSettingsPluginRoutePath(
+  pluginId: string,
+  sectionId?: string,
+): string {
+  const path = `/settings/plugins/${encodeURIComponent(pluginId)}`;
+  return sectionId === undefined
+    ? path
+    : `${path}#${encodeURIComponent(sectionId)}`;
 }
 
 export function getSettingsProviderRoutePath(providerId: string): string {

@@ -309,6 +309,7 @@ const ICON_MAP = {
   CircleQuestion: HelpCircleIcon,
   CircleX: CancelCircleIcon,
   Clock: Clock01Icon,
+  Cloud: CloudIcon,
   Code: SourceCodeIcon,
   ComputerTerminal01: ComputerTerminal01Icon,
   Columns2: LayoutTwoColumnIcon,

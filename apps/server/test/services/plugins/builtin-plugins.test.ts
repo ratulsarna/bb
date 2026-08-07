@@ -198,7 +198,7 @@ describe("builtin plugin reconciliation", () => {
     const expectedIcons = new Map([
       ["ask-user-question", "MessageQuestion"],
       ["automations", "Clock"],
-      ["connect", "Smartphone"],
+      ["connect", "Cloud"],
       ["custom-instructions", "EditFile"],
       ["inline-vis", "AppWindow"],
       ["provider-retry", "ArrowReloadHorizontal"],
@@ -216,6 +216,17 @@ describe("builtin plugin reconciliation", () => {
         expectedIcons.get(builtin.name),
       );
     }
+  });
+
+  it("presents the compatibility-id connect plugin as Cloud", async () => {
+    const manifest = await readPluginManifest(
+      resolveBuiltinPluginRootPath("connect"),
+    );
+    expect(manifest).toMatchObject({
+      id: "connect",
+      name: "Cloud",
+      branding: { icon: "Cloud" },
+    });
   });
 
   afterEach(async () => {

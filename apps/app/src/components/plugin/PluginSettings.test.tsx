@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQueryClientTestHarness } from "@/test/queryClientTestHarness";
 import {
@@ -283,14 +284,16 @@ describe("PluginSettingsDetail settings gating", () => {
     });
     const { wrapper } = createQueryClientTestHarness();
     render(
-      <PluginSettingsDetail
-        plugin={{
-          ...rowPlugin("running"),
-          id: "connect",
-          provenance: "builtin",
-          hasSettings: false,
-        }}
-      />,
+      <MemoryRouter>
+        <PluginSettingsDetail
+          plugin={{
+            ...rowPlugin("running"),
+            id: "connect",
+            provenance: "builtin",
+            hasSettings: false,
+          }}
+        />
+      </MemoryRouter>,
       { wrapper },
     );
 

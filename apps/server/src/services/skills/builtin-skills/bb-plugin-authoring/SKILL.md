@@ -731,6 +731,22 @@ the same cleanup without a replacement. A
 captured `bb` from a previous load throws `PluginContextStaleError` on use
 — never stash the API object in module-level state that outlives a load.
 
+### bb.experimental_registerCloudAiProvider
+
+`bb.experimental_registerCloudAiProvider(provider)` (EXPERIMENTAL — see
+docs/api_to_audit.md) registers a cloud route for bb's small AI tasks:
+thread-title inference, commit-message inference, and voice transcription.
+The provider is `{ isAvailable(): boolean; complete({prompt, schema, signal});
+transcribe({file, prompt?, signal}) }` where the async methods resolve to
+`{ ok: true, value }` or `{ ok: false, code, message }` (codes: `unauthorized`,
+`quota_exhausted`, `unavailable`) — result-shaped, never thrown classes. When
+the server's `cloudAi` experiment is enabled and `isAvailable()` is true, the
+host tries the provider before the locally configured AI providers and falls
+back on `ok: false`. While the experiment is off, the provider may remain
+registered but is never called. Single host-wide slot; the most recent
+registration wins and is unregistered automatically with the plugin's dispose
+hooks. Used by the builtin Cloud plugin (internal id `connect`) for bb Cloud.
+
 ## Frontend (`bb.app` entry)
 
 `app.tsx` default-exports `definePluginApp` from `@bb/plugin-sdk/app`.
@@ -821,11 +837,16 @@ export default definePluginApp((app) => {
     id: "credentials",
     component: CredentialForm,
   });
+  app.slots.settingsSection({
+    id: "remote-access",
+    title: "Remote access",
+    component: RemoteAccessSettings,
+  });
   app.slots.sidebarFooterAction({
-    id: "remote",
+    id: "remote-access",
     title: "Remote access",
     icon: "Smartphone",
-    run: ({ openSettings }) => openSettings(),
+    run: ({ openSettings }) => openSettings({ sectionId: "remote-access" }),
   });
   app.slots.messageDirective({ id: "inline-vis", component: InlineVis });
   app.slots.experimental_threadList({
@@ -1079,8 +1100,10 @@ Slot props contracts (versioned, additive-only):
   the chrome so icons stay consistent. Registration:
   `{ id, title, icon, run }`. Activating it calls
   `run({ openSettings })` — use `openSettings()` to open this plugin's
-  detail page in Tools, or do anything else (rpc, toast). Errors from `run`
-  (sync or async) are contained and logged,
+  detail page in Tools, or `openSettings({ sectionId: "my-section" })` to
+  target one of its registered settings sections. The action's `icon` is its
+  own glyph rather than the plugin branding icon. The callback can also do
+  anything else (rpc, toast). Errors from `run` (sync or async) are contained and logged,
   never breaking the sidebar. `title` is the tooltip + accessible label;
   `icon` is a BB icon-name hint (unknown names fall back to a generic bolt).
 - `fileOpener` → `{ path: string, source }` — register as a viewer/editor

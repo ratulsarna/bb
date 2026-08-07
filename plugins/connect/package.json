@@ -3,15 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Remote access via getbb.app \u2014 this bb becomes reachable at https://<handle>.getbb.app. Disable to cut off all remote access.",
+  "description": "Connect this bb to bb Cloud (getbb.app) for remote access, shared ports, and account-backed AI features. Disable to cut off every Cloud capability.",
   "engines": {
     "bb": ">=0.0"
   },
   "bb": {
-    "name": "Remote access",
-    "description": "Remote access via getbb.app \u2014 this bb becomes reachable at https://<handle>.getbb.app. Disable to cut off all remote access.",
+    "name": "Cloud",
+    "description": "Connect this bb to bb Cloud (getbb.app) for remote access, shared ports, and account-backed AI features. Disable to cut off every Cloud capability.",
     "branding": {
-      "icon": "Smartphone"
+      "icon": "Cloud"
     },
     "server": "./src/server.ts",
     "app": "./app.tsx"

@@ -9,6 +9,7 @@ export function getExperiments(db: DbConnection): Experiments {
   const row = db
     .select({
       claudeCodeMockCliTraffic: systemExperiments.claudeCodeMockCliTraffic,
+      cloudAi: systemExperiments.cloudAi,
       newOnboarding: systemExperiments.newOnboarding,
       toolsHub: systemExperiments.toolsHub,
     })
@@ -28,6 +29,7 @@ export function setExperiments(
     .values({
       id: SYSTEM_EXPERIMENTS_ROW_ID,
       claudeCodeMockCliTraffic: experiments.claudeCodeMockCliTraffic,
+      cloudAi: experiments.cloudAi,
       newOnboarding: experiments.newOnboarding,
       toolsHub: experiments.toolsHub,
       updatedAt,
@@ -36,6 +38,7 @@ export function setExperiments(
       target: systemExperiments.id,
       set: {
         claudeCodeMockCliTraffic: experiments.claudeCodeMockCliTraffic,
+        cloudAi: experiments.cloudAi,
         newOnboarding: experiments.newOnboarding,
         toolsHub: experiments.toolsHub,
         updatedAt,

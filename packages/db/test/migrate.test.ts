@@ -294,6 +294,7 @@ function dropRewindAddedTables(db: DbConnection): void {
   dropSideChatPluginExperimentColumn(db);
   dropToolsHubExperimentColumn(db);
   dropNewOnboardingExperimentColumn(db);
+  dropCloudAiExperimentColumn(db);
   dropSteerActiveThreadOnEnterColumn(db);
   dropOnboardingCompletedAtColumn(db);
   // Thread visibility was added after the legacy checkpoints these tests
@@ -471,6 +472,19 @@ function dropNewOnboardingExperimentColumn(db: DbConnection): void {
   if (columns.some((column) => column.name === "new_onboarding")) {
     db.$client
       .prepare("ALTER TABLE system_experiments DROP COLUMN new_onboarding")
+      .run();
+  }
+}
+
+// Migration 0088 adds the Cloud AI experiment column. Rewind scenarios that
+// clear its migration row must drop the column before replay.
+function dropCloudAiExperimentColumn(db: DbConnection): void {
+  const columns = db.$client
+    .prepare<[], TableInfoRow>("PRAGMA table_info(system_experiments)")
+    .all();
+  if (columns.some((column) => column.name === "cloud_ai")) {
+    db.$client
+      .prepare("ALTER TABLE system_experiments DROP COLUMN cloud_ai")
       .run();
   }
 }
@@ -1224,6 +1238,7 @@ describe("migrate", () => {
     // exactly what an upgrading user's database looks like.
     dropOnboardingCompletedAtColumn(db);
     dropNewOnboardingExperimentColumn(db);
+    dropCloudAiExperimentColumn(db);
     // Delete by the journal timestamp, not a hash substring: migration hashes
     // are hex and can contain "0085" by coincidence.
     db.$client
@@ -1510,6 +1525,7 @@ describe("migrate", () => {
       dropSteerActiveThreadOnEnterColumn(db);
       dropOnboardingCompletedAtColumn(db);
       dropNewOnboardingExperimentColumn(db);
+      dropCloudAiExperimentColumn(db);
       dropHostMaxPermissionModeColumn(db);
 
       migrate(db);
@@ -1907,6 +1923,7 @@ describe("migrate", () => {
       dropSteerActiveThreadOnEnterColumn(db);
       dropOnboardingCompletedAtColumn(db);
       dropNewOnboardingExperimentColumn(db);
+      dropCloudAiExperimentColumn(db);
       dropHostMaxPermissionModeColumn(db);
 
       expect(
@@ -2001,6 +2018,7 @@ describe("migrate", () => {
       dropSteerActiveThreadOnEnterColumn(db);
       dropOnboardingCompletedAtColumn(db);
       dropNewOnboardingExperimentColumn(db);
+      dropCloudAiExperimentColumn(db);
       dropHostMaxPermissionModeColumn(db);
 
       expect(() => migrate(db)).not.toThrow();

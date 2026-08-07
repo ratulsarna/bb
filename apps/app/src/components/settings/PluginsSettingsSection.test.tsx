@@ -489,9 +489,9 @@ describe("PluginSettingsDetail settings gating", () => {
       expect(requests.some((request) => request.init?.method === "POST")).toBe(
         true,
       );
-      expect(
-        requests.some((request) => request.init?.method !== "POST"),
-      ).toBe(true);
+      expect(requests.some((request) => request.init?.method !== "POST")).toBe(
+        true,
+      );
     });
 
     const pendingSwitch = screen.getByRole("switch", {
@@ -622,6 +622,77 @@ describe("PluginSettingsDetail settings gating", () => {
       screen.getByRole("switch", { name: "Disable connect" }),
     ).toBeDefined();
     expect(screen.queryByText("This plugin declares no settings.")).toBeNull();
+  });
+
+  it("keeps Cloud identity above experiment-gated settings sections", async () => {
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    function RemoteAccessSettings() {
+      return <div>Custom remote access settings</div>;
+    }
+    function AiGatewaySettings() {
+      return <div>Custom AI Gateway settings</div>;
+    }
+    setPluginSlotRegistrations("connect", {
+      homepageSections: [],
+      settingsSections: [
+        {
+          id: "remote-access",
+          title: "Remote access",
+          component: RemoteAccessSettings,
+        },
+        {
+          id: "cloud-ai",
+          title: "AI Gateway",
+          component: AiGatewaySettings,
+        },
+      ],
+      navPanels: [],
+      threadPanelActions: [],
+      sidebarFooterActions: [],
+      fileOpeners: [],
+      messageDirectives: [],
+    });
+    const { queryClient, wrapper } = createQueryClientTestHarness();
+    queryClient.setQueryData(systemConfigQueryKey(), systemConfig());
+    render(
+      <MemoryRouter
+        initialEntries={["/settings/plugins/connect#remote-access"]}
+      >
+        <PluginSettingsDetail
+          plugin={{
+            ...rowPlugin("running"),
+            id: "connect",
+            name: "Cloud",
+            description: "Remote access and account-backed AI.",
+            icon: "Cloud",
+            hasSettings: false,
+          }}
+        />
+      </MemoryRouter>,
+      { wrapper },
+    );
+
+    expect(screen.getByRole("heading", { name: "Cloud" })).toBeDefined();
+    expect(
+      screen.getByText("Remote access and account-backed AI."),
+    ).toBeDefined();
+    expect(screen.getByRole("switch", { name: "Disable Cloud" })).toBeDefined();
+    expect(screen.getByText("Remote access")).toBeDefined();
+    expect(screen.getByText("Custom remote access settings")).toBeDefined();
+    expect(document.getElementById("remote-access")).not.toBeNull();
+    expect(screen.queryByText("AI Gateway")).toBeNull();
+    expect(screen.queryByText("Custom AI Gateway settings")).toBeNull();
+    await vi.waitFor(() =>
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" }),
+    );
+
+    queryClient.setQueryData(systemConfigQueryKey(), {
+      ...systemConfig(),
+      experiments: { ...defaultExperiments, cloudAi: true },
+    });
+    expect(await screen.findByText("AI Gateway")).toBeDefined();
+    expect(screen.getByText("Custom AI Gateway settings")).toBeDefined();
   });
 });
 

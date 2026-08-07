@@ -283,9 +283,10 @@ export interface PluginPendingInteractionRegistration {
 export interface PluginSidebarFooterActionContext {
   /**
    * Navigate to this plugin's detail page in Tools, where declarative settings
-   * and `settingsSection` slots render.
+   * and `settingsSection` slots render. Pass a section id to target one of
+   * this plugin's registered settings sections directly.
    */
-  openSettings(): void;
+  openSettings(options?: { sectionId?: string }): void;
 }
 
 /**

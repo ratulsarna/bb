@@ -15,6 +15,11 @@ export const experimentsSchema = z.object({
    */
   claudeCodeMockCliTraffic: z.boolean(),
   /**
+   * Cloud AI: permits paired cloud providers to serve server-owned AI
+   * features such as metadata inference and voice transcription.
+   */
+  cloudAi: z.boolean(),
+  /**
    * New onboarding: shows the first-run agent and project setup guide.
    */
   newOnboarding: z.boolean(),
@@ -29,6 +34,7 @@ export type Experiments = z.infer<typeof experimentsSchema>;
 
 export const defaultExperiments: Experiments = {
   claudeCodeMockCliTraffic: false,
+  cloudAi: false,
   newOnboarding: false,
   toolsHub: false,
 };

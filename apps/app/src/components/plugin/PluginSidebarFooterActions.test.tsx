@@ -32,7 +32,13 @@ function registrationSet(
 }
 
 function LocationProbe() {
-  return <output aria-label="Current path">{useLocation().pathname}</output>;
+  const location = useLocation();
+  return (
+    <output aria-label="Current path">
+      {location.pathname}
+      {location.hash}
+    </output>
+  );
 }
 
 function renderWithProviders(ui: ReactNode, toolsHubEnabled = false) {
@@ -56,7 +62,7 @@ afterEach(() => {
 });
 
 describe("PluginSidebarFooterActions", () => {
-  it("prefers branding.icon over the logo and contribution icon", () => {
+  it("uses the action icon instead of the plugin branding icon", () => {
     setPluginLogoUrls(
       new Map([
         [
@@ -87,8 +93,8 @@ describe("PluginSidebarFooterActions", () => {
 
     renderWithProviders(<PluginSidebarFooterActions />);
 
-    expect(document.querySelector('[data-icon="FileText"]')).not.toBeNull();
-    expect(document.querySelector('[data-icon="Smartphone"]')).toBeNull();
+    expect(document.querySelector('[data-icon="Smartphone"]')).not.toBeNull();
+    expect(document.querySelector('[data-icon="FileText"]')).toBeNull();
     expect(document.querySelector("img")).toBeNull();
   });
 
@@ -143,4 +149,28 @@ describe("PluginSidebarFooterActions", () => {
       );
     },
   );
+
+  it("opens a specific plugin settings section", () => {
+    setPluginSlotRegistrations(
+      "cloud",
+      registrationSet({
+        sidebarFooterActions: [
+          {
+            id: "remote-access",
+            title: "Remote access",
+            icon: "Smartphone",
+            run: ({ openSettings }) =>
+              openSettings({ sectionId: "remote-access" }),
+          },
+        ],
+      }),
+    );
+
+    renderWithProviders(<PluginSidebarFooterActions />);
+    fireEvent.click(screen.getByRole("button", { name: "Remote access" }));
+
+    expect(screen.getByLabelText("Current path").textContent).toBe(
+      "/settings/plugins/cloud#remote-access",
+    );
+  });
 });

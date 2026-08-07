@@ -29,6 +29,8 @@ export interface Env {
    * prefix. Omitted in deployed environments; set by the local launcher.
    */
   BETTER_AUTH_SESSION_COOKIE_NAME?: string;
+  /** Secret (wrangler secret put): upstream key for the /api/connect/ai proxy. */
+  OPENAI_API_KEY: string;
 }
 
 const TUNNEL_TAG = "tunnel";

@@ -211,8 +211,10 @@ export interface ExperimentsSettingsSectionProps {
   /** True while the config query hasn't loaded or a toggle write is in flight. */
   disabled: boolean;
   claudeCodeMockCliTrafficEnabled: boolean;
+  cloudAiEnabled: boolean;
   newOnboardingEnabled: boolean;
   onClaudeCodeMockCliTrafficEnabledChange: (enabled: boolean) => void;
+  onCloudAiEnabledChange: (enabled: boolean) => void;
   onNewOnboardingEnabledChange: (enabled: boolean) => void;
   onToolsHubEnabledChange: (enabled: boolean) => void;
   toolsHubEnabled: boolean;
@@ -953,13 +955,16 @@ export function ProviderSettingsSection({
 }
 
 const CLAUDE_CODE_MOCK_CLI_TRAFFIC_EXPERIMENT_LABEL = "Mock CLI Traffic";
+const CLOUD_AI_EXPERIMENT_LABEL = "Cloud AI";
 const NEW_ONBOARDING_EXPERIMENT_LABEL = "New onboarding";
 const EXTENSIONS_EXPERIMENT_LABEL = "Extensions";
 export function ExperimentsSettingsSection({
   claudeCodeMockCliTrafficEnabled,
+  cloudAiEnabled,
   disabled,
   newOnboardingEnabled,
   onClaudeCodeMockCliTrafficEnabledChange,
+  onCloudAiEnabledChange,
   onNewOnboardingEnabledChange,
   onToolsHubEnabledChange,
   toolsHubEnabled,
@@ -980,6 +985,18 @@ export function ExperimentsSettingsSection({
             disabled={disabled}
             onCheckedChange={onClaudeCodeMockCliTrafficEnabledChange}
             aria-label={CLAUDE_CODE_MOCK_CLI_TRAFFIC_EXPERIMENT_LABEL}
+          />
+        </SettingsWithControl>
+
+        <SettingsWithControl
+          label={CLOUD_AI_EXPERIMENT_LABEL}
+          description="Use bb Cloud for thread titles, commit messages, and voice transcription while paired."
+        >
+          <Switch
+            checked={cloudAiEnabled}
+            disabled={disabled}
+            onCheckedChange={onCloudAiEnabledChange}
+            aria-label={CLOUD_AI_EXPERIMENT_LABEL}
           />
         </SettingsWithControl>
 
@@ -1153,6 +1170,7 @@ export function SettingsView() {
     content = (
       <ExperimentsSettingsSection
         claudeCodeMockCliTrafficEnabled={experiments.claudeCodeMockCliTraffic}
+        cloudAiEnabled={experiments.cloudAi}
         disabled={
           systemConfigQuery.data === undefined ||
           updateExperimentsMutation.isPending
@@ -1161,6 +1179,12 @@ export function SettingsView() {
           updateExperimentsMutation.mutate({
             ...experiments,
             claudeCodeMockCliTraffic: enabled,
+          })
+        }
+        onCloudAiEnabledChange={(enabled) =>
+          updateExperimentsMutation.mutate({
+            ...experiments,
+            cloudAi: enabled,
           })
         }
         newOnboardingEnabled={experiments.newOnboarding}

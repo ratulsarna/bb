@@ -152,6 +152,7 @@ export const systemExperiments = sqliteTable("system_experiments", {
   claudeCodeMockCliTraffic: integer("claude_code_mock_cli_traffic", {
     mode: "boolean",
   }).notNull(),
+  cloudAi: integer("cloud_ai", { mode: "boolean" }).notNull().default(false),
   newOnboarding: integer("new_onboarding", { mode: "boolean" })
     .notNull()
     .default(false),

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Frontend coverage for the builtin Connect plugin's settings section, using
+// Frontend coverage for the builtin Cloud plugin's settings sections, using
 // the official plugin app harness instead of a host app or built bundle.
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,6 +39,7 @@ function status(overrides: Partial<ConnectStatus> = {}): ConnectStatus {
     remoteClients: 0,
     lastRemoteActivityAt: null,
     shares: [],
+    cloudAiEnabled: true,
     ...overrides,
   };
 }
@@ -53,9 +54,44 @@ const connected = (overrides: Partial<ConnectStatus> = {}) =>
     ...overrides,
   });
 
-describe("connect settings section", () => {
-  it("uses the plugin page header instead of declaring a second title", () => {
-    expect(app.settingsSections[0]?.title).toBeUndefined();
+describe("Cloud settings sections", () => {
+  it("registers Remote access, AI Gateway, and the phone shortcut separately", () => {
+    expect(
+      app.settingsSections.map((section) => ({
+        description: section.description,
+        id: section.id,
+        title: section.title,
+      })),
+    ).toEqual([
+      {
+        description:
+          "Use this bb from any device, anywhere — powered by getbb.app.",
+        id: "remote-access",
+        title: "Remote access",
+      },
+      { description: undefined, id: "cloud-ai", title: "AI Gateway" },
+    ]);
+    expect(
+      app.sidebarFooterActions.map((action) => ({
+        icon: action.icon,
+        id: action.id,
+        title: action.title,
+      })),
+    ).toEqual([
+      {
+        icon: "Smartphone",
+        id: "remote-access",
+        title: "Remote access",
+      },
+    ]);
+
+    let openedSection: string | undefined;
+    app.sidebarFooterActions[0]!.run({
+      openSettings(options) {
+        openedSection = options?.sectionId;
+      },
+    });
+    expect(openedSection).toBe("remote-access");
   });
 
   it("auto-submits a normalized 4-4 code and applies live paired status", async () => {
@@ -375,5 +411,71 @@ describe("connect settings section", () => {
 
     await slot.findByText("Get a connect code");
     await slot.findByText("Remote access disconnected");
+  });
+
+  it("directs unpaired users to Remote access instead of showing an inert AI preference", async () => {
+    const slot = renderSlot(
+      app.settingsSections[1]!,
+      {},
+      {
+        rpc: {
+          status: () => status(),
+        },
+      },
+    );
+
+    const setupLink = await slot.findByRole("link", {
+      name: "Set up Remote access",
+    });
+    expect(setupLink.getAttribute("href")).toBe("#remote-access");
+    slot.getByText(/to use Cloud\./);
+    expect(slot.queryByRole("switch")).toBeNull();
+    expect(slot.queryByText("bb connect")).toBeNull();
+  });
+
+  it("persists the AI preference once Cloud is connected", async () => {
+    let currentStatus = connected();
+    const slot = renderSlot(
+      app.settingsSections[1]!,
+      {},
+      {
+        rpc: {
+          status: () => currentStatus,
+          setCloudAi: (input: unknown) => {
+            if (
+              input === null ||
+              typeof input !== "object" ||
+              !("enabled" in input) ||
+              typeof input.enabled !== "boolean"
+            ) {
+              throw new Error("invalid setCloudAi input");
+            }
+            currentStatus = connected({ cloudAiEnabled: input.enabled });
+            return currentStatus;
+          },
+        },
+      },
+    );
+
+    const label =
+      "Enable for thread titles, commit messages and voice transcription";
+    await slot.findByText(label);
+    fireEvent.click(slot.getByRole("switch", { name: label }));
+
+    await waitFor(() =>
+      expect(slot.rpcCalls).toContainEqual({
+        method: "setCloudAi",
+        input: { enabled: false },
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        (
+          slot.getByRole("switch", {
+            name: label,
+          }) as HTMLButtonElement
+        ).getAttribute("data-state"),
+      ).toBe("unchecked"),
+    );
   });
 });

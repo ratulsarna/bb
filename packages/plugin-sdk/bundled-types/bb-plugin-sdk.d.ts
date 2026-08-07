@@ -244,6 +244,7 @@ type Environment = z$1.infer<typeof environmentSchema>;
  */
 declare const experimentsSchema: z$1.ZodObject<{
     claudeCodeMockCliTraffic: z$1.ZodBoolean;
+    cloudAi: z$1.ZodBoolean;
     newOnboarding: z$1.ZodBoolean;
     toolsHub: z$1.ZodBoolean;
 }, z$1.core.$strip>;
@@ -700,8 +701,8 @@ declare const threadEventSchema: z$1.ZodPipe<z$1.ZodUnknown, z$1.ZodUnion<readon
     providerThreadId: z$1.ZodString;
     objective: z$1.ZodString;
     status: z$1.ZodEnum<{
-        paused: "paused";
         active: "active";
+        paused: "paused";
         budgetLimited: "budgetLimited";
         complete: "complete";
     }>;
@@ -889,10 +890,10 @@ declare const threadEventSchema: z$1.ZodPipe<z$1.ZodUnknown, z$1.ZodUnion<readon
         }>;
         taskStatus: z$1.ZodEnum<{
             pending: "pending";
-            running: "running";
-            paused: "paused";
             completed: "completed";
             failed: "failed";
+            paused: "paused";
+            running: "running";
             killed: "killed";
             stopped: "stopped";
         }>;
@@ -908,8 +909,8 @@ declare const threadEventSchema: z$1.ZodPipe<z$1.ZodUnknown, z$1.ZodUnion<readon
                 index: z$1.ZodNumber;
                 label: z$1.ZodString;
                 state: z$1.ZodEnum<{
-                    running: "running";
                     failed: "failed";
+                    running: "running";
                     queued: "queued";
                     done: "done";
                     skipped: "skipped";
@@ -1121,10 +1122,10 @@ declare const threadEventSchema: z$1.ZodPipe<z$1.ZodUnknown, z$1.ZodUnion<readon
         }>;
         taskStatus: z$1.ZodEnum<{
             pending: "pending";
-            running: "running";
-            paused: "paused";
             completed: "completed";
             failed: "failed";
+            paused: "paused";
+            running: "running";
             killed: "killed";
             stopped: "stopped";
         }>;
@@ -1140,8 +1141,8 @@ declare const threadEventSchema: z$1.ZodPipe<z$1.ZodUnknown, z$1.ZodUnion<readon
                 index: z$1.ZodNumber;
                 label: z$1.ZodString;
                 state: z$1.ZodEnum<{
-                    running: "running";
                     failed: "failed";
+                    running: "running";
                     queued: "queued";
                     done: "done";
                     skipped: "skipped";
@@ -1250,10 +1251,10 @@ declare const threadEventSchema: z$1.ZodPipe<z$1.ZodUnknown, z$1.ZodUnion<readon
         }>;
         taskStatus: z$1.ZodEnum<{
             pending: "pending";
-            running: "running";
-            paused: "paused";
             completed: "completed";
             failed: "failed";
+            paused: "paused";
+            running: "running";
             killed: "killed";
             stopped: "stopped";
         }>;
@@ -1269,8 +1270,8 @@ declare const threadEventSchema: z$1.ZodPipe<z$1.ZodUnknown, z$1.ZodUnion<readon
                 index: z$1.ZodNumber;
                 label: z$1.ZodString;
                 state: z$1.ZodEnum<{
-                    running: "running";
                     failed: "failed";
+                    running: "running";
                     queued: "queued";
                     done: "done";
                     skipped: "skipped";
@@ -1322,10 +1323,10 @@ declare const threadEventSchema: z$1.ZodPipe<z$1.ZodUnknown, z$1.ZodUnion<readon
         }>;
         taskStatus: z$1.ZodEnum<{
             pending: "pending";
-            running: "running";
-            paused: "paused";
             completed: "completed";
             failed: "failed";
+            paused: "paused";
+            running: "running";
             killed: "killed";
             stopped: "stopped";
         }>;
@@ -1341,8 +1342,8 @@ declare const threadEventSchema: z$1.ZodPipe<z$1.ZodUnknown, z$1.ZodUnion<readon
                 index: z$1.ZodNumber;
                 label: z$1.ZodString;
                 state: z$1.ZodEnum<{
-                    running: "running";
                     failed: "failed";
+                    running: "running";
                     queued: "queued";
                     done: "done";
                     skipped: "skipped";
@@ -2082,8 +2083,8 @@ declare const threadTimelinePendingTodosSchema: z$1.ZodObject<{
         text: z$1.ZodString;
         status: z$1.ZodEnum<{
             pending: "pending";
-            completed: "completed";
             in_progress: "in_progress";
+            completed: "completed";
         }>;
     }, z$1.core.$strip>>;
 }, z$1.core.$strip>;
@@ -2569,8 +2570,8 @@ type SkillFilesResponse = z$1.infer<typeof skillFilesResponseSchema>;
 declare const projectResponseSchema: z$1.ZodObject<{
     id: z$1.ZodString;
     kind: z$1.ZodEnum<{
-        personal: "personal";
         standard: "standard";
+        personal: "personal";
     }>;
     name: z$1.ZodString;
     gitRemoteUrl: z$1.ZodNullable<z$1.ZodString>;
@@ -2591,8 +2592,8 @@ type ProjectResponse = z$1.infer<typeof projectResponseSchema>;
 declare const projectWithThreadsResponseSchema: z$1.ZodObject<{
     id: z$1.ZodString;
     kind: z$1.ZodEnum<{
-        personal: "personal";
         standard: "standard";
+        personal: "personal";
     }>;
     name: z$1.ZodString;
     gitRemoteUrl: z$1.ZodNullable<z$1.ZodString>;
@@ -2692,8 +2693,8 @@ declare const projectWithThreadsResponseSchema: z$1.ZodObject<{
             ultra: "ultra";
         }>;
         permissionMode: z$1.ZodEnum<{
-            auto: "auto";
             "accept-edits": "accept-edits";
+            auto: "auto";
             full: "full";
         }>;
     }, z$1.core.$strip>>;
@@ -6397,8 +6398,8 @@ declare const systemExecutionOptionsResponseSchema: z$1.ZodObject<{
             supportsUserQuestion: z$1.ZodBoolean;
             supportsFork: z$1.ZodBoolean;
             supportedPermissionModes: z$1.ZodArray<z$1.ZodEnum<{
-                auto: "auto";
                 "accept-edits": "accept-edits";
+                auto: "auto";
                 full: "full";
             }>>;
         }, z$1.core.$strip>;
@@ -6429,8 +6430,8 @@ declare const systemExecutionOptionsResponseSchema: z$1.ZodObject<{
         available: z$1.ZodBoolean;
     }, z$1.core.$strip>>;
     permissionCeiling: z$1.ZodEnum<{
-        auto: "auto";
         "accept-edits": "accept-edits";
+        auto: "auto";
         full: "full";
     }>;
     models: z$1.ZodArray<z$1.ZodObject<{
@@ -6854,6 +6855,7 @@ declare const systemConfigResponseSchema: z$1.ZodObject<{
     }, z$1.core.$strict>>;
     experiments: z$1.ZodObject<{
         claudeCodeMockCliTraffic: z$1.ZodBoolean;
+        cloudAi: z$1.ZodBoolean;
         newOnboarding: z$1.ZodBoolean;
         toolsHub: z$1.ZodBoolean;
     }, z$1.core.$strip>;
@@ -7871,10 +7873,10 @@ declare const createThreadRequestSchema: z$1.ZodObject<{
         ultra: "ultra";
     }>>;
     permissionMode: z$1.ZodOptional<z$1.ZodPipe<z$1.ZodUnion<readonly [z$1.ZodEnum<{
-        auto: "auto";
         "accept-edits": "accept-edits";
+        auto: "auto";
         full: "full";
-    }>, z$1.ZodLiteral<"workspace-write">]>, z$1.ZodTransform<"auto" | "accept-edits" | "full", "auto" | "accept-edits" | "full" | "workspace-write">>>;
+    }>, z$1.ZodLiteral<"workspace-write">]>, z$1.ZodTransform<"accept-edits" | "auto" | "full", "accept-edits" | "auto" | "full" | "workspace-write">>>;
     executionInputSources: z$1.ZodOptional<z$1.ZodObject<{
         providerId: z$1.ZodOptional<z$1.ZodEnum<{
             explicit: "explicit";
@@ -8115,10 +8117,10 @@ declare const forkThreadRequestSchema: z$1.ZodObject<{
     }, z$1.core.$strip>>>>;
     title: z$1.ZodOptional<z$1.ZodString>;
     permissionMode: z$1.ZodOptional<z$1.ZodPipe<z$1.ZodUnion<readonly [z$1.ZodEnum<{
-        auto: "auto";
         "accept-edits": "accept-edits";
+        auto: "auto";
         full: "full";
-    }>, z$1.ZodLiteral<"workspace-write">]>, z$1.ZodTransform<"auto" | "accept-edits" | "full", "auto" | "accept-edits" | "full" | "workspace-write">>>;
+    }>, z$1.ZodLiteral<"workspace-write">]>, z$1.ZodTransform<"accept-edits" | "auto" | "full", "accept-edits" | "auto" | "full" | "workspace-write">>>;
     visibility: z$1.ZodDefault<z$1.ZodEnum<{
         visible: "visible";
         hidden: "hidden";
@@ -8234,10 +8236,10 @@ declare const sendMessageRequestSchema: z$1.ZodObject<{
         ultra: "ultra";
     }>>;
     permissionMode: z$1.ZodOptional<z$1.ZodPipe<z$1.ZodUnion<readonly [z$1.ZodEnum<{
-        auto: "auto";
         "accept-edits": "accept-edits";
+        auto: "auto";
         full: "full";
-    }>, z$1.ZodLiteral<"workspace-write">]>, z$1.ZodTransform<"auto" | "accept-edits" | "full", "auto" | "accept-edits" | "full" | "workspace-write">>>;
+    }>, z$1.ZodLiteral<"workspace-write">]>, z$1.ZodTransform<"accept-edits" | "auto" | "full", "accept-edits" | "auto" | "full" | "workspace-write">>>;
     executionInputSources: z$1.ZodOptional<z$1.ZodObject<{
         model: z$1.ZodOptional<z$1.ZodEnum<{
             explicit: "explicit";
@@ -8461,10 +8463,10 @@ declare const createQueuedMessageRequestSchema: z$1.ZodObject<{
         ultra: "ultra";
     }>>;
     permissionMode: z$1.ZodOptional<z$1.ZodPipe<z$1.ZodUnion<readonly [z$1.ZodEnum<{
-        auto: "auto";
         "accept-edits": "accept-edits";
+        auto: "auto";
         full: "full";
-    }>, z$1.ZodLiteral<"workspace-write">]>, z$1.ZodTransform<"auto" | "accept-edits" | "full", "auto" | "accept-edits" | "full" | "workspace-write">>>;
+    }>, z$1.ZodLiteral<"workspace-write">]>, z$1.ZodTransform<"accept-edits" | "auto" | "full", "accept-edits" | "auto" | "full" | "workspace-write">>>;
     executionInputSources: z$1.ZodOptional<z$1.ZodObject<{
         model: z$1.ZodOptional<z$1.ZodEnum<{
             explicit: "explicit";
@@ -8686,8 +8688,8 @@ declare const sendQueuedMessageResponseSchema: z$1.ZodObject<{
             ultra: "ultra";
         }>;
         permissionMode: z$1.ZodEnum<{
-            auto: "auto";
             "accept-edits": "accept-edits";
+            auto: "auto";
             full: "full";
         }>;
         serviceTier: z$1.ZodEnum<{
@@ -9056,9 +9058,9 @@ declare const threadWithIncludesResponseSchema: z$1.ZodObject<{
         isGitRepo: z$1.ZodBoolean;
         isWorktree: z$1.ZodBoolean;
         workspaceProvisionType: z$1.ZodEnum<{
-            unmanaged: "unmanaged";
-            "managed-worktree": "managed-worktree";
             personal: "personal";
+            "managed-worktree": "managed-worktree";
+            unmanaged: "unmanaged";
         }>;
         branchName: z$1.ZodNullable<z$1.ZodString>;
         baseBranch: z$1.ZodNullable<z$1.ZodString>;
@@ -9086,8 +9088,8 @@ declare const threadWithIncludesResponseSchema: z$1.ZodObject<{
             connected: "connected";
         }>;
         maxPermissionMode: z$1.ZodEnum<{
-            auto: "auto";
             "accept-edits": "accept-edits";
+            auto: "auto";
             full: "full";
         }>;
         lastSeenAt: z$1.ZodNullable<z$1.ZodNumber>;
@@ -9357,8 +9359,8 @@ declare const threadQueuedMessageListResponseSchema: z$1.ZodArray<z$1.ZodObject<
         ultra: "ultra";
     }>;
     permissionMode: z$1.ZodEnum<{
-        auto: "auto";
         "accept-edits": "accept-edits";
+        auto: "auto";
         full: "full";
     }>;
     serviceTier: z$1.ZodEnum<{
@@ -9726,8 +9728,8 @@ declare const threadTimelineResponseSchema: z$1.ZodObject<{
         originalModel: z$1.ZodString;
         fallbackModel: z$1.ZodString;
         reason: z$1.ZodEnum<{
-            refusal: "refusal";
             provider: "provider";
+            refusal: "refusal";
         }>;
         message: z$1.ZodString;
     }, z$1.core.$strip>>;
@@ -10266,9 +10268,12 @@ interface PluginPendingInteractionRegistration {
 interface PluginSidebarFooterActionContext {
     /**
      * Navigate to this plugin's detail page in Tools, where declarative settings
-     * and `settingsSection` slots render.
+     * and `settingsSection` slots render. Pass a section id to target one of
+     * this plugin's registered settings sections directly.
      */
-    openSettings(): void;
+    openSettings(options?: {
+        sectionId?: string;
+    }): void;
 }
 /**
  * An icon button in the app sidebar footer (next to Settings / bug report).
@@ -12962,6 +12967,53 @@ interface PluginHosts {
      */
     declareSharedPorts(hostId: string, ports: readonly number[]): void;
 }
+/** Why a cloud AI call failed; drives the host's local-fallback routing. */
+type CloudAiFailureCode = "unauthorized" | "quota_exhausted" | "unavailable";
+/**
+ * Result-shaped (never a thrown class) so the contract survives plugin
+ * bundling — an error class would have a different identity in the plugin
+ * bundle than in the host. A provider may still reject on abort; the host
+ * checks its own signal and treats that as a timeout.
+ */
+type CloudAiResult<T> = {
+    ok: true;
+    value: T;
+} | {
+    ok: false;
+    code: CloudAiFailureCode;
+    message: string;
+};
+interface CloudAiCompleteArgs {
+    prompt: string;
+    /** JSON Schema (top-level `type: "object"`) the structured result must match. */
+    schema: {
+        [key: string]: JsonValue;
+    };
+    /** Host-owned abort signal; the host maps aborts to its timeout semantics. */
+    signal: AbortSignal;
+}
+interface CloudAiTranscribeArgs {
+    file: File;
+    prompt?: string;
+    /** Host-owned abort signal; the host maps aborts to its timeout semantics. */
+    signal: AbortSignal;
+}
+/**
+ * A cloud route for bb's small AI tasks (thread titles, commit messages,
+ * voice transcription). When the server's Cloud AI experiment is enabled and
+ * a registered provider `isAvailable()`, the host tries it before the locally
+ * configured `BB_INFERENCE`/`BB_TRANSCRIPTION` providers and falls back to
+ * those on `ok: false`.
+ */
+interface CloudAiProvider {
+    /**
+     * Cheap synchronous probe consulted per call — pairing state, user setting,
+     * failure latches. The host never calls `complete`/`transcribe` when false.
+     */
+    isAvailable(): boolean;
+    complete(args: CloudAiCompleteArgs): Promise<CloudAiResult<JsonValue>>;
+    transcribe(args: CloudAiTranscribeArgs): Promise<CloudAiResult<string>>;
+}
 interface PluginStatusApi {
     /**
      * Mark this plugin `needs-configuration` (with a message shown in
@@ -13023,7 +13075,13 @@ interface BbPluginApi {
      * The sanctioned place to clear timers and close connections.
      */
     onDispose(hook: () => void | Promise<void>): void;
+    /**
+     * EXPERIMENTAL (see docs/api_to_audit.md). Register a cloud route for bb's
+     * small AI tasks. Single slot host-wide: the most recent registration wins;
+     * it is unregistered automatically when this plugin reloads or disables.
+     */
+    experimental_registerCloudAiProvider(provider: CloudAiProvider): void;
 }
 
 export { PLUGIN_CLI_OUTPUT_MAX_BYTES, defineRpcContract };
-export type { BbContext, BbNavigate, BbPluginApi, ComposerCustomization, ComposerPlusMenuItem, ComposerRichTextSpec, ComposerStructuredDraft, ComposerView, JsonValue, MarkdownProps, NewThreadComposerProps, NewThreadRequest, PluginAgentConfiguration, PluginAgentConfigurationContext, PluginAgentToolContentPart, PluginAgentToolContext, PluginAgentToolExperimentalStatusLabels, PluginAgentToolRegistrationBase, PluginAgentToolResult, PluginAgentToolSelection, PluginAgents, PluginAppBuilder, PluginAppComposer, PluginAppContentScripts, PluginAppDefinition, PluginAppSetup, PluginAppSlots, PluginBackground, PluginCli, PluginCliCommandInfo, PluginCliContext, PluginCliExecutionResult, PluginCliOutputLimitError, PluginCliRegistration, PluginCliResult, PluginComposerApi, PluginComposerMention, PluginComposerScope, PluginComposerTextEffect, PluginComposerThreadRowStatus, PluginContentScriptContext, PluginContentScriptDisposer, PluginContentScriptRegistration, PluginEvents, PluginFileOpenerProps, PluginFileOpenerRegistration, PluginFileOpenerSource, PluginHomepageSectionProps, PluginHomepageSectionRegistration, PluginHosts, PluginHttp, PluginHttpAuthMode, PluginHttpHandler, PluginInteractionCancelReason, PluginInteractionRequest, PluginInteractionResult, PluginKvStorage, PluginLogger, PluginMentionItem, PluginMentionProviderRegistration, PluginMentionSearchContext, PluginMentionTrigger, PluginMessageActionContext, PluginMessageActionRegistration, PluginMessageActionThreadPanelOptions, PluginMessageDirectiveMessage, PluginMessageDirectiveOpenWorkspaceFile, PluginMessageDirectiveProps, PluginMessageDirectiveRegistration, PluginNavPanelProps, PluginNavPanelRegistration, PluginPendingInteractionProps, PluginPendingInteractionRegistration, PluginPendingInteractionView, PluginRealtime, PluginRealtimeConnectionState, PluginRpc, PluginRpcCallArgs, PluginRpcClient, PluginRpcContract, PluginRpcError, PluginRpcErrorCode, PluginRpcHandlers, PluginRpcIssuePathSegment, PluginRpcMethodContract, PluginRpcResult, PluginRpcValidationIssue, PluginSdkApp, PluginServerApi, PluginSettingDescriptor, PluginSettingDescriptors, PluginSettingValue, PluginSettings, PluginSettingsHandle, PluginSettingsSectionProps, PluginSettingsSectionRegistration, PluginSettingsState, PluginSettingsValues, PluginSharedPortTunnelIdentity, PluginSidebarFooterActionContext, PluginSidebarFooterActionProps, PluginSidebarFooterActionRegistration, PluginSidebarProject, PluginSidebarPullRequest, PluginSidebarSplitPane, PluginSidebarThread, PluginSidebarThreadActions, PluginSidebarThreadActivity, PluginSidebarThreadIndicator, PluginSidebarThreadPullRequestState, PluginSidebarThreadSplit, PluginSidebarThreadsState, PluginSidebarWorkspaceKind, PluginStatusApi, PluginStorage, PluginThreadEventHandler, PluginThreadEventName, PluginThreadEventPayloads, PluginThreadHeaderActionProps, PluginThreadHeaderActionRegistration, PluginThreadListProps, PluginThreadListRegistration, PluginThreadPanelActionContext, PluginThreadPanelActionRegistration, PluginThreadPanelProps, PluginUi, StandardSchemaV1, StandardSchemaV1InferInput, StandardSchemaV1InferOutput, StandardSchemaV1Issue, StandardSchemaV1Result, ThreadChatMessageAction, ThreadChatMessageReference, ThreadChatProps };
+export type { BbContext, BbNavigate, BbPluginApi, CloudAiCompleteArgs, CloudAiFailureCode, CloudAiProvider, CloudAiResult, CloudAiTranscribeArgs, ComposerCustomization, ComposerPlusMenuItem, ComposerRichTextSpec, ComposerStructuredDraft, ComposerView, JsonValue, MarkdownProps, NewThreadComposerProps, NewThreadRequest, PluginAgentConfiguration, PluginAgentConfigurationContext, PluginAgentToolContentPart, PluginAgentToolContext, PluginAgentToolExperimentalStatusLabels, PluginAgentToolRegistrationBase, PluginAgentToolResult, PluginAgentToolSelection, PluginAgents, PluginAppBuilder, PluginAppComposer, PluginAppContentScripts, PluginAppDefinition, PluginAppSetup, PluginAppSlots, PluginBackground, PluginCli, PluginCliCommandInfo, PluginCliContext, PluginCliExecutionResult, PluginCliOutputLimitError, PluginCliRegistration, PluginCliResult, PluginComposerApi, PluginComposerMention, PluginComposerScope, PluginComposerTextEffect, PluginComposerThreadRowStatus, PluginContentScriptContext, PluginContentScriptDisposer, PluginContentScriptRegistration, PluginEvents, PluginFileOpenerProps, PluginFileOpenerRegistration, PluginFileOpenerSource, PluginHomepageSectionProps, PluginHomepageSectionRegistration, PluginHosts, PluginHttp, PluginHttpAuthMode, PluginHttpHandler, PluginInteractionCancelReason, PluginInteractionRequest, PluginInteractionResult, PluginKvStorage, PluginLogger, PluginMentionItem, PluginMentionProviderRegistration, PluginMentionSearchContext, PluginMentionTrigger, PluginMessageActionContext, PluginMessageActionRegistration, PluginMessageActionThreadPanelOptions, PluginMessageDirectiveMessage, PluginMessageDirectiveOpenWorkspaceFile, PluginMessageDirectiveProps, PluginMessageDirectiveRegistration, PluginNavPanelProps, PluginNavPanelRegistration, PluginPendingInteractionProps, PluginPendingInteractionRegistration, PluginPendingInteractionView, PluginRealtime, PluginRealtimeConnectionState, PluginRpc, PluginRpcCallArgs, PluginRpcClient, PluginRpcContract, PluginRpcError, PluginRpcErrorCode, PluginRpcHandlers, PluginRpcIssuePathSegment, PluginRpcMethodContract, PluginRpcResult, PluginRpcValidationIssue, PluginSdkApp, PluginServerApi, PluginSettingDescriptor, PluginSettingDescriptors, PluginSettingValue, PluginSettings, PluginSettingsHandle, PluginSettingsSectionProps, PluginSettingsSectionRegistration, PluginSettingsState, PluginSettingsValues, PluginSharedPortTunnelIdentity, PluginSidebarFooterActionContext, PluginSidebarFooterActionProps, PluginSidebarFooterActionRegistration, PluginSidebarProject, PluginSidebarPullRequest, PluginSidebarSplitPane, PluginSidebarThread, PluginSidebarThreadActions, PluginSidebarThreadActivity, PluginSidebarThreadIndicator, PluginSidebarThreadPullRequestState, PluginSidebarThreadSplit, PluginSidebarThreadsState, PluginSidebarWorkspaceKind, PluginStatusApi, PluginStorage, PluginThreadEventHandler, PluginThreadEventName, PluginThreadEventPayloads, PluginThreadHeaderActionProps, PluginThreadHeaderActionRegistration, PluginThreadListProps, PluginThreadListRegistration, PluginThreadPanelActionContext, PluginThreadPanelActionRegistration, PluginThreadPanelProps, PluginUi, StandardSchemaV1, StandardSchemaV1InferInput, StandardSchemaV1InferOutput, StandardSchemaV1Issue, StandardSchemaV1Result, ThreadChatMessageAction, ThreadChatMessageReference, ThreadChatProps };

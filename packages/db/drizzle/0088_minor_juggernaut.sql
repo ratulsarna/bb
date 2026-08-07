@@ -1,0 +1,1 @@
+ALTER TABLE `system_experiments` ADD `cloud_ai` integer DEFAULT false NOT NULL;
