@@ -90,6 +90,7 @@ export {
   hasLiveThreadAtHostPath,
   hasNonTerminalThreadInEnvironment,
   hasPendingThreadShutdownInEnvironment,
+  hasRevivableArchivedThreadInEnvironment,
   listHostThreadIds,
   listActiveVisiblePinnedThreadRoots,
   listActiveVisiblePinnedThreadRootsWithPendingInteractionState,
