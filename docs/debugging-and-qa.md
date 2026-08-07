@@ -30,3 +30,22 @@ Test agents with:
 eval "$(scripts/bb-dev-app env)"
 pnpm bb:dev thread spawn --project proj_personal --provider codex --permission-mode accept-edits --title "Smoke test" --prompt "Reply only with ok." --json
 ```
+
+## Local Cloud
+
+Run the Cloud dashboard and Connect worker against one local D1 database:
+
+```bash
+pnpm cloud:dev
+```
+
+The command applies migrations, seeds a local-only developer identity, and
+prints the dashboard URL. Claim a handle, create a pairing code, and run the
+displayed `bb connect` command against a bb started with `pnpm dev`. The same
+worktree-specific local origin serves the dashboard at `localhost` and routes
+`<handle>.localhost` through the Connect worker, so production Cloudflare and
+GitHub OAuth credentials are not used.
+
+To test the AI gateway, copy `apps/connect/.dev.vars.example` to the ignored
+`apps/connect/.dev.vars` and set `OPENAI_API_KEY`. Ctrl-C stops the local
+services. Local D1 state is kept under `.wrangler/cloud-dev`.

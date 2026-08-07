@@ -26,6 +26,7 @@ import {
   getAccountState,
   redeemConnectCode,
   redeemMachineCode,
+  resolveServerUrlTemplate,
   revokeMachineForServerCredential,
   revokeMachine,
 } from "./api.js";
@@ -55,8 +56,23 @@ beforeEach(() => {
     db,
     baseDomain: "getbb.app",
     appUrl: "https://getbb.app",
+    serverUrlTemplate: "https://{label}.getbb.app",
     closeTunnel,
   };
+});
+
+describe("resolveServerUrlTemplate", () => {
+  it("accepts the local HTTP port without changing production defaults", () => {
+    expect(resolveServerUrlTemplate(undefined, "getbb.app")).toBe(
+      "https://{label}.getbb.app",
+    );
+    expect(
+      resolveServerUrlTemplate("http://{label}.localhost:8787", "localhost"),
+    ).toBe("http://{label}.localhost:8787");
+    expect(() =>
+      resolveServerUrlTemplate("https://example.com/{label}", "example.com"),
+    ).toThrow("under BASE_DOMAIN");
+  });
 });
 
 afterEach(() => {

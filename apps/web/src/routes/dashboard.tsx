@@ -328,7 +328,8 @@ function Home() {
   }, [data.authed, search.returnTo]);
 
   if (!data.authed) return <SignInView returnTo={search.returnTo} />;
-  if (!data.handle) return <ClaimView baseDomain={data.baseDomain} />;
+  if (!data.handle)
+    return <ClaimView serverUrlTemplate={data.serverUrlTemplate} />;
   return <AccountDashboard state={data} />;
 }
 
@@ -361,7 +362,7 @@ function SignInView({ returnTo }: { returnTo: string | undefined }) {
 /* ── shared claim field (W2 handle + M2 label) ────────────────────── */
 
 function ClaimField({
-  baseDomain,
+  serverUrlTemplate,
   initial = "",
   autoFocus,
   previewLead = "Your bb will live at",
@@ -371,7 +372,7 @@ function ClaimField({
   cancelLabel = "Cancel",
   layout,
 }: {
-  baseDomain: string;
+  serverUrlTemplate: string;
   initial?: string;
   autoFocus?: boolean;
   previewLead?: string;
@@ -409,7 +410,8 @@ function ClaimField({
 
   const error = submitError ?? (avail ? availabilityCopy(avail) : null);
   const canSubmit = !busy && !!label && (avail?.available ?? false);
-  const preview = `https://${label || "you"}.${baseDomain}`;
+  const preview = serverUrlTemplate.replace("{label}", label || "you");
+  const addressSuffix = serverUrlTemplate.split("{label}")[1] ?? "";
 
   async function submit() {
     if (!canSubmit) return;
@@ -448,7 +450,7 @@ function ClaimField({
           aria-label="Address"
         />
         <span className="pr-3 font-mono text-sm text-subtle-foreground">
-          .{baseDomain}
+          {addressSuffix}
         </span>
       </div>
       <p className="mt-2.5 text-xs text-muted-foreground">
@@ -474,7 +476,7 @@ function ClaimField({
 
 /* ── W2: claim handle ─────────────────────────────────────────────── */
 
-function ClaimView({ baseDomain }: { baseDomain: string }) {
+function ClaimView({ serverUrlTemplate }: { serverUrlTemplate: string }) {
   const router = useRouter();
   return (
     <Shell>
@@ -488,9 +490,11 @@ function ClaimView({ baseDomain }: { baseDomain: string }) {
         </p>
         <ClaimField
           layout="card"
-          baseDomain={baseDomain}
+          serverUrlTemplate={serverUrlTemplate}
           buildSubmitLabel={(l) =>
-            l ? `Claim ${l}.${baseDomain}` : "Claim your address"
+            l
+              ? `Claim ${serverUrlTemplate.replace("{label}", l).replace(/^https?:\/\//u, "")}`
+              : "Claim your address"
           }
           onClaim={async (label) => {
             const r = await claimHandleFn({ data: label });
@@ -726,11 +730,9 @@ function RowMenu({
 
 function ServerRow({
   server,
-  baseDomain,
   autoPair,
 }: {
   server: ServerSummary;
-  baseDomain: string;
   /** First-run: the sole never-paired bb opens its pair panel by default. */
   autoPair?: boolean;
 }) {
@@ -780,10 +782,7 @@ function ServerRow({
       </span>
       <span className="min-w-0">
         <span className="block truncate font-mono text-sm font-medium leading-tight">
-          {server.subdomain}
-          <span className="font-normal text-subtle-foreground">
-            .{baseDomain}
-          </span>
+          {server.serverUrl.replace(/^https?:\/\//u, "")}
         </span>
         <span className="mt-px block text-xs text-muted-foreground">
           {server.online ? (
@@ -919,7 +918,7 @@ function ConnectAnotherDialog({
           <ClaimField
             layout="dialog"
             autoFocus
-            baseDomain={state.baseDomain}
+            serverUrlTemplate={state.serverUrlTemplate}
             initial={`${state.handle}-desktop`}
             previewLead="This bb will live at"
             buildSubmitLabel={(l) => `Claim ${l || "…"}`}
@@ -940,7 +939,7 @@ function ConnectAnotherDialog({
           <h4 className="mb-1.5 text-[15px] font-semibold">Pair the new bb</h4>
           <p className="mb-2.5 text-sm text-muted-foreground">
             <code className="font-mono text-xs text-foreground">
-              {server.subdomain}.{state.baseDomain}
+              {server.serverUrl.replace(/^https?:\/\//u, "")}
             </code>{" "}
             is reserved for it.
           </p>
@@ -1067,12 +1066,7 @@ function AccountDashboard({ state }: { state: ServerState }) {
           </button>
         </div>
         {state.servers.map((s: ServerSummary) => (
-          <ServerRow
-            key={s.id}
-            server={s}
-            baseDomain={state.baseDomain}
-            autoPair={single}
-          />
+          <ServerRow key={s.id} server={s} autoPair={single} />
         ))}
       </div>
       <div className="mt-3 rounded-xl border border-border bg-card p-2 shadow-sm">
@@ -1115,10 +1109,9 @@ function AccountDashboard({ state }: { state: ServerState }) {
                 <span className="min-w-0 flex-1">
                   {machine.subdomain !== null ? (
                     <span className="block truncate font-mono text-sm font-medium leading-tight">
-                      {machine.subdomain}
-                      <span className="font-normal text-subtle-foreground">
-                        .{state.baseDomain}
-                      </span>
+                      {state.serverUrlTemplate
+                        .replace("{label}", machine.subdomain)
+                        .replace(/^https?:\/\//u, "")}
                     </span>
                   ) : (
                     <span className="block truncate text-sm font-medium leading-tight">

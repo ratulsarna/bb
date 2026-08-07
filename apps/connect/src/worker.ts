@@ -17,16 +17,21 @@ import {
 import { serveWithCache } from "./cache.js";
 import { BB_ICON_DATA_URI } from "./bb-icon.js";
 import { handleAssignMachineLabel } from "./machine-label.js";
+import {
+  resolveConnectRequestHost,
+  resolveConnectRuntime,
+  stripCloudDevHeader,
+} from "./cloud-dev.js";
+import {
+  GATE_AUTH_HEADER,
+  GATE_MACHINE_ID_HEADER,
+  MACHINE_CREDENTIAL_HEADER,
+  TUNNEL_TARGET_HEADER,
+} from "./protocol-headers.js";
 
 export { TunnelDO };
 
 const SESSION_COOKIE = "__Secure-better-auth.session_token";
-
-/** Internal header: gate → TunnelDO, share target (port string). Never trust visitors. */
-export const TUNNEL_TARGET_HEADER = "x-bb-tunnel-target";
-export const MACHINE_CREDENTIAL_HEADER = "x-bb-connect-machine";
-export const GATE_AUTH_HEADER = "x-bb-gate-auth";
-export const GATE_MACHINE_ID_HEADER = "x-bb-gate-machine-id";
 
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest(
@@ -223,6 +228,7 @@ export function requestForTunnelDo(
   headers.delete(MACHINE_CREDENTIAL_HEADER);
   headers.delete(GATE_AUTH_HEADER);
   headers.delete(GATE_MACHINE_ID_HEADER);
+  stripCloudDevHeader(headers);
   if (target !== null) {
     headers.set(TUNNEL_TARGET_HEADER, target);
   }
@@ -266,6 +272,7 @@ export default {
     ctx: ExecutionContext,
   ): Promise<Response> {
     const url = new URL(request.url);
+    const runtime = resolveConnectRuntime(env);
     // Account-scoped APIs are handled on the gate before host/label routing so
     // they never proxy through a tunnel to a local bb origin. Auth is
     // machine/server credential or owner session — see servers.ts.
@@ -279,7 +286,7 @@ export default {
       return handleAssignMachineLabel(request, env);
     }
 
-    const host = request.headers.get("host") ?? url.host;
+    const host = resolveConnectRequestHost(request.headers, runtime);
     const parsed = parseVisitorHost(host, env.BASE_DOMAIN);
     if (!parsed) return text("bb connect: unknown host\n", 404);
     // The base label is now ANY server's subdomain (the account handle names the
@@ -291,7 +298,7 @@ export default {
     // rather than answering with a confusing "no server" page.
     if (RESERVED_HANDLES.has(label)) {
       return Response.redirect(
-        `https://${env.BASE_DOMAIN}${url.pathname}${url.search}`,
+        `${runtime.accountAppUrl}${url.pathname}${url.search}`,
         301,
       );
     }
@@ -342,7 +349,11 @@ export default {
       } else {
         forward.searchParams.set("machineId", owner.id);
       }
-      return stub.fetch(new Request(forward, request));
+      const headers = new Headers(request.headers);
+      stripCloudDevHeader(headers);
+      return stub.fetch(
+        new Request(new Request(forward, request), { headers }),
+      );
     }
 
     // Reserve the /__ namespace: never proxy internal paths from outside.
@@ -368,6 +379,7 @@ export default {
       headers.delete(TUNNEL_TARGET_HEADER);
       headers.delete(GATE_AUTH_HEADER);
       headers.delete(GATE_MACHINE_ID_HEADER);
+      stripCloudDevHeader(headers);
       return stub.fetch(new Request(request, { headers }));
     }
 
@@ -401,6 +413,7 @@ export default {
       headers.delete(TUNNEL_TARGET_HEADER);
       headers.delete(GATE_AUTH_HEADER);
       headers.delete(GATE_MACHINE_ID_HEADER);
+      stripCloudDevHeader(headers);
       headers.set(GATE_AUTH_HEADER, "machine");
       headers.set(GATE_MACHINE_ID_HEADER, verified.machineId);
       return stub.fetch(new Request(request, { headers }));
@@ -415,12 +428,14 @@ export default {
     const cookieHeader = request.headers.get("cookie");
     const cookie = parseCookie(cookieHeader, SESSION_COOKIE);
     const desktopCookie = parseCookie(cookieHeader, DESKTOP_SESSION_COOKIE);
-    const appUrl = `https://${env.BASE_DOMAIN}`;
-    if (!cookie && !desktopCookie)
+    const appUrl = runtime.accountAppUrl;
+    if (runtime.devUserId === null && !cookie && !desktopCookie)
       return signInPage(label, appUrl, url.toString());
-    const sessionUserId = cookie
-      ? await verifySessionCookie(cookie, env.BETTER_AUTH_SECRET, db)
-      : null;
+    const sessionUserId =
+      runtime.devUserId ??
+      (cookie
+        ? await verifySessionCookie(cookie, env.BETTER_AUTH_SECRET, db)
+        : null);
     const desktopUserId = desktopCookie
       ? await verifyDesktopSessionCookie(desktopCookie, env.BETTER_AUTH_SECRET)
       : null;
