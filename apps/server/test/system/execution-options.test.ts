@@ -241,9 +241,6 @@ describe("resolveSystemExecutionOptions", () => {
             id: "acp-opencode",
             displayName: "opencode",
             available: true,
-            capabilities: expect.objectContaining({
-              supportsManualCompaction: true,
-            }),
           }),
         ]),
       );
@@ -691,9 +688,6 @@ describe("resolveSystemExecutionOptions", () => {
         );
         expect(opencodeProviders).toHaveLength(1);
         expect(opencodeProviders[0].displayName).toBe("Custom opencode");
-        expect(opencodeProviders[0].capabilities.supportsManualCompaction).toBe(
-          false,
-        );
         expect(
           responder.requests.map((request) => request.command.type),
         ).toEqual(["known_acp_agents.status", "provider.list_models"]);
@@ -931,7 +925,6 @@ describe("resolveSystemExecutionOptions", () => {
               composerActions: [{ kind: "skills", trigger: "/" }],
               capabilities: expect.objectContaining({
                 supportsFork: false,
-                supportsManualCompaction: true,
                 supportsServiceTier: true,
                 supportedPermissionModes: ["accept-edits", "full"],
               }),

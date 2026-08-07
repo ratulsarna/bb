@@ -126,12 +126,11 @@ interface AcpThreadSession {
   policy: AcpSessionPolicy;
   cwd: string;
   pendingInstructions: string | undefined;
-  promptActive: boolean;
-  compactionActive: boolean;
+  activePromptKind: "turn" | "compaction" | null;
   queuedInputs: PromptInput[][];
   loading: boolean;
   stopping: boolean;
-  /** Resolves when the in-flight bb turn loop fully settles. */
+  /** Resolves when the in-flight turn or maintenance prompt fully settles. */
   turnSettled: Promise<void> | undefined;
   pendingPermissions: Set<PendingAcpPermission>;
 }
@@ -388,7 +387,10 @@ const AUTH_REQUIRED_MODEL_LIST_ERROR_MESSAGE =
 function reasoningSupportFromCli(
   reasoningCli: AcpBridgeReasoningCli | undefined,
 ):
-  | Pick<AvailableModel, "supportedReasoningEfforts" | "defaultReasoningEffort">
+  | Pick<
+      AvailableModel,
+      "supportedReasoningEfforts" | "defaultReasoningEffort"
+    >
   | undefined {
   if (reasoningCli === undefined) {
     return undefined;
@@ -410,7 +412,10 @@ function reasoningSupportFromCli(
 function reasoningSupportFromNativeHint(
   nativeReasoning: AcpBridgeNativeReasoning | undefined,
 ):
-  | Pick<AvailableModel, "supportedReasoningEfforts" | "defaultReasoningEffort">
+  | Pick<
+      AvailableModel,
+      "supportedReasoningEfforts" | "defaultReasoningEffort"
+    >
   | undefined {
   if (nativeReasoning === undefined) {
     return undefined;
@@ -503,7 +508,8 @@ function nativeReasoningLevelToValue(args: {
   nativeReasoning: AcpBridgeNativeReasoning;
   reasoningLevel: ReasoningLevel;
 }): string | undefined {
-  const override = args.nativeReasoning.levelValues?.[args.reasoningLevel];
+  const override =
+    args.nativeReasoning.levelValues?.[args.reasoningLevel];
   if (override !== undefined) {
     return override;
   }
@@ -568,10 +574,7 @@ function applyPermissionCliArgs(
   permissionCli: AcpBridgePermissionCli | undefined,
   permissionMode: AcpSessionPolicy["permissionMode"],
 ): string[] {
-  const permissionArgs = permissionCliArgsForMode(
-    permissionCli,
-    permissionMode,
-  );
+  const permissionArgs = permissionCliArgsForMode(permissionCli, permissionMode);
   if (permissionArgs.length === 0) {
     return [...agentArgs];
   }
@@ -1258,7 +1261,7 @@ function handlePermissionRequest(
     return;
   }
 
-  if (session.stopping || session.compactionActive) {
+  if (session.stopping || session.activePromptKind !== "turn") {
     responder.result({ outcome: { outcome: "cancelled" } });
     return;
   }
@@ -1506,8 +1509,7 @@ async function startAgentSession(
     },
     cwd: params.cwd,
     pendingInstructions: params.instructions,
-    promptActive: false,
-    compactionActive: false,
+    activePromptKind: null,
     queuedInputs: [],
     loading: false,
     stopping: false,
@@ -1620,7 +1622,7 @@ async function stopSession(session: AcpThreadSession): Promise<void> {
   session.queuedInputs = [];
   cancelPendingPermissions(session);
 
-  if (session.promptActive && !session.connection.exited) {
+  if (session.activePromptKind !== null && !session.connection.exited) {
     session.connection.notify("session/cancel", {
       sessionId: session.providerThreadId,
     });
@@ -1643,7 +1645,7 @@ async function stopSession(session: AcpThreadSession): Promise<void> {
 // ---------------------------------------------------------------------------
 
 function runTurn(session: AcpThreadSession, firstInput: PromptInput[]): void {
-  session.promptActive = true;
+  session.activePromptKind = "turn";
   sendNotification(ACP_TURN_STARTED_METHOD, { threadId: session.bbThreadId });
 
   session.turnSettled = (async () => {
@@ -1661,7 +1663,7 @@ function runTurn(session: AcpThreadSession, firstInput: PromptInput[]): void {
         });
         stopReason = result.stopReason;
       } catch (error) {
-        session.promptActive = false;
+        session.activePromptKind = null;
         session.queuedInputs = [];
         // An exited agent already produced an error notification from the
         // connection's exit handler; only report in-protocol prompt failures.
@@ -1683,7 +1685,7 @@ function runTurn(session: AcpThreadSession, firstInput: PromptInput[]): void {
         }
       }
 
-      session.promptActive = false;
+      session.activePromptKind = null;
       session.queuedInputs = [];
       sendNotification(ACP_TURN_COMPLETED_METHOD, {
         threadId: session.bbThreadId,
@@ -1694,68 +1696,45 @@ function runTurn(session: AcpThreadSession, firstInput: PromptInput[]): void {
   })();
 }
 
-async function runCompactionPrompt(
-  session: AcpThreadSession,
-  prompt: string,
-): Promise<void> {
-  const request = session.connection.request({
-    method: "session/prompt",
-    params: {
-      sessionId: session.providerThreadId,
-      prompt: [{ type: "text", text: prompt }],
-    },
-    resultSchema: acpPromptResultSchema,
-  });
-  session.turnSettled = request.then(
-    () => undefined,
-    () => undefined,
-  );
-
-  try {
-    const result = await request;
-    if (result.stopReason === "cancelled") {
-      throw new Error(ACP_COMPACTION_CANCELLED_MESSAGE);
-    }
-  } finally {
-    session.turnSettled = undefined;
-  }
-}
-
-const ACP_COMPACTION_CANCELLED_MESSAGE = "ACP context compaction was cancelled";
-
 function startCompaction(
   session: AcpThreadSession,
   compaction: AcpManualCompaction,
 ): void {
-  if (session.promptActive) {
+  if (session.activePromptKind !== null) {
     throw new Error("Cannot compact context while an ACP turn is active");
   }
 
-  session.promptActive = true;
-  session.compactionActive = true;
+  session.activePromptKind = "compaction";
   sendNotification(ACP_COMPACTION_STARTED_METHOD, {
     threadId: session.bbThreadId,
   });
 
-  void runCompactionPrompt(session, compaction.prompt)
-    .then(() => {
+  const request = session.connection.request({
+    method: "session/prompt",
+    params: {
+      sessionId: session.providerThreadId,
+      prompt: [{ type: "text", text: compaction.prompt }],
+    },
+    resultSchema: acpPromptResultSchema,
+  });
+  session.turnSettled = request
+    .then((result) => {
       sendNotification(ACP_COMPACTION_COMPLETED_METHOD, {
         threadId: session.bbThreadId,
-        status: "completed",
+        status:
+          result.stopReason === "cancelled" ? "interrupted" : "completed",
       });
     })
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       sendNotification(ACP_COMPACTION_COMPLETED_METHOD, {
         threadId: session.bbThreadId,
-        ...(message === ACP_COMPACTION_CANCELLED_MESSAGE
-          ? { status: "interrupted" }
-          : { status: "failed", error: message }),
+        status: "failed",
+        error: message,
       });
     })
     .finally(() => {
-      session.compactionActive = false;
-      session.promptActive = false;
+      session.activePromptKind = null;
       session.turnSettled = undefined;
     });
 }
@@ -1800,7 +1779,7 @@ function handleAgentNotification(
   if (!parsed.success) {
     return;
   }
-  if (session.compactionActive) {
+  if (session.activePromptKind === "compaction") {
     return;
   }
   sendNotification(ACP_UPDATE_METHOD, {
@@ -1905,7 +1884,7 @@ async function handleRequest(
         sendError(request.id, -32000, "No active ACP session");
         return;
       }
-      if (session.promptActive) {
+      if (session.activePromptKind !== null) {
         sendError(request.id, -32000, "A turn is already active");
         return;
       }
@@ -1920,7 +1899,7 @@ async function handleRequest(
         sendError(request.id, -32000, "No active ACP session");
         return;
       }
-      if (!session.promptActive) {
+      if (session.activePromptKind !== "turn") {
         sendError(request.id, -32000, "No active turn to steer");
         return;
       }

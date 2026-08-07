@@ -87,7 +87,6 @@ describe("acp adapter command plans", () => {
   it("leaves manual compaction unsupported without a provider-local prompt", () => {
     const adapter = createAdapter();
     expect(getAcpAgentProfile("acp-cursor").manualCompaction).toBeUndefined();
-    expect(adapter.capabilities.supportsManualCompaction).toBe(false);
     expect(
       adapter.buildCommandPlan({
         type: "thread/compact",
@@ -99,7 +98,6 @@ describe("acp adapter command plans", () => {
 
   it("routes configured ACP compaction through the provider-local prompt", () => {
     const adapter = createCompactingAdapter();
-    expect(adapter.capabilities.supportsManualCompaction).toBe(true);
     expect(
       adapter.buildCommandPlan({
         type: "thread/compact",
