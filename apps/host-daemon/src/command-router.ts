@@ -680,7 +680,7 @@ export class CommandRouter {
               command.resumeContext.providerThreadId,
             threadId: command.threadId,
           },
-          "write",
+          command.type === "thread.compact" ? "read" : "write",
         );
       }
       default:
