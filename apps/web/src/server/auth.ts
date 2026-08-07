@@ -3,13 +3,16 @@ import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { drizzle } from "drizzle-orm/d1";
 import { account, session, user, verification } from "@bb/connect-db";
 import type { Env } from "./env.js";
+import { crossSubdomainCookieConfig } from "./auth-runtime.js";
 
 export type Auth = ReturnType<typeof createAuth>;
 
 /**
- * better-auth bound to the staging D1 via drizzle. GitHub is the only provider.
- * Cookies are scoped to `.${BASE_DOMAIN}` so the tunnel gate on
- * `<handle>.${BASE_DOMAIN}` can validate the same session.
+ * better-auth bound to the account D1 via drizzle. GitHub is the only provider.
+ * Deployed cookies are scoped to `.${BASE_DOMAIN}` so the tunnel gate on
+ * `<handle>.${BASE_DOMAIN}` can validate the same session. Loopback development
+ * uses a host-only cookie because browsers reject a getbb.app Domain attribute
+ * on 127.0.0.1.
  */
 export function createAuth(env: Env) {
   const db = drizzle(env.DB);
@@ -41,7 +44,7 @@ export function createAuth(env: Env) {
       },
     },
     advanced: {
-      crossSubDomainCookies: { enabled: true, domain: `.${env.BASE_DOMAIN}` },
+      crossSubDomainCookies: crossSubdomainCookieConfig(env),
     },
   });
 }

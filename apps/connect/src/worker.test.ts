@@ -8,6 +8,9 @@ import {
   GATE_AUTH_HEADER,
   GATE_MACHINE_ID_HEADER,
   TUNNEL_TARGET_HEADER,
+} from "./protocol-headers";
+import { LOCAL_BETTER_AUTH_SESSION_COOKIE } from "./auth-cookie";
+import {
   cacheNamespace,
   dashboardSignInUrl,
   requestForTunnelDo,
@@ -674,6 +677,26 @@ describe("gate worker share hosts", () => {
     );
   });
 
+  it("reads the loopback Better Auth cookie selected by local development", async () => {
+    const { env, ctx } = makeEnv(() => new Response("ok"));
+    const localEnv = {
+      ...env,
+      BETTER_AUTH_SESSION_COOKIE_NAME: LOCAL_BETTER_AUTH_SESSION_COOKIE,
+    };
+
+    const response = await worker.fetch(
+      visitorRequest("sawyer.getbb.app", "/"),
+      localEnv as never,
+      ctx,
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockParseCookie).toHaveBeenCalledWith(
+      null,
+      LOCAL_BETTER_AUTH_SESSION_COOKIE,
+    );
+  });
+
   it("renders a bare machine-label page without proxying to the DO", async () => {
     mockResolveLabel.mockResolvedValue(resolvedMachine());
     mockParseCookie.mockReturnValue(null);
@@ -846,6 +869,33 @@ describe("gate worker share hosts", () => {
     expect(html).toContain("Sign in");
     expect(html).toContain("sawyer");
     expect(captured).toHaveLength(0);
+  });
+
+  it("routes a per-label localhost URL through the seeded local identity", async () => {
+    mockParseCookie.mockReturnValue(null);
+    mockResolveLabel.mockResolvedValue(resolvedServer());
+    const { env, ctx, captured } = makeEnv(() => new Response("local bb"));
+    Object.assign(env, {
+      BASE_DOMAIN: "localhost",
+      ACCOUNT_APP_URL: "http://127.0.0.1:8792",
+      DEV_AUTH_USER_ID: OWNER,
+    });
+
+    const response = await worker.fetch(
+      visitorRequest("sawyer.localhost:8791", "/"),
+      env as never,
+      ctx,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("local bb");
+    expect(mockResolveLabel).toHaveBeenCalledWith(
+      "sawyer",
+      expect.anything(),
+      undefined,
+    );
+    expect(mockVerifySession).not.toHaveBeenCalled();
+    expect(captured).toHaveLength(1);
   });
 
   it("returns 403 when share host session is a different user", async () => {

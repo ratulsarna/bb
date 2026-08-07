@@ -94,14 +94,16 @@ signal it, so a stale file left by a crash cannot stop an unrelated process.
 
 ## Common Keys
 
-| Key                | Command         | When to set             | Used for                                                                                                                                       |
-| ------------------ | --------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BB_APP_URL`       | `bb-app config` | Optional for remote use | Human-facing app URL used for generated links and allowed browser origins. Leave empty for local-only use.                                     |
-| `BB_INFERENCE`     | `bb-app config` | Optional                | Server-side helper model in `provider/model` format. Defaults to `codex/gpt-5.6-luna`; the Codex helper route uses no reasoning.               |
-| `BB_TRANSCRIPTION` | `bb-app config` | Optional                | Voice transcription model in `provider/model` format. Defaults to `codex/gpt-transcribe`.                                                      |
-| `BB_SERVER_URL`    | `bb-app config` | Remote CLI/host use     | Server URL for standalone `bb` CLI and `host-daemon` commands on the current machine. The CLI defaults to `http://127.0.0.1:38886` when unset. |
-| `BB_LOG_LEVEL`     | `bb-app config` | Debugging               | Log level for the next bb start: `trace`, `debug`, `info`, `warn`, `error`, or `fatal`.                                                        |
-| `OPENAI_API_KEY`   | `bb-app env`    | OpenAI opt-in routes    | Required only when selecting explicit OpenAI provider routes such as `openai/gpt-4o-mini` or `openai/gpt-transcribe`.                          |
+| Key                       | Command         | When to set             | Used for                                                                                                                                       |
+| ------------------------- | --------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BB_APP_URL`              | `bb-app config` | Optional for remote use | Human-facing app URL used for generated links and allowed browser origins. Leave empty for local-only use.                                     |
+| `BB_INFERENCE`            | `bb-app config` | Optional                | Server-side helper model in `provider/model` format. Defaults to `codex/gpt-5.6-luna`; the Codex helper route uses no reasoning.               |
+| `BB_TRANSCRIPTION`        | `bb-app config` | Optional                | Voice transcription model in `provider/model` format. Defaults to `codex/gpt-transcribe`.                                                      |
+| `BB_SERVER_URL`           | `bb-app config` | Remote CLI/host use     | Server URL for standalone `bb` CLI and `host-daemon` commands on the current machine. The CLI defaults to `http://127.0.0.1:38886` when unset. |
+| `BB_CONNECT_BASE_URL`     | `bb-app env`    | Alternate Cloud         | HTTP(S) origin used for Cloud account links and pairing-code redemption. Leave unset for `https://getbb.app`.                                  |
+| `BB_CONNECT_LOOPBACK_URL` | `bb-app env`    | Source QA only          | Loopback HTTP origin served by the bare Cloud handle. `pnpm cloud:dev` manages this automatically.                                             |
+| `BB_LOG_LEVEL`            | `bb-app config` | Debugging               | Log level for the next bb start: `trace`, `debug`, `info`, `warn`, `error`, or `fatal`.                                                        |
+| `OPENAI_API_KEY`          | `bb-app env`    | OpenAI opt-in routes    | Required only when selecting explicit OpenAI provider routes such as `openai/gpt-4o-mini` or `openai/gpt-transcribe`.                          |
 
 By default, helper inference and voice transcription use Codex credentials from
 the host daemon. Run `codex login` on the host for the default path. Set
@@ -462,6 +464,21 @@ proxying relayed requests to the server's own loopback (which serves the SPA
 The tunnel client lives in `plugins/connect/`; the CLI command is proxied to
 the plugin, and Settings → Connect drives the plugin's rpc (including shared
 ports).
+
+`BB_CONNECT_BASE_URL` changes the account and pairing-code redemption origin.
+It must be an HTTP(S) origin with no path, query, credentials, or fragment. The
+redemption response supplies the authoritative tunnel-gate URL, so account and
+gate services may use different origins. Leave the setting unset in production
+to use `https://getbb.app`; source development may put it in
+`.env.development.local`. The `pnpm cloud:dev` launcher applies its local value
+to the current checkout's dev server while running and restores the previous
+managed environment value when it exits.
+
+`BB_CONNECT_LOOPBACK_URL` is a source-development escape hatch for selecting
+the loopback HTTP origin served by the bare Cloud handle. It accepts only an
+HTTP origin on `127.0.0.1`, `localhost`, or `::1`. Leave it unset in packaged
+and production use. `pnpm cloud:dev` manages it automatically so the handle
+serves the current worktree's Vite app rather than its API-only server port.
 
 ## Experiments
 

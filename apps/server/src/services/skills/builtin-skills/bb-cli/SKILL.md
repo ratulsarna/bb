@@ -179,6 +179,13 @@ isolated|reuse`, or anchor with `--source-seq-end`. Permission mode inherits
   cuts it off entirely; with bb connect still enabled, `bb plugin enable
   connect` restores the command. Plugins → Connect shows the current URL, QR
   code, shared ports, re-pair form, and disconnect control.
+  `BB_CONNECT_BASE_URL` overrides the account and pairing-code redemption
+  origin for alternate deployments and local QA; leave it unset for
+  `https://getbb.app`. The service returns the authoritative tunnel-gate URL,
+  so it may differ from this account origin.
+  `BB_CONNECT_LOOPBACK_URL` is a source-QA-only loopback HTTP origin served by
+  the bare handle URL. Leave it unset outside source development;
+  `pnpm cloud:dev` manages it automatically.
 - Add remote execution machines from Settings → Machines. Its one-line
   installer stores the bb connect machine credential locally and configures
   both the daemon protocol and agent-launched `bb` CLI to traverse the account

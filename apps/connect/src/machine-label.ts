@@ -9,8 +9,7 @@ import {
 } from "@bb/connect-db";
 import { verifyMachineCredentialDetails } from "./session.js";
 import type { Env } from "./tunnel-do.js";
-
-const MACHINE_CREDENTIAL_HEADER = "x-bb-connect-machine";
+import { MACHINE_CREDENTIAL_HEADER } from "./protocol-headers.js";
 
 function fallbackLabel(machineId: string): string {
   const idPrefix = machineId

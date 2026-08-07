@@ -55,6 +55,8 @@ export interface ConnectTunnelOptions {
    * bind-gated; the tunnel only needs it once a socket opens).
    */
   getLoopbackBaseUrl: () => string;
+  /** Optional Cloud account/redeem origin override, read lazily for live config reloads. */
+  getConnectBaseUrl?: () => string | null;
   log: PluginLogger;
   /** Fired on every state/handle/error/shares/presence transition. */
   onStatusChange?: (status: ConnectStatus) => void;
@@ -117,7 +119,7 @@ export class ConnectTunnel {
       args.baseUrl ??
       (args.serverUrl !== undefined
         ? deriveConnectBaseUrl(args.serverUrl)
-        : DEFAULT_CONNECT_BASE_URL);
+        : (this.options.getConnectBaseUrl?.() ?? DEFAULT_CONNECT_BASE_URL));
     this.pairing = true;
     this.publish();
     try {
@@ -134,7 +136,9 @@ export class ConnectTunnel {
         throw pairError;
       }
       const serverUrl = (
-        args.serverUrl ?? serverUrlForHandle(baseUrl, redeemed.handle)
+        args.serverUrl ??
+        redeemed.serverUrl ??
+        serverUrlForHandle(baseUrl, redeemed.handle)
       ).replace(/\/$/, "");
       const credential: ConnectCredential = {
         serverUrl,
@@ -245,12 +249,13 @@ export class ConnectTunnel {
     };
   }
 
-  /** getbb.app dashboard URL, derived from the paired base (or the apex). */
+  /** Cloud dashboard URL, preferring the configured account origin. */
   private dashboardUrl(): string {
     const base =
-      this.credential !== null
+      this.options.getConnectBaseUrl?.() ??
+      (this.credential !== null
         ? deriveConnectBaseUrl(this.credential.serverUrl)
-        : DEFAULT_CONNECT_BASE_URL;
+        : DEFAULT_CONNECT_BASE_URL);
     return `${base.replace(/\/$/, "")}/dashboard`;
   }
 

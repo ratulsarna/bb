@@ -5,6 +5,17 @@ export interface Env {
   TUNNEL_DO: DurableObjectNamespace;
   BASE_DOMAIN: string;
   APP_URL: string;
+  /**
+   * Loopback-only account override used by the local Cloud launcher. Omitted
+   * everywhere that should authenticate through Better Auth.
+   */
+  DEV_AUTH_USER_ID?: string;
+  /**
+   * Optional authoritative Connect gate URL template. `{label}` is replaced
+   * with the claimed routing label. Production derives the equivalent template
+   * from BASE_DOMAIN; local development supplies its worktree-specific port.
+   */
+  CONNECT_SERVER_URL_TEMPLATE?: string;
   GITHUB_CLIENT_ID: string;
   GITHUB_CLIENT_SECRET: string;
   BETTER_AUTH_SECRET: string;

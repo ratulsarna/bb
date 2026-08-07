@@ -4,6 +4,10 @@ import { createKvCredentialStore } from "./credential.js";
 import { connectRpcContract, createRpcHandlers } from "./rpc.js";
 import { ShareRegistry } from "./shares.js";
 import { ConnectTunnel } from "./tunnel.js";
+import {
+  resolveConnectBaseUrlOverride,
+  resolveConnectLoopbackUrlOverride,
+} from "./redeem.js";
 import { ShareHostResolver } from "./hosts.js";
 import {
   CONNECT_REALTIME_CHANNEL,
@@ -15,12 +19,14 @@ export default async function plugin(bb: BbPluginApi) {
   // Tunnel is assigned below; ShareRegistry reads the live credential via this.
   let tunnel!: ConnectTunnel;
   const hostResolver = new ShareHostResolver(() => bb.sdk);
+  const getLoopbackBaseUrl = () =>
+    resolveConnectLoopbackUrlOverride() ?? bb.server.loopbackBaseUrl;
 
   const shares = new ShareRegistry({
     kv: bb.storage.kv,
     hosts: bb.hosts,
     hostResolver,
-    getLoopbackBaseUrl: () => bb.server.loopbackBaseUrl,
+    getLoopbackBaseUrl,
     getCredential: () => tunnel.getCredential(),
     log: bb.log,
     onChange: () => {
@@ -31,7 +37,8 @@ export default async function plugin(bb: BbPluginApi) {
   tunnel = new ConnectTunnel({
     store,
     shares,
-    getLoopbackBaseUrl: () => bb.server.loopbackBaseUrl,
+    getLoopbackBaseUrl,
+    getConnectBaseUrl: () => resolveConnectBaseUrlOverride(),
     log: bb.log,
     onStatusChange: (status) =>
       bb.realtime.publish(CONNECT_REALTIME_CHANNEL, status),

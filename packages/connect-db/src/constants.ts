@@ -127,8 +127,8 @@ export interface VisitorHost {
 /**
  * Resolve a visitor host to its handle and optional share target.
  *
- * - `<handle>.<base>` → `{ handle, target: null }`
- * - `<handle>--<port>.<base>` → `{ handle, target: port }` when port is a
+ * - `<handle>.<base>[:listener-port]` → `{ handle, target: null }`
+ * - `<handle>--<port>.<base>[:listener-port]` → `{ handle, target: port }` when port is a
  *   valid decimal 1–65535 with no leading zeros
  * - apex, multi-level labels, foreign domains, or invalid share labels → null
  *
@@ -136,10 +136,29 @@ export interface VisitorHost {
  * (prefix = handle, suffix = target). An invalid target makes the whole
  * host unroutable (null), not a bare-handle fallback.
  */
-export function parseVisitorHost(host: string, baseDomain: string): VisitorHost | null {
-  const suffix = `.${baseDomain}`;
-  if (!host.endsWith(suffix)) return null;
-  const label = host.slice(0, -suffix.length);
+export function parseVisitorHost(
+  host: string,
+  baseDomain: string,
+): VisitorHost | null {
+  let hostname: string;
+  try {
+    const parsed = new URL(`http://${host}`);
+    if (
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.pathname !== "/" ||
+      parsed.search !== "" ||
+      parsed.hash !== ""
+    ) {
+      return null;
+    }
+    hostname = parsed.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  const suffix = `.${baseDomain.toLowerCase()}`;
+  if (!hostname.endsWith(suffix)) return null;
+  const label = hostname.slice(0, -suffix.length);
   if (!label || label.includes(".")) return null;
 
   const sep = label.indexOf("--");

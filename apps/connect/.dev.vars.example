@@ -1,0 +1,5 @@
+# Used only by the local Connect worker. Never commit real secret values.
+OPENAI_API_KEY=replace-with-openai-api-key
+
+# Generate a local value with: openssl rand -hex 32
+BETTER_AUTH_SECRET=replace-with-random-secret

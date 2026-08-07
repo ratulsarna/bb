@@ -6,6 +6,7 @@ const viteDevConfig = loadViteDevConfig();
 const devWebSocketBrowserHostPortDefine = JSON.stringify(
   viteDevConfig.serverWsOrigin.port,
 );
+const devAppBrowserHostPortDefine = JSON.stringify(viteDevConfig.appPort);
 
 export default defineConfig({
   ...sharedViteConfig,
@@ -13,6 +14,7 @@ export default defineConfig({
     // Connect directly to the server in dev because Vite's WS proxy does not
     // handle upstream server restarts reliably.
     __BB_DEV_WS_BROWSER_HOST_PORT__: devWebSocketBrowserHostPortDefine,
+    __BB_DEV_APP_BROWSER_HOST_PORT__: devAppBrowserHostPortDefine,
   },
   server: {
     host: viteDevConfig.appHost,

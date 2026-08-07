@@ -26,6 +26,12 @@ import plugin from "./server.js";
 import { ConnectTunnel } from "./tunnel.js";
 import type { ConnectStatus } from "./types.js";
 import { ShareHostResolver } from "./hosts.js";
+import {
+  CONNECT_BASE_URL_ENV_NAME,
+  CONNECT_LOOPBACK_URL_ENV_NAME,
+  resolveConnectBaseUrlOverride,
+  resolveConnectLoopbackUrlOverride,
+} from "./redeem.js";
 
 const SERVER_HOST_ID = "host-server";
 const SERVER_HOST_NAME = "Server";
@@ -89,6 +95,60 @@ describe("serverUrlForHandle", () => {
     expect(serverUrlForHandle("https://getbb.app", "sawyer")).toBe(
       "https://sawyer.getbb.app",
     );
+  });
+});
+
+describe("resolveConnectBaseUrlOverride", () => {
+  it("accepts an HTTP(S) origin and normalizes its trailing slash", () => {
+    expect(
+      resolveConnectBaseUrlOverride({
+        [CONNECT_BASE_URL_ENV_NAME]: " http://127.0.0.1:8792/ ",
+      }),
+    ).toBe("http://127.0.0.1:8792");
+    expect(resolveConnectBaseUrlOverride({})).toBeNull();
+  });
+
+  it("rejects non-origin and non-HTTP values", () => {
+    expect(() =>
+      resolveConnectBaseUrlOverride({
+        [CONNECT_BASE_URL_ENV_NAME]: "http://127.0.0.1:8792/path",
+      }),
+    ).toThrow("must be an HTTP(S) origin");
+    expect(() =>
+      resolveConnectBaseUrlOverride({
+        [CONNECT_BASE_URL_ENV_NAME]: "file:///tmp/connect",
+      }),
+    ).toThrow("must be an HTTP(S) origin");
+  });
+});
+
+describe("resolveConnectLoopbackUrlOverride", () => {
+  it("accepts only a loopback HTTP origin", () => {
+    expect(
+      resolveConnectLoopbackUrlOverride({
+        [CONNECT_LOOPBACK_URL_ENV_NAME]: " http://127.0.0.1:14577/ ",
+      }),
+    ).toBe("http://127.0.0.1:14577");
+    expect(
+      resolveConnectLoopbackUrlOverride({
+        [CONNECT_LOOPBACK_URL_ENV_NAME]: "http://[::1]:14577",
+      }),
+    ).toBe("http://[::1]:14577");
+    expect(resolveConnectLoopbackUrlOverride({})).toBeNull();
+  });
+
+  it("rejects remote, HTTPS, and path-bearing origins", () => {
+    for (const value of [
+      "http://example.com:14577",
+      "https://127.0.0.1:14577",
+      "http://127.0.0.1:14577/app",
+    ]) {
+      expect(() =>
+        resolveConnectLoopbackUrlOverride({
+          [CONNECT_LOOPBACK_URL_ENV_NAME]: value,
+        }),
+      ).toThrow("must be a loopback HTTP origin");
+    }
   });
 });
 
@@ -1308,6 +1368,7 @@ describe("connect plugin", () => {
       host = undefined;
     }
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("starts unpaired — a healthy state, not needs-configuration", async () => {
@@ -1405,6 +1466,60 @@ describe("connect plugin", () => {
     );
     expect(status.url).toBe("http://sawyer.localhost:59329");
     expect(status.paired).toBe(true);
+  });
+
+  it("uses the configured base URL and Cloud's authoritative server URL", async () => {
+    vi.stubEnv(CONNECT_BASE_URL_ENV_NAME, "http://127.0.0.1:8792");
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            credential: "bbcred_live",
+            handle: "localbb",
+            serverUrl: "http://127.0.0.1:8791",
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { harness } = await loadPlugin();
+
+    const status = (await harness.callRpc("pair", {
+      code: "ABCD",
+    })) as ConnectStatus;
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8792/api/connect/redeem",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(status.url).toBe("http://127.0.0.1:8791");
+    expect(status.dashboardUrl).toBe("http://127.0.0.1:8792/dashboard");
+  });
+
+  it("rejects an invalid authoritative server URL without persisting it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              credential: "bbcred_live",
+              handle: "localbb",
+              serverUrl: "file:///tmp/not-a-gate",
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+    const { bb, harness } = await loadPlugin();
+
+    await expect(
+      harness.callRpc("pair", {
+        code: "ABCD",
+        baseUrl: "http://127.0.0.1:8792",
+      }),
+    ).rejects.toThrow("network");
+    expect(await bb.storage.kv.get(CREDENTIAL_KV_KEY)).toBeUndefined();
   });
 
   it("pair stores a non-primary routing label from redeem (multi-server)", async () => {

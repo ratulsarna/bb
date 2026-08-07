@@ -78,6 +78,7 @@ function helpText(): string {
     "  bb connect servers             List every bb on this account (from getbb.app)",
     "",
     "The server holds the tunnel; it stays up while bb is running.",
+    "Set BB_CONNECT_BASE_URL to an HTTP(S) origin only when using another Cloud account endpoint.",
   ].join("\n");
 }
 

@@ -1,0 +1,5 @@
+# Optional: only needed for `pnpm cloud:dev -- --github-auth`.
+# Create a separate local GitHub OAuth App with this callback URL:
+# http://127.0.0.1/api/auth/callback/github
+GITHUB_CLIENT_ID=replace-with-local-oauth-client-id
+GITHUB_CLIENT_SECRET=replace-with-local-oauth-client-secret

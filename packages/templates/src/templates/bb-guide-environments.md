@@ -159,3 +159,10 @@ Remote access (bb connect):
   shows the URL, QR code, and shared ports). Disabling the plugin
   (`bb plugin disable connect`) cuts off all remote access; re-enable with
   `bb plugin enable connect`.
+  `BB_CONNECT_BASE_URL` overrides the account and code-redemption origin for
+  alternate deployments and local QA; leave it unset for getbb.app. The
+  service response supplies the authoritative tunnel-gate URL, which may be a
+  different origin.
+  `BB_CONNECT_LOOPBACK_URL` is a source-QA-only loopback HTTP origin served by
+  the bare handle URL. Leave it unset outside source development;
+  `pnpm cloud:dev` manages it automatically.

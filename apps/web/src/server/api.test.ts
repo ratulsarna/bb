@@ -26,8 +26,10 @@ import {
   getAccountState,
   redeemConnectCode,
   redeemMachineCode,
+  resolveServerUrlTemplate,
   revokeMachineForServerCredential,
   revokeMachine,
+  serverUrlForLabel,
 } from "./api.js";
 import { sha256Hex } from "./tokens.js";
 
@@ -55,6 +57,7 @@ beforeEach(() => {
     db,
     baseDomain: "getbb.app",
     appUrl: "https://getbb.app",
+    serverUrlTemplate: "https://{label}.getbb.app",
     closeTunnel,
   };
 });
@@ -77,6 +80,37 @@ function seedUser(id: string, githubLogin?: string): void {
     })
     .run();
 }
+
+describe("server URL template boundary", () => {
+  it("defaults production and accepts a per-label loopback port", () => {
+    expect(resolveServerUrlTemplate(undefined, "getbb.app")).toBe(
+      "https://{label}.getbb.app",
+    );
+    const local = resolveServerUrlTemplate(
+      "http://{label}.localhost:8791",
+      "localhost",
+    );
+    expect(local).toBe("http://{label}.localhost:8791");
+    expect(serverUrlForLabel("sawyer", local)).toBe(
+      "http://sawyer.localhost:8791",
+    );
+  });
+
+  it("rejects fixed, foreign, and non-origin templates", () => {
+    expect(() =>
+      resolveServerUrlTemplate("http://127.0.0.1:8791", "localhost"),
+    ).toThrow("must contain {label} exactly once");
+    expect(() =>
+      resolveServerUrlTemplate("http://{label}.example.com:8791", "localhost"),
+    ).toThrow("form {label}.BASE_DOMAIN");
+    expect(() =>
+      resolveServerUrlTemplate(
+        "http://{label}.localhost:8791/path",
+        "localhost",
+      ),
+    ).toThrow("form {label}.BASE_DOMAIN");
+  });
+});
 
 describe("claimHandle", () => {
   it("creates the profile and the primary server (subdomain = handle)", async () => {
@@ -197,6 +231,7 @@ describe("createConnectCode (per-server minting + reuse)", () => {
       serverId: desktop.server.id,
     });
     if ("error" in r) throw new Error(r.error);
+    expect(r.baseUrl).toBe("https://getbb.app");
     expect(r.serverUrl).toBe("https://sawyer-desktop.getbb.app");
     expect(r.serverId).toBe(desktop.server.id);
 
@@ -267,6 +302,7 @@ describe("redeemConnectCode (multi-server routing label)", () => {
     expect(result.handle).toBe("sawyer-desktop");
     expect(result.serverId).toBe(desktop.server.id);
     // (b) tunnelUrl is keyed by that subdomain.
+    expect(result.serverUrl).toBe("https://sawyer-desktop.getbb.app");
     expect(result.tunnelUrl).toBe("wss://sawyer-desktop.getbb.app/__tunnel");
     expect(result.credential.startsWith("bbcred_")).toBe(true);
 
@@ -306,7 +342,34 @@ describe("redeemConnectCode (multi-server routing label)", () => {
 
     // Primary server: subdomain === account handle — byte-identical pre-fix behavior.
     expect(result.handle).toBe("sawyer");
+    expect(result.serverUrl).toBe("https://sawyer.getbb.app");
     expect(result.tunnelUrl).toBe("wss://sawyer.getbb.app/__tunnel");
+  });
+
+  it("returns the configured per-label Connect gate URL as authoritative", async () => {
+    seedUser("u1");
+    await claimHandle(deps, "u1", "sawyer");
+    const primary = db
+      .select()
+      .from(server)
+      .where(eq(server.subdomain, "sawyer"))
+      .get();
+    const minted = await createConnectCode(deps, "u1", {
+      serverId: primary!.id,
+    });
+    if ("error" in minted) throw new Error(minted.error);
+
+    const result = await redeemConnectCode(
+      {
+        ...deps,
+        serverUrlTemplate: "http://{label}.localhost:8791",
+      },
+      minted.code,
+    );
+    if ("error" in result) throw new Error(result.error);
+
+    expect(result.serverUrl).toBe("http://sawyer.localhost:8791");
+    expect(result.tunnelUrl).toBe("ws://sawyer.localhost:8791/__tunnel");
   });
 });
 

@@ -6,6 +6,8 @@ export type BbRuntimeMode = "dev" | "prod";
 
 export interface DevPortSet {
   appPort: number;
+  cloudConnectPort: number;
+  cloudWebPort: number;
   hostDaemonPort: number;
   serverPort: number;
 }
@@ -88,6 +90,10 @@ const DEV_PORT_BUCKETS = 8_000;
 const DEV_APP_PORT_BASE = 11_000;
 const DEV_SERVER_PORT_BASE = 19_000;
 const DEV_HOST_DAEMON_PORT_BASE = 27_000;
+const DEV_CLOUD_CONNECT_PORT_BASE = 35_000;
+// The Connect range skips the packaged app's 38886/38887 pair, ending at
+// 43001. Start web immediately after it so all five dev ranges stay disjoint.
+const DEV_CLOUD_WEB_PORT_BASE = 43_002;
 const DEV_PROCESS_STRIPPED_ENV_KEYS: readonly string[] = [
   "BB_ENVIRONMENT_ID",
   "BB_THREAD_ID",
@@ -134,10 +140,22 @@ function resolvePortOffset(repoRootPath: string): number {
   return Number.parseInt(hash.slice(0, 8), 16) % DEV_PORT_BUCKETS;
 }
 
+function skipPackagedAppPorts(port: number): number {
+  let availablePort = port;
+  for (const reservedPort of [BB_PROD_SERVER_PORT, BB_PROD_HOST_DAEMON_PORT]) {
+    if (availablePort >= reservedPort) availablePort += 1;
+  }
+  return availablePort;
+}
+
 function resolvePorts(repoRootPath: string): DevPortSet {
   const offset = resolvePortOffset(repoRootPath);
   return {
     appPort: DEV_APP_PORT_BASE + offset,
+    cloudConnectPort: skipPackagedAppPorts(
+      DEV_CLOUD_CONNECT_PORT_BASE + offset,
+    ),
+    cloudWebPort: DEV_CLOUD_WEB_PORT_BASE + offset,
     hostDaemonPort: DEV_HOST_DAEMON_PORT_BASE + offset,
     serverPort: DEV_SERVER_PORT_BASE + offset,
   };

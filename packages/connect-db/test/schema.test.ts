@@ -506,6 +506,10 @@ describe("parseVisitorHost", () => {
       handle: "sawyer",
       target: null,
     });
+    expect(parseVisitorHost("sawyer.localhost:8791", "localhost")).toEqual({
+      handle: "sawyer",
+      target: null,
+    });
   });
 
   it("extracts handle--port share hosts", () => {
@@ -517,6 +521,9 @@ describe("parseVisitorHost", () => {
       handle: "sawyer",
       target: "5173",
     });
+    expect(
+      parseVisitorHost("sawyer--5173.localhost:8791", "localhost"),
+    ).toEqual({ handle: "sawyer", target: "5173" });
   });
 
   it("rejects invalid share targets as unroutable", () => {
@@ -533,6 +540,9 @@ describe("parseVisitorHost", () => {
     expect(parseVisitorHost("a.b.getbb.app", "getbb.app")).toBeNull();
     expect(parseVisitorHost("evil.com", "getbb.app")).toBeNull();
     expect(parseVisitorHost("getbb.app.evil.com", "getbb.app")).toBeNull();
+    expect(
+      parseVisitorHost("sawyer.localhost:not-a-port", "localhost"),
+    ).toBeNull();
   });
 });
 

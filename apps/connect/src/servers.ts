@@ -13,7 +13,6 @@ import {
 } from "./session.js";
 import type { Env } from "./tunnel-do.js";
 
-const SESSION_COOKIE = "__Secure-better-auth.session_token";
 export const DESKTOP_SESSION_COOKIE = "__Secure-bb-connect.desktop_session";
 export const DESKTOP_SESSION_TTL_MS = 60 * 60 * 1000;
 
@@ -167,6 +166,7 @@ export async function resolveAccountUserId(
   request: Request,
   secret: string,
   db: ConnectDb,
+  sessionCookieName: string,
 ): Promise<string | null> {
   const presented = request.headers.get("x-bb-connect-machine") ?? "";
   if (presented) {
@@ -179,7 +179,7 @@ export async function resolveAccountUserId(
     if (serverUserId) return serverUserId;
   }
 
-  const cookie = parseCookie(request.headers.get("cookie"), SESSION_COOKIE);
+  const cookie = parseCookie(request.headers.get("cookie"), sessionCookieName);
   if (!cookie) return null;
   return verifySessionCookie(cookie, secret, db);
 }
@@ -237,6 +237,7 @@ export async function listAccountServers(
 export async function handleListAccountServers(
   request: Request,
   env: Env,
+  sessionCookieName: string,
 ): Promise<Response> {
   if (request.method !== "GET") {
     return new Response(JSON.stringify({ error: "method_not_allowed" }), {
@@ -253,6 +254,7 @@ export async function handleListAccountServers(
     request,
     env.BETTER_AUTH_SECRET,
     db,
+    sessionCookieName,
   );
   if (!userId) {
     return new Response(JSON.stringify({ error: "unauthorized" }), {
@@ -272,6 +274,7 @@ export async function handleListAccountServers(
 export async function handleCreateDesktopSession(
   request: Request,
   env: Env,
+  sessionCookieName: string,
 ): Promise<Response> {
   if (request.method !== "POST") {
     return new Response(JSON.stringify({ error: "method_not_allowed" }), {
@@ -287,6 +290,7 @@ export async function handleCreateDesktopSession(
     request,
     env.BETTER_AUTH_SECRET,
     db,
+    sessionCookieName,
   );
   if (!userId) {
     return new Response(JSON.stringify({ error: "unauthorized" }), {
