@@ -1181,9 +1181,13 @@ describe("acp bridge", () => {
 
   it("silently summarizes and reseeds a fresh ACP session", async () => {
     const promptLog = join(workspaceDir, "reseed-prompt-log.jsonl");
+    const launchLog = join(workspaceDir, "reseed-launch-log.txt");
     const { bbThreadId, providerThreadId } = await startThread({
       instructions: "Be terse.",
-      envVars: { FAKE_ACP_PROMPT_LOG: promptLog },
+      envVars: {
+        FAKE_ACP_LAUNCH_LOG: launchLog,
+        FAKE_ACP_PROMPT_LOG: promptLog,
+      },
     });
 
     const compactId = sendRequest("thread/compact", {
@@ -1200,10 +1204,22 @@ describe("acp bridge", () => {
     expect(agentMessageTexts()).toEqual([]);
 
     const compactedIdentity = notifications("thread/identity").at(-1);
-    expect(compactedIdentity?.params).toEqual({
-      threadId: bbThreadId,
-      providerThreadId: `${providerThreadId}-2`,
-    });
+    expect(compactedIdentity?.params).toMatchObject({ threadId: bbThreadId });
+    const compactedIdentityParams = compactedIdentity?.params;
+    if (
+      typeof compactedIdentityParams !== "object" ||
+      compactedIdentityParams === null ||
+      Array.isArray(compactedIdentityParams)
+    ) {
+      throw new Error("Expected compaction to emit identity params");
+    }
+    const compactedProviderThreadId = compactedIdentityParams.providerThreadId;
+    if (typeof compactedProviderThreadId !== "string") {
+      throw new Error("Expected compaction to emit a provider thread id");
+    }
+    expect(compactedProviderThreadId).toMatch(/^fake-sess-\d+$/);
+    expect(compactedProviderThreadId).not.toBe(providerThreadId);
+    expect(readFileSync(launchLog, "utf8").trim().split("\n")).toHaveLength(2);
     expect(
       readFileSync(promptLog, "utf8")
         .trim()
@@ -1215,7 +1231,7 @@ describe("acp bridge", () => {
     ]);
 
     const turnId = sendRequest("turn/start", {
-      threadId: `${providerThreadId}-2`,
+      threadId: compactedProviderThreadId,
       input: [{ type: "text", text: "hi", mentions: [] }],
     });
     await waitForResponse(turnId);
