@@ -1046,10 +1046,10 @@ describe("host-daemon local schemas", () => {
 });
 
 describe("host-daemon command schemas", () => {
-  // Version 81 makes same-instance daemon session replacement reconnect-safe
-  // so enrolled daemons update before receiving the revised server behavior.
-  it("uses protocol version 81 for reconnect-safe session replacement", () => {
-    expect(HOST_DAEMON_PROTOCOL_VERSION).toBe(81);
+  // Version 82 makes thread.compact settle once provider work is accepted.
+  // The bump updates enrolled daemons before they receive that new contract.
+  it("uses protocol version 82 for manual thread compaction", () => {
+    expect(HOST_DAEMON_PROTOCOL_VERSION).toBe(82);
   });
 
   it("binds Plan cancellation to a required turn id and typed result", () => {
