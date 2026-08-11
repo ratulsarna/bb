@@ -87,12 +87,16 @@ CUSTOM_VERSION="$(node -e '
 node scripts/bump-version.mjs "$CUSTOM_VERSION"
 node .github/workflows/check-version-lockstep.mjs
 
+# --concurrency=2 is deliberate. At the default, the app, server, and
+# host-daemon suites run at once and starve the VPS, and tests that pass in
+# isolation fail on their own timeouts.
 pnpm exec turbo run typecheck test \
   --filter=@bb/app \
   --filter=@bb/config \
   --filter=@bb/server \
   --filter=@bb/host-daemon \
   --filter=bb-app \
+  --concurrency=2 \
   --output-logs=new-only
 
 pnpm exec turbo run smoke:tarball --filter=bb-app --force --output-logs=new-only
@@ -108,6 +112,11 @@ generated deployment versions to `codex/deployment`.
 
 ## 3. Back up and deploy the VPS
 
+Run this from a plain SSH shell, never from a BB thread. `bb.service` is one
+unit holding the server, the host daemon, and every thread executing on this
+VPS, so stopping it kills the thread issuing the command mid-turn. Thread
+history survives in `~/.bb`; the in-flight turn does not.
+
 First confirm there are no running BB turns, open terminals, or pending
 interactions. Then choose the exact tarball produced above:
 
@@ -116,21 +125,33 @@ TARBALL="$HOME/bb-artifacts/<build>/bb-app-<version>.tgz"
 ROLLBACK_ROOT="$HOME/bb-deploy-backups/$(date -u +%Y%m%d%H%M%S)-before-update"
 mkdir -p "$ROLLBACK_ROOT/rollback"
 
-npm pack "$(npm root --global)/bb-app" \
+# Take the install location from the unit that actually runs BB. `npm root -g`
+# follows the ambient npm prefix, which resolves elsewhere inside a BB
+# workspace shell; installing under the wrong prefix leaves the service running
+# the old build and reports success.
+BB_BIN="$(systemctl --user show bb.service -p ExecStart --value \
+  | sed -n 's/.*path=\([^ ;]*\).*/\1/p')"
+BB_PREFIX="$(dirname "$(dirname "$BB_BIN")")"
+GLOBAL_MODULES="$BB_PREFIX/lib/node_modules"
+NPM="$BB_PREFIX/bin/npm"
+ls -d "$GLOBAL_MODULES/bb-app"
+
+"$NPM" pack "$GLOBAL_MODULES/bb-app" \
   --pack-destination "$ROLLBACK_ROOT/rollback" --json \
   > "$ROLLBACK_ROOT/rollback/pack.json"
 systemctl --user cat bb.service > "$ROLLBACK_ROOT/bb.service"
 
 systemctl --user stop bb.service
 cp -a "$HOME/.bb" "$ROLLBACK_ROOT/bb-state"
-npm_config_ignore_scripts=false npm install --global "$TARBALL"
+npm_config_prefix="$BB_PREFIX" npm_config_ignore_scripts=false \
+  "$NPM" install --global "$TARBALL"
 systemctl --user start bb.service
 ```
 
 Verify before declaring success:
 
 ```bash
-bb --version
+"$BB_PREFIX/bin/bb" --version
 systemctl --user is-active bb.service
 curl -fsS http://127.0.0.1:38886/health
 curl -fsS https://srv1191956.tail7af381.ts.net/health
