@@ -1,9 +1,21 @@
 import { useEffect, type RefObject } from "react";
 
 type AppShellElement = HTMLDivElement;
+type BrowserPlatform = Pick<
+  Navigator,
+  "maxTouchPoints" | "platform" | "userAgent"
+>;
 
-function getVisualViewportBottom(visualViewport: VisualViewport) {
-  return Math.round(visualViewport.offsetTop + visualViewport.height);
+export function shouldRestoreIOSViewportOnKeyboardDismissal({
+  maxTouchPoints,
+  platform,
+  userAgent,
+}: BrowserPlatform): boolean {
+  const isAppleWebKit = /\bAppleWebKit\//u.test(userAgent);
+  const isIOSDevice =
+    /\b(?:iPad|iPhone|iPod)\b/u.test(userAgent) ||
+    (platform === "MacIntel" && maxTouchPoints > 1);
+  return isAppleWebKit && isIOSDevice;
 }
 
 function getVisualViewportPageTop(visualViewport: VisualViewport) {
@@ -21,21 +33,19 @@ function isKeyboardFocusTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * iOS keeps the layout viewport at its original height when the software
- * keyboard opens, even though the visible viewport becomes shorter. Keep the
- * app shell's bottom aligned with the visible viewport so sticky composers do
- * not end up behind the keyboard. iOS can pan the visual viewport while the
- * keyboard opens, so both its height and its layout-relative offset matter.
+ * Some mobile browsers keep the layout viewport at its original height when
+ * the software keyboard or embedded-browser chrome reduces the visible area.
+ * Apply a shell override only while the layout and visual viewport heights
+ * disagree so native interactive-widget resizing remains authoritative.
  *
- * Safari also reveals a newly focused editor by panning the page. Compensate
- * for that pan directly when the page is not pinch-zoomed. `scrollTo()` does
- * not always reset a visual-viewport-only pan in an iOS standalone PWA. The
- * shell must move to the visual viewport's page-relative top and use its
- * visible height. Pinch-zoom pans (scale > 1) are intentional and must survive.
+ * Browsers can also reveal a newly focused editor by panning the visual
+ * viewport. Compensate for that pan at 1x zoom; pinch-zoom pans are intentional
+ * and must survive untouched.
  */
 export function useMobileVisualViewportHeight(
   shellRef: RefObject<AppShellElement | null>,
   enabled: boolean,
+  restoreImmediatelyOnKeyboardDismissal: boolean,
 ) {
   useEffect(() => {
     const shell = shellRef.current;
@@ -45,19 +55,39 @@ export function useMobileVisualViewportHeight(
     let animationFrame: number | null = null;
     const updateHeight = () => {
       animationFrame = null;
-      if (visualViewport.scale === 1) {
-        if (visualViewport.offsetTop > 0 || window.scrollY > 0) {
-          // Reset a regular layout-viewport scroll when possible. The `top`
-          // compensation below also handles an iOS visual-viewport-only pan.
-          window.scrollTo(0, 0);
-        }
-        shell.style.top = `${getVisualViewportPageTop(visualViewport)}px`;
-        shell.style.height = `${Math.round(visualViewport.height)}px`;
+      if (visualViewport.scale !== 1) {
+        shell.style.removeProperty("top");
+        shell.style.removeProperty("height");
         return;
       }
 
-      shell.style.removeProperty("top");
-      shell.style.height = `${getVisualViewportBottom(visualViewport)}px`;
+      const visualViewportHeight = Math.round(visualViewport.height);
+      // `documentElement.clientHeight` is the visible viewport height for the
+      // root element, even when that root's actual CSS box extends behind an
+      // Android in-app browser toolbar. The body inherits the root box and
+      // therefore exposes the containing-block height the app shell really
+      // receives.
+      const shellContainingBlockHeight = document.body.clientHeight;
+      const hasVisualViewportPan =
+        visualViewport.offsetTop > 1 || window.scrollY > 0;
+      if (
+        Math.abs(shellContainingBlockHeight - visualViewportHeight) <= 1 &&
+        !hasVisualViewportPan
+      ) {
+        // Avoid an unnecessary JS override when native layout resizing
+        // already matches the visible viewport.
+        shell.style.removeProperty("top");
+        shell.style.removeProperty("height");
+        return;
+      }
+
+      if (hasVisualViewportPan) {
+        // Reset a regular layout-viewport scroll when possible. The `top`
+        // compensation below also handles a visual-viewport-only pan.
+        window.scrollTo(0, 0);
+      }
+      shell.style.top = `${getVisualViewportPageTop(visualViewport)}px`;
+      shell.style.height = `${visualViewportHeight}px`;
     };
     const scheduleUpdate = () => {
       if (animationFrame !== null) {
@@ -66,12 +96,10 @@ export function useMobileVisualViewportHeight(
       animationFrame = window.requestAnimationFrame(updateHeight);
     };
 
-    // iOS delivers the keyboard-hide resize event only after the hide
-    // animation settles, ~half a second after blur, which strands the
-    // shrunken shell (and the composer) mid-screen. Focus leaving every
-    // keyboard-driving element means the keyboard is about to close, so
-    // restore the stylesheet height immediately and let the eventual resize
-    // event reconcile.
+    // Safari with its bottom toolbar visible does not update the visual
+    // viewport until the keyboard animation ends. Restore the normal shell
+    // immediately on keyboard dismissal instead of inventing intermediate
+    // geometry that can drift out of phase with the native animation.
     const handleFocusOut = (event: FocusEvent) => {
       if (!isKeyboardFocusTarget(event.target)) return;
       if (isKeyboardFocusTarget(event.relatedTarget)) return;
@@ -91,20 +119,24 @@ export function useMobileVisualViewportHeight(
     visualViewport.addEventListener("resize", scheduleUpdate);
     visualViewport.addEventListener("scroll", scheduleUpdate);
     window.addEventListener("resize", scheduleUpdate);
-    document.addEventListener("focusout", handleFocusOut);
-    document.addEventListener("focusin", handleFocusIn);
+    if (restoreImmediatelyOnKeyboardDismissal) {
+      document.addEventListener("focusout", handleFocusOut);
+      document.addEventListener("focusin", handleFocusIn);
+    }
 
     return () => {
       visualViewport.removeEventListener("resize", scheduleUpdate);
       visualViewport.removeEventListener("scroll", scheduleUpdate);
       window.removeEventListener("resize", scheduleUpdate);
-      document.removeEventListener("focusout", handleFocusOut);
-      document.removeEventListener("focusin", handleFocusIn);
+      if (restoreImmediatelyOnKeyboardDismissal) {
+        document.removeEventListener("focusout", handleFocusOut);
+        document.removeEventListener("focusin", handleFocusIn);
+      }
       if (animationFrame !== null) {
         window.cancelAnimationFrame(animationFrame);
       }
       shell.style.removeProperty("top");
       shell.style.removeProperty("height");
     };
-  }, [enabled, shellRef]);
+  }, [enabled, restoreImmediatelyOnKeyboardDismissal, shellRef]);
 }

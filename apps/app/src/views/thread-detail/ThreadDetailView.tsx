@@ -230,6 +230,8 @@ import {
 import { useRouteState } from "@/hooks/useRouteState";
 import { useAppCommandHandler } from "@/components/commands/AppCommandProvider";
 import { DefaultPaneContextProvider, usePaneContext } from "./PaneContext";
+import { ThreadArchiveCommandHandler } from "./ThreadArchiveCommandHandler";
+import { ThreadRenameCommandHandler } from "./ThreadRenameCommandHandler";
 
 const EMPTY_PARENT_THREADS: readonly ThreadListEntry[] = [];
 const EMPTY_PROJECT_THREAD_SUBSET_FILTERS =
@@ -491,6 +493,13 @@ function ThreadDetailViewInternal(props: ThreadDetailViewInternalProps) {
     threadId,
     threadId,
   );
+  // Route-driven panel remounts are passive. Explicit terminal actions keep
+  // this request pending until the asynchronously mounted xterm handles it.
+  const [shouldAutoFocusTerminal, setShouldAutoFocusTerminal] = useState(false);
+  const handleTerminalAutoFocusHandled = useCallback(
+    () => setShouldAutoFocusTerminal(false),
+    [],
+  );
   const removeFixedTerminalTab = useRemoveFixedRightTerminalTab(
     threadId,
     threadId,
@@ -569,7 +578,11 @@ function ThreadDetailViewInternal(props: ThreadDetailViewInternalProps) {
   });
   const [hasRequestedMergeBaseOptions, setHasRequestedMergeBaseOptions] =
     useState(false);
-  const [newTabFocusRequest, setNewTabFocusRequest] = useState(0);
+  const [shouldAutoFocusNewTab, setShouldAutoFocusNewTab] = useState(false);
+  const handleNewTabAutoFocusHandled = useCallback(
+    () => setShouldAutoFocusNewTab(false),
+    [],
+  );
   const [browserAddressFocusRequest, setBrowserAddressFocusRequest] =
     useState<BrowserAddressFocusRequest | null>(null);
   const shouldLoadThreadStorageFiles = thread !== undefined;
@@ -1180,7 +1193,7 @@ function ThreadDetailViewInternal(props: ThreadDetailViewInternalProps) {
   const handleOpenNewTab = useCallback(() => {
     openNewTab();
     openCompactDrawer();
-    setNewTabFocusRequest((current) => current + 1);
+    setShouldAutoFocusNewTab(true);
   }, [openCompactDrawer, openNewTab]);
   useAppCommandHandler("panel.newTab", () => {
     if (!isFocused) return false;
@@ -1222,6 +1235,7 @@ function ThreadDetailViewInternal(props: ThreadDetailViewInternalProps) {
       })
       .then((session) => {
         closeTab(newTab.id);
+        setShouldAutoFocusTerminal(true);
         setActiveFixedTerminal(session.id);
         openCompactDrawer();
       })
@@ -1248,6 +1262,7 @@ function ThreadDetailViewInternal(props: ThreadDetailViewInternalProps) {
   });
   const handleActivateTerminalTab = useCallback(
     (terminalId: string) => {
+      setShouldAutoFocusTerminal(true);
       setActiveFixedTerminal(terminalId);
       openCompactDrawer();
     },
@@ -2406,19 +2421,22 @@ function ThreadDetailViewInternal(props: ThreadDetailViewInternalProps) {
   });
   const fileTabContent = activeTerminalId ? (
     <ThreadTerminalPanel
+      autoFocus={shouldAutoFocusTerminal}
       canCreateTerminal={canCreateTerminal}
       isPanelOpen={isSecondaryPanelOpen}
       isPanelPersistedOpen={isPersistedSecondaryPanelOpen}
+      onAutoFocusHandled={handleTerminalAutoFocusHandled}
       onOpenLink={handleOpenTimelineLink}
       onSelectionAddToChat={handleSelectionAddToChat}
       target={{ kind: "thread", threadId: thread.id }}
     />
   ) : isNewTabActive ? (
     <NewTabPage
+      autoFocus={shouldAutoFocusNewTab}
       projectId={projectId ?? undefined}
       environmentId={thread.environmentId ?? null}
       currentThreadId={thread.id}
-      focusRequest={newTabFocusRequest}
+      onAutoFocusHandled={handleNewTabAutoFocusHandled}
       onSelect={handleSelectFileSearchResult}
       onOpenBrowser={handleOpenBrowser}
       onStartTerminal={canCreateTerminal ? handleStartTerminal : undefined}
@@ -2640,10 +2658,14 @@ function ThreadDetailViewInternal(props: ThreadDetailViewInternalProps) {
     </MarkdownLocalFileContextMenuContext.Provider>
   );
   return (
-    <PluginThreadPanelNavigationProvider
-      openThreadPanel={handleOpenTimelinePluginPanel}
-    >
-      {threadDetailContent}
-    </PluginThreadPanelNavigationProvider>
+    <>
+      <ThreadArchiveCommandHandler thread={thread} />
+      <ThreadRenameCommandHandler thread={thread} />
+      <PluginThreadPanelNavigationProvider
+        openThreadPanel={handleOpenTimelinePluginPanel}
+      >
+        {threadDetailContent}
+      </PluginThreadPanelNavigationProvider>
+    </>
   );
 }

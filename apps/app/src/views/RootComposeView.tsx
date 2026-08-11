@@ -1909,6 +1909,7 @@ export function RootComposeView() {
   const commandSuggestions = useCommandSuggestions({
     projectId,
     providerId: selectedProviderId,
+    commandScope: "new-thread",
     skillsTrigger: providerPromptActions.skillsTrigger,
     promptActions: providerPromptActionProps.promptActions,
     environmentId: reuseEnvironmentId,
@@ -1975,6 +1976,13 @@ export function RootComposeView() {
   const setActiveFixedTerminal = useSetFixedRightTerminalActiveTerminal(
     ROOT_COMPOSE_FIXED_PANEL_STATE_ID,
     null,
+  );
+  // Route-driven panel remounts are passive. Explicit terminal actions keep
+  // this request pending until the asynchronously mounted xterm handles it.
+  const [shouldAutoFocusTerminal, setShouldAutoFocusTerminal] = useState(false);
+  const handleTerminalAutoFocusHandled = useCallback(
+    () => setShouldAutoFocusTerminal(false),
+    [],
   );
   const removeFixedTerminalTab = useRemoveFixedRightTerminalTab(
     ROOT_COMPOSE_FIXED_PANEL_STATE_ID,
@@ -2105,7 +2113,11 @@ export function RootComposeView() {
     () => new Map(terminalSessions.map((session) => [session.id, session])),
     [terminalSessions],
   );
-  const [newTabFocusRequest, setNewTabFocusRequest] = useState(0);
+  const [shouldAutoFocusNewTab, setShouldAutoFocusNewTab] = useState(false);
+  const handleNewTabAutoFocusHandled = useCallback(
+    () => setShouldAutoFocusNewTab(false),
+    [],
+  );
   const [browserAddressFocusRequest, setBrowserAddressFocusRequest] =
     useState<BrowserAddressFocusRequest | null>(null);
   const { threadPanelActions: rootPanelThreadPanelActions } = usePluginSlots();
@@ -2456,7 +2468,7 @@ export function RootComposeView() {
   const handleOpenNewTab = useCallback(() => {
     openTab({ kind: "new-tab" });
     openCompactDrawer();
-    setNewTabFocusRequest((current) => current + 1);
+    setShouldAutoFocusNewTab(true);
   }, [openCompactDrawer, openTab]);
   useAppCommandHandler("panel.newTab", () => {
     if (!isFocusedPane) return false;
@@ -2514,6 +2526,7 @@ export function RootComposeView() {
     void createTerminal
       .then((session) => {
         closeTab(newTab.id);
+        setShouldAutoFocusTerminal(true);
         setActiveFixedTerminal(session.id);
         openCompactDrawer();
       })
@@ -2542,6 +2555,7 @@ export function RootComposeView() {
   });
   const handleActivateTerminalTab = useCallback(
     (terminalId: string) => {
+      setShouldAutoFocusTerminal(true);
       setActiveFixedTerminal(terminalId);
       openCompactDrawer();
     },
@@ -2985,9 +2999,11 @@ export function RootComposeView() {
   const fileTabContent: ReactNode =
     activeTerminalId && rootPanelTerminalTarget ? (
       <ThreadTerminalPanel
+        autoFocus={shouldAutoFocusTerminal}
         canCreateTerminal={canCreateRootTerminal}
         isPanelOpen={isSecondaryPanelOpen}
         isPanelPersistedOpen={isPersistedSecondaryPanelOpen}
+        onAutoFocusHandled={handleTerminalAutoFocusHandled}
         onOpenLink={handleOpenPanelLink}
         onSelectionAddToChat={handleRootPanelSelectionAddToChat}
         panelStateId={ROOT_COMPOSE_FIXED_PANEL_STATE_ID}
@@ -2995,11 +3011,12 @@ export function RootComposeView() {
       />
     ) : isNewTabActive ? (
       <NewTabPage
+        autoFocus={shouldAutoFocusNewTab}
         projectId={isProjectless ? undefined : projectId}
         environmentId={rootPanelEnvironmentId}
         hostId={rootProjectHostId}
         currentThreadId={rootPanelThreadId ?? ""}
-        focusRequest={newTabFocusRequest}
+        onAutoFocusHandled={handleNewTabAutoFocusHandled}
         onSelect={handleSelectFileSearchResult}
         recentItemsThreadId={ROOT_COMPOSE_FIXED_PANEL_STATE_ID}
         onOpenBrowser={rootPanelThreadId ? handleOpenBrowser : undefined}

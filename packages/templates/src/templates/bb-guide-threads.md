@@ -163,9 +163,13 @@ Messaging:
   bb thread retry [id]                     Continue a subscription-limited turn
     --self                                 Target current thread
     --request-id <id>                      Require an exact failed request id
+  bb thread compact [id]                   Request compaction of an idle or errored thread's context
   bb thread cancel-plan [id]               Exit the provider's active Plan mode
   bb thread clear-goal [id]                Clear the provider's active Goal
     --self                                 Target current thread
+
+  `thread compact` enqueues the same structured /compact turn used by the
+  composer. Follow the thread timeline for the eventual compaction result.
 
   `thread retry` is only for a terminal provider subscription-limit failure.
   The server requires accepted input, available execution settings, no newer

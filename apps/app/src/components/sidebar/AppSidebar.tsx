@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@bb/shared-ui/lib/utils";
 import { THREAD_JUMP_APP_COMMAND_IDS } from "@bb/domain";
 import { Link, useNavigate } from "react-router-dom";
@@ -179,7 +179,7 @@ export function AppSidebar({
     const target =
       targets[index] ??
       getSidebarThreadShortcutTargets(sidebarRef.current)[index];
-    if (!target) return false;
+    if (!target?.element) return false;
     target.element.click();
     return true;
   }, []);
@@ -197,10 +197,25 @@ export function AppSidebar({
             ? 0
             : targets.length - 1
           : (activeIndex + offset + targets.length) % targets.length;
-      targets[nextIndex]?.element.click();
+      const target = targets[nextIndex];
+      if (!target) return false;
+      if (target.element) {
+        target.element.click();
+        return true;
+      }
+      // The neighbor sits inside a windowed-out placeholder: there is no row
+      // to click, so navigate by id, matching what the row's link would do.
+      if (!target.projectId) return false;
+      closeOnMobile();
+      void navigate(
+        getThreadRoutePath({
+          projectId: target.projectId,
+          threadId: target.threadId,
+        }),
+      );
       return true;
     },
-    [activeThreadId],
+    [activeThreadId, closeOnMobile, navigate],
   );
 
   useAppCommandHandler("thread.search", () => {
@@ -222,6 +237,29 @@ export function AppSidebar({
     hideThreadShortcuts();
   }, [hideThreadShortcuts, isAppCommandModifierHeld, showThreadShortcuts]);
 
+  // Keep this object identity stable across unrelated re-renders (opening
+  // the mobile drawer flips useSidebar context and re-renders AppSidebar):
+  // a fresh object here would defeat ProjectList's memo and re-render every
+  // thread group on each drawer toggle.
+  const threadSearchPanelController = useMemo(
+    () => ({
+      activeIndex: threadSearch.activeIndex,
+      isActive: threadSearch.isActive,
+      onActiveIndexChange: threadSearch.onActiveIndexChange,
+      onNavigationItemsChange: threadSearch.onNavigationItemsChange,
+      onSelectItem: threadSearch.onSelectItem,
+      query: threadSearch.query,
+    }),
+    [
+      threadSearch.activeIndex,
+      threadSearch.isActive,
+      threadSearch.onActiveIndexChange,
+      threadSearch.onNavigationItemsChange,
+      threadSearch.onSelectItem,
+      threadSearch.query,
+    ],
+  );
+
   const builtInThreadList = (
     <ProjectList
       onNewProject={
@@ -231,14 +269,7 @@ export function AppSidebar({
       }
       onProjectSelect={closeOnMobile}
       isCreatingProject={quickCreateProject.isCreating}
-      threadSearch={{
-        activeIndex: threadSearch.activeIndex,
-        isActive: threadSearch.isActive,
-        onActiveIndexChange: threadSearch.onActiveIndexChange,
-        onNavigationItemsChange: threadSearch.onNavigationItemsChange,
-        onSelectItem: threadSearch.onSelectItem,
-        query: threadSearch.query,
-      }}
+      threadSearch={threadSearchPanelController}
     />
   );
 

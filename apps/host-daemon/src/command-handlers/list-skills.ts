@@ -88,8 +88,21 @@ function classifySkillRoot(
       rootKind: "plugin",
     };
   }
-  // All non-plugin skill base roots are directory-shaped.
-  if (root.shape !== "skill") {
+  if (root.skillIdentitySeed !== undefined) {
+    const shared = resolution.providerId === "bb-shared";
+    return {
+      identitySeed: root.skillIdentitySeed,
+      rootKind: shared
+        ? root.origin === "project"
+          ? "shared-project"
+          : "shared-user"
+        : root.origin === "project"
+          ? "provider-project"
+          : "provider-user",
+    };
+  }
+  // All remaining non-plugin skill base roots are directory-shaped.
+  if (root.shape !== "skill" && root.shape !== "skill-recursive") {
     return null;
   }
   const { rootPath } = root;
@@ -156,6 +169,9 @@ export async function listHostSkills(
     homeDir,
     codexHome: resolveCodexHome(homeDir),
     providerId: command.providerId,
+    ...(command.nativeSkillRoots !== undefined
+      ? { nativeSkillRoots: command.nativeSkillRoots }
+      : {}),
   });
   const skills = await discoverSkills({ roots });
   return { skills };

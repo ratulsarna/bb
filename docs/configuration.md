@@ -59,6 +59,14 @@ For the packaged app, prefer `bb-app config`, `bb-app env`, and launcher flags
 over shell variables. The environment remains the internal and deployment
 substrate, and source-development commands still load `.env` files.
 
+For source development, `pnpm dev` automatically injects
+`BB_DEV_CONNECT_BASE_URL=http://bb.localhost:<worktree-cloud-port>`. The
+Connect plugin accepts this loopback origin only when `NODE_ENV=development`
+and uses it only as the unpaired default. Explicit `bb connect --server ...`
+or `--base-url ...` targets take precedence, and packaged/production bb keeps
+the `https://getbb.app` default. This value is launcher-managed, not a
+`bb-app config` setting.
+
 After `bb-app config` writes `~/.bb/config.json` or `bb-app env` writes
 `~/.bb/env.json`, it asks the running local server to reload. If bb is not
 running, the new values apply on the next start. If you edit either file by
@@ -185,6 +193,8 @@ delayed shortcut badges without disabling any shortcuts.
 | --------- | ----------------------------- | --------------------------------- | ------------------------ |
 | Threads   | New thread                    | `Mod+N` / `Mod+Shift+O`           | Desktop / web            |
 | Threads   | Search threads                | `Mod+K`                           | All clients              |
+| Threads   | Rename focused thread         | Unassigned                        | Thread view              |
+| Threads   | Archive focused thread        | Unassigned                        | Thread view              |
 | Threads   | Previous / next thread        | `Mod+Shift+[/]` / `Mod+Shift+↑/↓` | Desktop / web            |
 | Threads   | Open visible thread 1–9       | Platform defaults above           | Web / desktop            |
 | Layout    | Previous / next chat pane     | `Mod+Shift+[/]`                   | While split              |
@@ -360,6 +370,48 @@ can write `~/.bb/config.json` can cause bb to run that command as the local user
 when the provider is used. Treat `config.json` write access as the trust
 boundary.
 
+## Custom Models
+
+Register extra picker models by editing top-level `customModels` in
+`~/.bb/config.json`. Use this for a model the provider accepts but does not
+list, such as a non-public preview id. Like `customAcpAgents`, this list has
+no set/unset CLI surface: edit the JSON, then run `npx bb-app config refresh`
+or restart bb. `bb-app config list` prints the entries.
+
+```json
+{
+  "customModels": [
+    { "providerId": "claude-code", "model": "claude-example-preview" },
+    {
+      "providerId": "acp-my-agent",
+      "model": "my-proxy/my-model",
+      "displayName": "My Proxy Model"
+    }
+  ]
+}
+```
+
+`providerId` accepts a built-in provider id (`codex`, `claude-code`, `pi`,
+`acp-cursor`) or any `acp-*` provider id: a known ACP agent such as
+`acp-opencode`, or a custom ACP agent's derived `acp-<id>`. `displayName` is
+optional; bb derives the label from the model id when it is omitted. bb skips
+an invalid entry with a warning and keeps the rest of the config.
+
+Each entry appears in `bb provider models <providerId>` and in the model
+picker after the provider's own catalog. The provider catalog wins on a model
+id collision.
+
+A `customModels` entry only makes the id selectable; the provider must still
+accept it. Built-in providers such as `claude-code` and `codex` accept
+unlisted ids. An ACP agent receives the id over the protocol at session start
+and can reject it. OpenCode rejects a model that is not in its own catalog,
+so do not pin OpenCode models here: add the model to the OpenCode config and
+bb discovers it automatically.
+
+An OpenCode "agent" (build, plan, or a custom primary agent) is a session
+mode, not a model, so it does not belong in `customModels`. bb does not select
+OpenCode agents; set the default agent in the OpenCode config instead.
+
 ## Agent Instructions
 
 bb can inject user-level and workspace-level agent instructions into every
@@ -397,6 +449,33 @@ skills. Running plugins contribute a third tier: every `skills/<name>/SKILL.md`
 in an installed plugin (relocatable via the manifest's `bb.skills` field) is
 auto-imported while the plugin is loaded — overridden by project and user
 skills by name, overriding built-ins.
+
+bb indexes each provider's native skill roots for that provider's `/` command
+menu. The Skills page and `bb skill list` show native skills for Claude Code,
+Codex, and Cursor.
+
+| Provider     | User roots                                                                                               | Project roots                                                                                                |
+| ------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Codex        | `~/.agents/skills`, `$CODEX_HOME/skills`                                                                 | `.agents/skills` from the repository root to the current directory, plus `.codex/skills`                     |
+| Claude Code  | `$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`, plus enabled plugin skills                            | `.claude/skills` from the repository root to the current directory, plus enabled plugin skills               |
+| Pi           | `~/.pi/agent/skills`, `~/.agents/skills`                                                                 | `.pi/skills` and `.agents/skills` from the repository root to the current directory                          |
+| Cursor       | `~/.cursor/skills`, `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`                            | The same four roots in the workspace                                                                         |
+| OpenCode     | `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills`                                      | `.opencode/skills`, `.claude/skills`, and `.agents/skills` from the repository root to the current directory |
+| omp          | The active `~/.omp/.../agent` roots and supported Pi, Agents, Claude, Codex, and OpenCode roots          | `.omp/skills` and the supported compatibility roots from the repository root to the current directory        |
+| Grok Build   | `$GROK_HOME/skills` or `~/.grok/skills`, plus `~/.agents/skills`, `~/.claude/skills`, `~/.cursor/skills` | The same four roots from the repository root to the current directory                                        |
+| Hermes Agent | `$HERMES_HOME/skills` or `~/.hermes/skills`                                                              | None                                                                                                         |
+
+OpenCode also uses `$OPENCODE_CONFIG_DIR/skills` when that variable exists.
+Pi and omp use `$PI_CODING_AGENT_DIR` when that variable exists. omp also uses
+`$OMP_PROFILE` or `$PI_PROFILE` to select its active profile root. Cursor and
+Hermes can organize skills in category directories. bb scans those roots
+recursively. Pi settings and packages can add skill paths. omp reads
+`skills.customDirectories` from its YAML configuration. Hermes reads
+`skills.external_dirs` from `config.yaml`.
+
+Grok reads recursive paths from `[skills].paths` in `config.toml`. It also reads
+enabled Grok and Claude-compatible plugin skills. Its Cursor and Claude
+compatibility roots follow the related config and environment switches.
 
 ## Multi-machine
 

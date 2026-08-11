@@ -180,6 +180,10 @@ isolated|reuse`, or anchor with `--source-seq-end`. Permission mode inherits
   https://getbb.app). Pairing returns immediately — the
   server itself holds the tunnel and reconnects on restart, so there is no
   foreground process.
+  In a source checkout, `pnpm dev` automatically sets
+  `BB_DEV_CONNECT_BASE_URL` to the worktree's local Cloud origin. Connect uses
+  it only as the unpaired default; explicit `--server` and `--base-url` values
+  still win, including when pairing the dev bb with getbb.app.
   `bb connect status` / `bb connect off` report and clear the pairing.
   Port sharing works from a thread on any enrolled host. `bb connect expose
 <port>` resolves that thread's environment host and returns its public URL;
@@ -287,6 +291,9 @@ environment pull-request show <id>`. Diff commands require an explicit target
   host; for example `opencode`, `omp`, Grok Build's `grok` CLI, or Hermes'
   `hermes` CLI on PATH appears as provider `acp-opencode`, `acp-omp`,
   `acp-grok`, or `acp-hermes-agent`.
+- Cursor ACP threads discover project skills from `.cursor/skills`. This root
+  can link to `.agents/skills`. `bb skill list` shows linked Cursor skills under
+  `cursor-project` and keeps them read-only.
 - Custom ACP agents can be registered in the app data-dir `config.json` under
   `customAcpAgents`. The user supplies a slug `id`; bb exposes it as provider
   id `acp-<id>`. Custom config wins if it uses the same provider id as a known
@@ -297,7 +304,21 @@ environment pull-request show <id>`. Diff commands require an explicit target
   relative paths resolve from the bb data dir. Custom ACP agents can use
   `modelCli` for CLI model listing/selection, `reasoningCli` for launch-time
   reasoning flags, and `nativeReasoning` for ACP `session/set_config_option`
-  reasoning.
+  reasoning. Optional
+  `nativeSkillRoots.user` paths resolve from the target
+  host home directory. Optional `nativeSkillRoots.project` paths resolve from
+  the selected workspace. The composer lists skills from these roots.
+- Top-level `customModels` in the same `config.json` registers extra picker
+  models. `providerId` accepts a built-in provider id or any `acp-*` provider
+  id. The provider must still accept the id: `claude-code` and `codex` accept
+  unlisted ids, while an ACP agent can reject an unknown id at session start.
+  OpenCode rejects unlisted ids; add the model to the OpenCode config instead
+  and bb discovers it automatically. An OpenCode agent is a session mode, not
+  a model, and cannot be selected through bb. This list also has no set/unset
+  CLI surface; edit the JSON and run `bb-app config refresh` or restart bb.
+- Top-level `sharedSkillRoots` uses the same relative `user` and `project`
+  paths. bb lists these skills as read-only. bb injects them into each provider,
+  so one physical skill collection can support bb and standalone provider CLIs.
 
 Give spawned threads clear prompts: objective, constraints, expected deliverable,
 validation to perform, and what to report back. Ask for outcome, changed files
@@ -416,6 +437,7 @@ For review or fix pipelines, get the environment ID from
 - For interrupted or stopped threads, inspect first. If the user stopped the
   thread, treat that as intentional unless they ask you to continue.
 - Use `bb thread stop <id>` when a thread is stuck or no longer needed.
+- Use `bb thread compact <id>` to send the built-in `/compact` command to an idle or errored thread. Completion or failure appears in the timeline. Codex, Claude Code, Pi, and OpenCode ACP support it; Cursor ACP does not expose compatible compaction through ACP.
 - Use `bb thread cancel-plan <id>` to exit an active Plan turn without
   optimistically clearing its banner. Use `bb thread clear-goal <id>` to clear
   a Codex thread's durable active Goal. Both wait for provider confirmation.

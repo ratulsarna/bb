@@ -110,11 +110,13 @@ The manifest is `package.json`:
   `builtWith: { bbVersion, pluginSdkVersion }`. Managed installs reject
   artifacts whose `pluginId`/`pluginVersion` disagree with the package
   manifest, or whose SDK major does not match the host.
-- The plugin id is the package name minus the `bb-plugin-` prefix
-  (`bb-plugin-hello` → `hello`); it namespaces routes, storage, settings,
-  and CLI commands. Ids reserved by builtins (`automations`, `connect`,
-  `custom-instructions`, `inline-vis`, `secrets`) cannot be
-  installed from a non-`builtin:` source — use `builtin:<name>` instead.
+- Default to `bb-plugin-hello` for the package name. Scoped names such as
+  `@acme/bb-plugin-hello` are also supported. The plugin id is the final
+  package-name component minus the `bb-plugin-` prefix, so both forms use
+  `hello`; it namespaces routes, storage, settings, and CLI commands. Builtin
+  ids such as
+  `automations`, `connect`, `custom-instructions`, `inline-vis`, and `secrets`
+  cannot use a non-`builtin:` source — use `builtin:<name>` instead.
 
 Backend API imports normally stay type-only;
 the root runtime exports are `defineRpcContract`, supplied by BB for shared
@@ -297,7 +299,7 @@ signatures.
 
 | Area | Methods |
 | --- | --- |
-| `threads` | `list` `get` `search` `spawn` `fork` `send` `update` `delete` `stop` `wait` `open` `output` `timeline` `conversationOutline` `promptHistory` `archive` `archiveAll` `unarchive` `pin` `unpin` `reorderPinned` `markRead` `markUnread` `childSummary` `paneAction` `timelineTurnSummaryDetails` `storageFiles` `storagePaths` `cancelPlan` `clearGoal` `continueAfterRateLimit` `rateLimitRecovery` `defaultExecutionOptions`; sub-areas `events` (`list` `wait`), `interactions` (`get` `list` `cancel` `resolve` `respond`), `queuedMessages` (`create` `list` `update` `delete` `send` `reorder` `setGroupBoundary`), `tabs` (`get` `update`) |
+| `threads` | `list` `get` `search` `spawn` `fork` `send` `update` `delete` `stop` `compact` `wait` `open` `output` `timeline` `conversationOutline` `promptHistory` `archive` `archiveAll` `unarchive` `pin` `unpin` `reorderPinned` `markRead` `markUnread` `childSummary` `paneAction` `timelineTurnSummaryDetails` `storageFiles` `storagePaths` `cancelPlan` `clearGoal` `continueAfterRateLimit` `rateLimitRecovery` `defaultExecutionOptions`; sub-areas `events` (`list` `wait`), `interactions` (`get` `list` `cancel` `resolve` `respond`), `queuedMessages` (`create` `list` `update` `delete` `send` `reorder` `setGroupBoundary`), `tabs` (`get` `update`) |
 | `threadSections` | `list` `create` `update` `delete` |
 | `projects` | `list` `get` `create` `update` `delete` `reorder` `paths` `files` `fileContent` `branches` `commands` `defaultExecutionOptions` `promptHistory`; sub-areas `attachments` (`upload` `read` `copy`), `sources` (`add` `update` `delete`) |
 | `environments` | `get` `update` `status` `paths` `commit` `archiveThreads` `diff` `diffFile` `diffFiles` `diffBranches` `diffPatch` `pullRequest` `markPullRequestDraft` `markPullRequestReady` `mergePullRequest` `squashMerge` |
@@ -729,7 +731,9 @@ truncated to 4096 characters.
 
 Resolution happens for `thread.start` and `turn.submit`. A selected tool set
 takes effect only when the provider session is next started/resumed; BB never
-hot-mutates a running provider session. Instructions apply to the next turn.
+hot-mutates a running provider session. Instructions follow the same rule: a
+live provider session keeps the instructions it was constructed with, and
+changed instructions apply when the session is next constructed.
 Skill catalog changes follow the daemon's established runtime policy: a busy
 environment keeps its current staged catalog until a safe relaunch. Side chats
 evaluate `configure` with `sideChat: true`; returned tool, skill, and dynamic
@@ -1654,8 +1658,8 @@ Remaining reference examples in `examples/plugins/`:
   providers may not).
 - Mention `search` is 2s-time-boxed; mention `resolve` runs at send time
   and a throw blocks the send.
-- Agent tool changes apply on the next session start, not mid-session;
-  cross-plugin tool-name collisions drop the later registration.
+- Agent tool and instruction changes apply on the next session start, not
+  mid-session; cross-plugin tool-name collisions drop the later registration.
 - RPC results must be strict JSON values and pass their output schema;
   realtime payloads must survive JSON.stringify.
 - Handler stats shown by `bb plugin list` persist across reloads (reset on

@@ -25,7 +25,12 @@ import {
   type SendMessageRequest,
 } from "@bb/server-contract";
 import type { Hono } from "hono";
-import type { Thread, ThreadQueuedMessage } from "@bb/domain";
+import {
+  createStandaloneBuiltinCompactCommandInput,
+  type Thread,
+  type ThreadQueuedMessage,
+} from "@bb/domain";
+import { supportsManualCompaction } from "@bb/agent-providers";
 import type { AppDeps } from "../../types.js";
 import { ApiError } from "../../errors.js";
 import { toThreadQueuedMessage } from "../../services/threads/thread-queued-messages.js";
@@ -53,7 +58,10 @@ import {
   dispatchThreadUnarchiveCommand,
   prepareTurnSubmitCommandPayload,
 } from "../../services/threads/thread-commands.js";
-import { getLastProviderThreadId } from "../../services/threads/thread-events.js";
+import {
+  getLastProviderThreadId,
+  isManualCompactionActive,
+} from "../../services/threads/thread-events.js";
 import { requestThreadStopForCurrentState } from "../../services/threads/thread-lifecycle.js";
 import {
   getThreadPromptBannerActivity,
@@ -117,6 +125,38 @@ function toQueuedMessageOrderResponse(
         "Queued messages with different execution options cannot be grouped",
       );
   }
+}
+
+async function compactThreadContext(
+  deps: AppDeps,
+  thread: Thread,
+): Promise<void> {
+  ensureThreadIsWritable(thread);
+  if (!supportsManualCompaction(thread.providerId)) {
+    throw new ApiError(
+      409,
+      "invalid_request",
+      `Provider "${thread.providerId}" does not support manual context compaction`,
+    );
+  }
+  if (thread.status !== "idle" && thread.status !== "error") {
+    throw new ApiError(
+      409,
+      "invalid_request",
+      "Context can only be compacted while the thread is idle or errored",
+    );
+  }
+
+  const environment = await requireThreadCommandEnvironment(deps, { thread });
+  await sendThreadMessage(deps, {
+    environment,
+    payload: {
+      input: createStandaloneBuiltinCompactCommandInput(),
+      mode: "start",
+    },
+    thread,
+    trigger: "user",
+  });
 }
 
 function toQueuedMessageGroupBoundaryResponse(
@@ -278,7 +318,11 @@ export function registerThreadActionRoutes(app: Hono, deps: AppDeps): void {
 
   post(routes.send, async (context, payload) => {
     const thread = requirePublicThread(deps.db, context.req.param("id"));
-    if (payload.mode === "queue-if-active" && thread.status === "active") {
+    const shouldQueue =
+      thread.status === "active" &&
+      (payload.mode === "queue-if-active" ||
+        (payload.mode !== "start" && isManualCompactionActive(deps, thread)));
+    if (shouldQueue) {
       ensureThreadIsNotAwaitingUserInteraction(deps, thread.id);
       await createQueuedMessageForThread(deps, {
         payload: queuedMessagePayloadFromSendRequest(payload),
@@ -441,6 +485,12 @@ export function registerThreadActionRoutes(app: Hono, deps: AppDeps): void {
             thread,
           });
     requestThreadStopForCurrentState(deps, thread, environment);
+    return context.json({ ok: true });
+  });
+
+  post(routes.compact, async (context) => {
+    const thread = requirePublicThread(deps.db, context.req.param("id"));
+    await compactThreadContext(deps, thread);
     return context.json({ ok: true });
   });
 

@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { Profiler, startTransition, type ReactNode } from "react";
 import { flushSync } from "react-dom";
@@ -645,7 +646,7 @@ describe("FollowUpPromptBox", () => {
 
     const input = screen.getByRole("textbox", { name: "Follow-up prompt" });
     const submit = screen.getByRole("button", { name: "Submit" });
-    fireEvent.focus(input);
+    act(() => input.focus());
 
     expect(screen.getByTestId("prompt-box").getAttribute("data-compact")).toBe(
       "false",
@@ -731,7 +732,7 @@ describe("FollowUpPromptBox", () => {
     }
   });
 
-  it("collapses on an interaction outside the mobile composer", () => {
+  it("stays expanded during a timeline gesture and collapses when focus leaves", async () => {
     mocks.isCompactViewport = true;
     render(
       <>
@@ -744,15 +745,24 @@ describe("FollowUpPromptBox", () => {
     const input = screen.getByRole("textbox", { name: "Follow-up prompt" });
     const outside = screen.getByRole("button", { name: "Outside composer" });
 
-    fireEvent.focus(input);
+    act(() => input.focus());
     fireEvent.pointerDown(outside);
 
+    expect(document.activeElement).toBe(input);
     expect(screen.getByTestId("prompt-box").getAttribute("data-compact")).toBe(
-      "true",
+      "false",
+    );
+
+    act(() => outside.focus());
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("prompt-box").getAttribute("data-compact"),
+      ).toBe("true"),
     );
   });
 
-  it("stays expanded while a composer-owned overlay is open", () => {
+  it("stays expanded while a composer-owned overlay is open", async () => {
     mocks.isCompactViewport = true;
     render(
       <>
@@ -769,19 +779,22 @@ describe("FollowUpPromptBox", () => {
     });
     trigger.setAttribute("aria-haspopup", "menu");
     trigger.setAttribute("aria-expanded", "true");
-    fireEvent.focus(input);
+    act(() => input.focus());
 
     fireEvent.pointerDown(portaledContent);
-    fireEvent.focusIn(portaledContent);
+    act(() => portaledContent.focus());
 
     expect(screen.getByTestId("prompt-box").getAttribute("data-compact")).toBe(
       "false",
     );
 
     trigger.setAttribute("aria-expanded", "false");
-    fireEvent.pointerDown(portaledContent);
-    expect(screen.getByTestId("prompt-box").getAttribute("data-compact")).toBe(
-      "true",
+    act(() => trigger.focus());
+    act(() => portaledContent.focus());
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("prompt-box").getAttribute("data-compact"),
+      ).toBe("true"),
     );
   });
 
@@ -795,16 +808,76 @@ describe("FollowUpPromptBox", () => {
     );
     render(<FollowUpPromptBox {...props} />);
     const input = screen.getByRole("textbox", { name: "Follow-up prompt" });
-    fireEvent.focus(input);
+    act(() => input.focus());
 
     fireEvent.pointerDown(
       screen.getByRole("button", { name: "Read only mode" }),
     );
-    fireEvent.blur(input);
 
     expect(screen.getByTestId("prompt-box").getAttribute("data-compact")).toBe(
       "false",
     );
+  });
+
+  it("collapses after the keyboard viewport settles with no next focus target", async () => {
+    mocks.isCompactViewport = true;
+    mocks.isPointerCoarse = true;
+    const originalDescriptor = Object.getOwnPropertyDescriptor(
+      window,
+      "visualViewport",
+    );
+    const visualViewport = Object.assign(new EventTarget(), { height: 500 });
+    Object.defineProperty(window, "visualViewport", {
+      configurable: true,
+      value: visualViewport,
+    });
+
+    try {
+      render(
+        <FollowUpPromptBox
+          {...createFollowUpPromptBoxProps({ kind: "ready" })}
+        />,
+      );
+      const input = screen.getByRole("textbox", { name: "Follow-up prompt" });
+      act(() => input.focus());
+      act(() => {
+        visualViewport.height = 300;
+        visualViewport.dispatchEvent(new Event("resize"));
+      });
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("prompt-box").getAttribute("data-compact"),
+        ).toBe("false"),
+      );
+
+      act(() => input.blur());
+      expect(
+        screen.getByTestId("prompt-box").getAttribute("data-compact"),
+      ).toBe("false");
+
+      await act(
+        () =>
+          new Promise<void>((resolve) => {
+            window.requestAnimationFrame(() => resolve());
+          }),
+      );
+
+      act(() => {
+        visualViewport.height = 500;
+        visualViewport.dispatchEvent(new Event("resize"));
+      });
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("prompt-box").getAttribute("data-compact"),
+        ).toBe("true"),
+      );
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, "visualViewport", originalDescriptor);
+      } else {
+        Reflect.deleteProperty(window, "visualViewport");
+      }
+    }
   });
 
   it("keeps the full composer visible on desktop", () => {
@@ -818,7 +891,7 @@ describe("FollowUpPromptBox", () => {
     expect(screen.getByText("Local environment")).toBeTruthy();
   });
 
-  it("exposes focus state so narrow prompt containers can expand", () => {
+  it("exposes focus state so narrow prompt containers can expand", async () => {
     render(
       <>
         <FollowUpPromptBox
@@ -837,7 +910,7 @@ describe("FollowUpPromptBox", () => {
       "compact",
     );
 
-    fireEvent.focus(input);
+    act(() => input.focus());
     expect(composer?.hasAttribute("data-follow-up-composer-expanded")).toBe(
       true,
     );
@@ -848,8 +921,11 @@ describe("FollowUpPromptBox", () => {
     fireEvent.pointerDown(
       screen.getByRole("button", { name: "Outside composer" }),
     );
-    expect(composer?.hasAttribute("data-follow-up-composer-expanded")).toBe(
-      false,
+    act(() => screen.getByRole("button", { name: "Outside composer" }).focus());
+    await waitFor(() =>
+      expect(composer?.hasAttribute("data-follow-up-composer-expanded")).toBe(
+        false,
+      ),
     );
     expect(screen.getByTestId("prompt-box").dataset.heightAnimationKey).toBe(
       "compact",

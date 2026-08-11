@@ -20,7 +20,12 @@ import type {
   ThreadEventTokenUsage,
   ThreadEventTokenUsageBreakdown,
 } from "@bb/domain";
-import { threadScope, toPositiveNumber, turnScope } from "@bb/domain";
+import {
+  isStandaloneBuiltinCompactCommand,
+  threadScope,
+  toPositiveNumber,
+  turnScope,
+} from "@bb/domain";
 import { decodeNormalizedProviderToolCallRequest } from "../shared/provider-tool-call-contract.js";
 import { resolveBridgeProcessArgs } from "../shared/bridge-path.js";
 import { bashArgsSchema, textBlockSchema } from "../shared/tool-arg-schemas.js";
@@ -281,12 +286,16 @@ const piAgentEndEventSchema = z
 const piCompactionStartEventSchema = z
   .object({
     type: z.literal("compaction_start"),
+    reason: z.enum(["manual", "threshold", "overflow"]),
   })
   .passthrough();
 
 const piCompactionEndEventSchema = z
   .object({
     type: z.literal("compaction_end"),
+    reason: z.enum(["manual", "threshold", "overflow"]),
+    aborted: z.boolean(),
+    errorMessage: z.string().optional(),
   })
   .passthrough();
 
@@ -933,10 +942,14 @@ export function createPiProviderAdapter(
       }
 
       case "compaction_start": {
-        if (!piCompactionStartEventSchema.safeParse(event).success) {
+        const parsed = piCompactionStartEventSchema.safeParse(event);
+        if (!parsed.success) {
           return buildUnexpectedEvent(event);
         }
-        const turnId = turnState.getCurrentOrLastTurnId({ state });
+        const turnId =
+          parsed.data.reason === "manual"
+            ? ensurePiTurnStarted({ events, state, threadId })
+            : turnState.getCurrentOrLastTurnId({ state });
         if (turnId.length === 0) {
           return buildUnexpectedEvent(event);
         }
@@ -954,19 +967,52 @@ export function createPiProviderAdapter(
       }
 
       case "compaction_end": {
-        if (!piCompactionEndEventSchema.safeParse(event).success) {
+        const parsed = piCompactionEndEventSchema.safeParse(event);
+        if (!parsed.success) {
           return buildUnexpectedEvent(event);
         }
         const turnId = turnState.getCurrentOrLastTurnId({ state });
         if (turnId.length === 0) {
           return buildUnexpectedEvent(event);
         }
-        events.push({
-          type: "thread/compacted",
-          threadId,
-          providerThreadId: "",
-          scope: turnScope(turnId),
-        });
+        if (!parsed.data.aborted && !parsed.data.errorMessage) {
+          events.push({
+            type: "thread/compacted",
+            threadId,
+            providerThreadId: "",
+            scope: turnScope(turnId),
+          });
+        } else if (parsed.data.reason !== "manual") {
+          events.push({
+            type: "provider/error",
+            threadId,
+            providerThreadId: "",
+            scope: turnScope(turnId),
+            message: parsed.data.aborted
+              ? "Context compaction interrupted"
+              : "Context compaction failed",
+            detail:
+              parsed.data.errorMessage ??
+              "Automatic context compaction was interrupted",
+          });
+        }
+        if (parsed.data.reason === "manual" && state.currentTurnId === turnId) {
+          events.push({
+            type: "turn/completed",
+            threadId,
+            providerThreadId: "",
+            scope: turnScope(turnId),
+            status: parsed.data.aborted
+              ? "interrupted"
+              : parsed.data.errorMessage
+                ? "failed"
+                : "completed",
+            ...(parsed.data.errorMessage
+              ? { error: { message: parsed.data.errorMessage } }
+              : {}),
+          });
+          turnState.finishTurn({ state, threadId: stateKey });
+        }
         break;
       }
 
@@ -1361,21 +1407,30 @@ export function createPiProviderAdapter(
             },
           };
         }
-        case "turn/start":
+        case "turn/start": {
+          const input = flattenPromptInputGroups(
+            command.input,
+            command.inputGroups,
+          );
+          if (isStandaloneBuiltinCompactCommand(input)) {
+            return {
+              kind: "request",
+              method: "thread/compact",
+              params: { threadId: command.providerThreadId },
+            };
+          }
           return {
             kind: "request",
             method: "turn/start",
             params: {
               threadId: command.providerThreadId,
-              input: flattenPromptInputGroups(
-                command.input,
-                command.inputGroups,
-              ),
+              input,
               ...(command.options?.model
                 ? { model: command.options.model }
                 : {}),
             },
           };
+        }
         case "turn/steer":
           return {
             kind: "request",

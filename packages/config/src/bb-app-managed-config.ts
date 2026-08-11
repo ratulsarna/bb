@@ -1,6 +1,10 @@
 import { join } from "node:path";
 import { agentProviderIdSchema, isAgentProviderId } from "@bb/agent-providers";
-import { acpNativeReasoningSchema, acpReasoningCliSchema } from "@bb/domain";
+import {
+  acpNativeReasoningSchema,
+  acpReasoningCliSchema,
+  providerNativeSkillRootsSchema,
+} from "@bb/domain";
 import { z } from "zod";
 
 export const BB_APP_CONFIG_FILE_NAME = "config.json";
@@ -40,12 +44,22 @@ export const bbAppManagedConfigValuesSchema = z
   })
   .strict();
 
+// ACP provider ids are dynamic: known agents (acp-opencode, acp-omp, …) and
+// custom agents (acp-<slug>) both live outside the built-in provider enum, so
+// customModels accepts any well-formed acp-* id alongside the enum.
+const ACP_PROVIDER_ID_PATTERN = /^acp-[a-z0-9][a-z0-9-]*$/u;
+
+const customModelProviderIdSchema = z.union([
+  agentProviderIdSchema,
+  z.string().regex(ACP_PROVIDER_ID_PATTERN),
+]);
+
 // A user-registered model offered in the model picker in addition to the
 // provider's built-in catalog (e.g. a non-public preview model id). Omitting
 // `displayName` means "derive the label from the model id".
 export const customProviderModelSchema = z
   .object({
-    providerId: agentProviderIdSchema,
+    providerId: customModelProviderIdSchema,
     model: z.string().min(1),
     displayName: z.string().min(1).optional(),
   })
@@ -96,6 +110,7 @@ export const customAcpAgentSchema = z
     modelCli: customAcpAgentModelCliSchema.optional(),
     reasoningCli: acpReasoningCliSchema.optional(),
     nativeReasoning: acpNativeReasoningSchema.optional(),
+    nativeSkillRoots: providerNativeSkillRootsSchema.optional(),
   })
   .strict()
   .superRefine((agent, context) => {
@@ -134,6 +149,7 @@ export const bbAppManagedConfigSchema = z
     config: bbAppManagedConfigValuesSchema.optional(),
     customAcpAgents: customAcpAgentsSchema.optional(),
     customModels: z.array(customProviderModelSchema).optional(),
+    sharedSkillRoots: providerNativeSkillRootsSchema.optional(),
     machineCredential: z.string().min(1).optional(),
     connectMachineId: z.string().min(1).optional(),
     serverUrl: z.string().min(1).optional(),
@@ -144,7 +160,8 @@ const bbAppManagedConfigBoundarySchema = z
   .object({
     config: bbAppManagedConfigValuesSchema.optional(),
     customAcpAgents: z.array(z.unknown()).optional(),
-    customModels: z.array(customProviderModelSchema).optional(),
+    customModels: z.array(z.unknown()).optional(),
+    sharedSkillRoots: providerNativeSkillRootsSchema.optional(),
     machineCredential: z.string().min(1).optional(),
     connectMachineId: z.string().min(1).optional(),
     serverUrl: z.string().min(1).optional(),
@@ -210,12 +227,37 @@ function parseCustomAcpAgents(
   return agents;
 }
 
+function parseCustomModels(
+  entries: readonly unknown[] | undefined,
+  options: ParseBbAppManagedConfigOptions,
+): CustomProviderModel[] | undefined {
+  if (entries === undefined) {
+    return undefined;
+  }
+
+  const customModels: CustomProviderModel[] = [];
+  for (const [index, entry] of entries.entries()) {
+    const result = customProviderModelSchema.safeParse(entry);
+    if (!result.success) {
+      options.logger?.warn(
+        { error: result.error.message, index },
+        "Ignoring invalid custom model config entry",
+      );
+      continue;
+    }
+    customModels.push(result.data);
+  }
+
+  return customModels;
+}
+
 export function parseBbAppManagedConfig(
   rawConfig: unknown,
   options: ParseBbAppManagedConfigOptions = {},
 ): BbAppManagedConfig {
   const parsed = bbAppManagedConfigBoundarySchema.parse(rawConfig);
   const customAcpAgents = parseCustomAcpAgents(parsed.customAcpAgents, options);
+  const customModels = parseCustomModels(parsed.customModels, options);
   const config: BbAppManagedConfig = {};
   if (parsed.config !== undefined) {
     config.config = parsed.config;
@@ -223,8 +265,11 @@ export function parseBbAppManagedConfig(
   if (customAcpAgents !== undefined) {
     config.customAcpAgents = customAcpAgents;
   }
-  if (parsed.customModels !== undefined) {
-    config.customModels = parsed.customModels;
+  if (customModels !== undefined) {
+    config.customModels = customModels;
+  }
+  if (parsed.sharedSkillRoots !== undefined) {
+    config.sharedSkillRoots = parsed.sharedSkillRoots;
   }
   if (parsed.serverUrl !== undefined) {
     config.serverUrl = parsed.serverUrl;
