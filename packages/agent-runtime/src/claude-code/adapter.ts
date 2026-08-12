@@ -81,6 +81,10 @@ import type {
 } from "../provider-adapter.js";
 import { noPreparedProviderCommandDispatch } from "../provider-adapter.js";
 import {
+  classifyClaudeExecutionSettingsChange,
+  normalizeClaudeExecutionOptions,
+} from "../execution-options.js";
+import {
   type JsonRpcMessage,
   type ProviderInboundRequest,
   type ProviderRuntimeEvent,
@@ -871,6 +875,7 @@ export function createClaudeCodeProviderAdapter(
         reasoningOutputTokens: 0,
       },
       latestRequestContextTokens: undefined,
+      latestProviderCheckpointId: undefined,
       lastModelFallback: undefined,
       openAssistantMessageIdsByScope: new Map(),
       openCompaction: undefined,
@@ -902,6 +907,7 @@ export function createClaudeCodeProviderAdapter(
     const hadOpenTurn = args.state.currentTurnId !== undefined;
     if (!hadOpenTurn) {
       args.state.latestRequestContextTokens = undefined;
+      args.state.latestProviderCheckpointId = undefined;
     }
     const turnId = turnState.ensureTurnStarted(args);
     if (!hadOpenTurn) {
@@ -1042,6 +1048,9 @@ export function createClaudeCodeProviderAdapter(
     id: providerInfo.id,
     displayName: providerInfo.displayName,
     capabilities,
+    approvalRequestPolicy: "provider",
+    classifyExecutionSettingsChange: classifyClaudeExecutionSettingsChange,
+    normalizeExecutionOptions: normalizeClaudeExecutionOptions,
     process: {
       command: opts?.bridgeNodeExecutablePath ?? "node",
       args: resolveBridgeProcessArgs({
@@ -1134,6 +1143,8 @@ export function createClaudeCodeProviderAdapter(
                 : {}),
               workflowsEnabled: command.options.workflowsEnabled,
               memoryEnabled: command.options.memoryEnabled,
+              providerSubagentsEnabled:
+                command.options.providerSubagentsEnabled,
               ...(dynamicTools && dynamicTools.length > 0
                 ? { dynamicTools }
                 : {}),
@@ -1204,6 +1215,8 @@ export function createClaudeCodeProviderAdapter(
                 : {}),
               workflowsEnabled: command.options.workflowsEnabled,
               memoryEnabled: command.options.memoryEnabled,
+              providerSubagentsEnabled:
+                command.options.providerSubagentsEnabled,
               ...(dynamicTools && dynamicTools.length > 0
                 ? { dynamicTools }
                 : {}),
@@ -1240,6 +1253,14 @@ export function createClaudeCodeProviderAdapter(
               ...(command.options?.model
                 ? { model: command.options.model }
                 : {}),
+              ...(command.options?.reasoningLevel
+                ? { reasoningLevel: command.options.reasoningLevel }
+                : {}),
+              workflowsEnabled: command.options.workflowsEnabled,
+              memoryEnabled: command.options.memoryEnabled,
+              providerSubagentsEnabled:
+                command.options.providerSubagentsEnabled,
+              permissionEscalation: command.options.permissionEscalation,
             },
           };
         case "turn/steer":
@@ -1261,6 +1282,17 @@ export function createClaudeCodeProviderAdapter(
                     ),
                   }
                 : {}),
+              ...(command.options?.model
+                ? { model: command.options.model }
+                : {}),
+              ...(command.options?.reasoningLevel
+                ? { reasoningLevel: command.options.reasoningLevel }
+                : {}),
+              workflowsEnabled: command.options.workflowsEnabled,
+              memoryEnabled: command.options.memoryEnabled,
+              providerSubagentsEnabled:
+                command.options.providerSubagentsEnabled,
+              permissionEscalation: command.options.permissionEscalation,
             },
           };
         case "thread/fork": {
@@ -1301,6 +1333,12 @@ export function createClaudeCodeProviderAdapter(
               threadId: command.threadId,
               cwd: command.cwd,
               sourceProviderThreadId: command.sourceProviderThreadId,
+              ...(command.sourceProviderCheckpointId !== undefined
+                ? {
+                    sourceProviderCheckpointId:
+                      command.sourceProviderCheckpointId,
+                  }
+                : {}),
               instructionMode: command.instructionMode,
               claudeCodeMockCliTraffic:
                 command.options.claudeCodeMockCliTraffic,
@@ -1324,6 +1362,8 @@ export function createClaudeCodeProviderAdapter(
                 : {}),
               workflowsEnabled: command.options.workflowsEnabled,
               memoryEnabled: command.options.memoryEnabled,
+              providerSubagentsEnabled:
+                command.options.providerSubagentsEnabled,
               ...(dynamicTools && dynamicTools.length > 0
                 ? { dynamicTools }
                 : {}),
@@ -1344,6 +1384,12 @@ export function createClaudeCodeProviderAdapter(
             params: {
               threadId: command.threadId,
             },
+          };
+        case "thread/discard":
+          return {
+            kind: "request",
+            method: "thread/stop",
+            params: { threadId: command.threadId },
           };
         case "thread/goal/clear":
           return { kind: "noop", reason: "goals unsupported" };

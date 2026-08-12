@@ -10,6 +10,7 @@ import type {
   ProviderCapabilities,
   ReasoningLevel,
   RuntimePermissionPolicy,
+  RuntimeThreadExecutionOptions,
   ServiceTier,
   ThreadEvent,
 } from "@bb/domain";
@@ -159,6 +160,7 @@ export type AdapterCommand =
       threadId: string;
       cwd: string;
       sourceProviderThreadId: string;
+      sourceProviderCheckpointId?: string;
       options: ProviderExecutionContext;
       dynamicTools?: DynamicTool[];
       disallowedTools?: readonly string[];
@@ -193,6 +195,11 @@ export type AdapterCommand =
        * means idle/no-active-turn stop and should not invalidate the session.
        */
       activeTurnId: string | null;
+    }
+  | {
+      type: "thread/discard";
+      threadId: string;
+      providerThreadId: string;
     }
   | {
       type: "thread/goal/clear";
@@ -245,6 +252,13 @@ export function noPreparedProviderCommandDispatch(
   return null;
 }
 
+export type ProviderExecutionSettingsChange = "unchanged" | "live" | "session";
+
+export interface ClassifyProviderExecutionSettingsChangeArgs {
+  current: RuntimeThreadExecutionOptions;
+  next: RuntimeThreadExecutionOptions;
+}
+
 // ---------------------------------------------------------------------------
 // ProviderAdapter — internal extension contract
 // ---------------------------------------------------------------------------
@@ -253,6 +267,30 @@ export interface ProviderAdapter {
   id: string;
   displayName: string;
   capabilities: ProviderCapabilities;
+  /**
+   * Selects where approval escalation is enforced. `runtime` adapters emit
+   * every approval request and rely on the runtime's current thread policy.
+   * `provider` adapters enforce the policy before forwarding a request, so a
+   * forwarded approval is already known to require user input and must not be
+   * reclassified against mutable thread settings.
+   */
+  approvalRequestPolicy: "runtime" | "provider";
+  /**
+   * Normalizes provider-specific execution options before validation,
+   * comparison, persistence, and command construction. Providers may use this
+   * to collapse accepted no-op values onto their effective setting.
+   */
+  normalizeExecutionOptions?(
+    options: RuntimeThreadExecutionOptions,
+  ): RuntimeThreadExecutionOptions;
+  /**
+   * Classifies execution-setting drift for this provider. `live` settings are
+   * carried by the next turn command; `session` settings require rebuilding
+   * the provider session.
+   */
+  classifyExecutionSettingsChange(
+    args: ClassifyProviderExecutionSettingsChangeArgs,
+  ): ProviderExecutionSettingsChange;
   process: { command: string; args: string[]; env?: Record<string, string> };
 
   buildCommandPlan(command: AdapterCommand): ProviderCommandPlan;

@@ -9,7 +9,11 @@ import type {
 } from "@bb/domain";
 import type { ClaudePermissionMode } from "../interactive-contract.js";
 import { buildReadonlyBashUpdatedInput } from "./readonly-bash-policy.js";
-import type { SdkSessionOptions } from "./sdk-session.js";
+import type {
+  ClaudeMutableFlagSettings,
+  ClaudeSdkReasoningEffort,
+  SdkSessionOptions,
+} from "./sdk-session.js";
 
 export interface BuildSessionOptionsArgs {
   additionalWorkspaceWriteRoots?: readonly string[];
@@ -18,13 +22,26 @@ export interface BuildSessionOptionsArgs {
   disallowedTools?: readonly string[];
   instructionMode: InstructionMode;
   model?: string;
-  permissionEscalation: PermissionEscalation | null;
+  /**
+   * Escalation changes per turn without replacing the session. Hook closures
+   * resolve the originating prompt or subagent at call time, falling back to
+   * the current turn when Claude provides no correlation metadata.
+   */
+  getPermissionEscalation: (
+    context: PermissionEscalationWorkContext,
+  ) => PermissionEscalation | null;
   permissionMode: ClaudePermissionMode;
   permissionScope: RuntimePermissionScope;
   plugins?: Options["plugins"];
   reasoningLevel?: ReasoningLevel;
   workflowsEnabled: boolean;
   memoryEnabled?: boolean;
+}
+
+export interface PermissionEscalationWorkContext {
+  agentId?: string;
+  promptId?: string;
+  toolUseId?: string;
 }
 
 interface ResolveExecutableOnPathArgs {
@@ -47,6 +64,8 @@ const READONLY_ALLOWED_TOOLS = new Set([
   "TodoRead",
 ]);
 const READONLY_BASH_TOOL_NAME = "Bash";
+const READONLY_ASK_REASON =
+  "bb readonly mode requires approval before using tools that can modify state, run commands, access network, or perform non-read actions.";
 const SUMMARIZED_ADAPTIVE_THINKING = {
   type: "adaptive",
   display: "summarized",
@@ -59,9 +78,9 @@ const CLAUDE_CODE_EXECUTABLE_ENV = "BB_CLAUDE_CODE_EXECUTABLE";
  * dynamic-workflow orchestration). The SDK Settings flag tier is otherwise
  * unused by BB, so it is owned entirely here.
  */
-function toSdkEffort(
+export function toSdkEffort(
   reasoningLevel: ReasoningLevel,
-): Exclude<Options["effort"], undefined> {
+): ClaudeSdkReasoningEffort {
   if (reasoningLevel === "ultracode") return "xhigh";
   // "none" (thinking-off) is a Cursor-only level; Claude Code models never
   // expose it, so this is a defensive floor that reconciliation never reaches.
@@ -74,8 +93,23 @@ function toSdkEffort(
 function buildFlagSettings(params: BuildSessionOptionsArgs): Settings {
   return {
     autoMemoryEnabled: params.memoryEnabled ?? true,
-    ...(params.workflowsEnabled ? { enableWorkflows: true } : {}),
-    ...(params.reasoningLevel === "ultracode" ? { ultracode: true } : {}),
+    enableWorkflows: params.workflowsEnabled,
+    ultracode: params.reasoningLevel === "ultracode",
+  };
+}
+
+export function buildMutableFlagSettings(args: {
+  memoryEnabled: boolean;
+  reasoningLevel: ReasoningLevel | undefined;
+  workflowsEnabled: boolean;
+}): ClaudeMutableFlagSettings {
+  return {
+    autoMemoryEnabled: args.memoryEnabled,
+    enableWorkflows: args.workflowsEnabled,
+    ...(args.reasoningLevel !== undefined
+      ? { effortLevel: toSdkEffort(args.reasoningLevel) }
+      : {}),
+    ultracode: args.reasoningLevel === "ultracode",
   };
 }
 
@@ -97,12 +131,7 @@ function buildReadonlyHooks(
     return undefined;
   }
 
-  const permissionDecision =
-    params.permissionEscalation === "deny" ? "deny" : "ask";
-  const permissionDecisionReason =
-    permissionDecision === "deny"
-      ? buildReadonlyDenialMessage()
-      : "bb readonly mode requires approval before using tools that can modify state, run commands, access network, or perform non-read actions.";
+  const getPermissionEscalation = params.getPermissionEscalation;
 
   return {
     PreToolUse: [
@@ -131,12 +160,27 @@ function buildReadonlyHooks(
               }
             }
 
+            const permissionDecision =
+              getPermissionEscalation({
+                ...(input.agent_id !== undefined
+                  ? { agentId: input.agent_id }
+                  : {}),
+                ...(input.prompt_id !== undefined
+                  ? { promptId: input.prompt_id }
+                  : {}),
+                toolUseId: input.tool_use_id,
+              }) === "deny"
+                ? "deny"
+                : "ask";
             return {
               continue: true,
               hookSpecificOutput: {
                 hookEventName: "PreToolUse",
                 permissionDecision,
-                permissionDecisionReason,
+                permissionDecisionReason:
+                  permissionDecision === "deny"
+                    ? buildReadonlyDenialMessage()
+                    : READONLY_ASK_REASON,
               },
             };
           },
@@ -175,7 +219,10 @@ function buildWorkspaceWriteSandbox(
     // back to bb's own `canUseTool` gating instead of running wide open.
     failIfUnavailable: false,
     autoAllowBashIfSandboxed: true,
-    allowUnsandboxedCommands: params.permissionEscalation === "ask",
+    // Sandbox settings are session-fixed while escalation changes per turn;
+    // the unsandboxed retry stays enabled and `canUseTool` auto-denies it on
+    // escalation-denied turns.
+    allowUnsandboxedCommands: true,
     // The bb CLI needs loopback to reach the local server, and
     // escalation-denied turns have no unsandboxed-retry path around a block.
     // macOS-only and coarse (all localhost ports, binding on all interfaces);

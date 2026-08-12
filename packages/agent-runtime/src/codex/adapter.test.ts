@@ -1761,6 +1761,27 @@ describe("codex provider adapter", () => {
     expect(JSON.stringify(cmd)).not.toContain("persistExtendedHistory");
   });
 
+  it("buildCommand thread/fork can stop at a specific source turn", () => {
+    const adapter = createCodexProviderAdapter();
+    const cmd = adapter.buildCommandPlan({
+      type: "thread/fork",
+      cwd: "/tmp/worktree",
+      threadId: "bb-thread-edited",
+      sourceProviderThreadId: "codex-source-thread",
+      sourceProviderCheckpointId: "turn-before-edited-message",
+      instructionMode: "append",
+      options: fullProviderExecutionContext,
+    });
+
+    expect(cmd).toMatchObject({
+      method: "thread/fork",
+      params: {
+        threadId: "codex-source-thread",
+        lastTurnId: "turn-before-edited-message",
+      },
+    });
+  });
+
   it("buildCommand maps max reasoning level through to Codex", () => {
     const adapter = createCodexProviderAdapter();
     const cmd = adapter.buildCommandPlan({
@@ -2235,6 +2256,21 @@ describe("codex provider adapter", () => {
     });
   });
 
+  it("buildCommand thread/discard archives the staged provider thread", () => {
+    const adapter = createCodexProviderAdapter();
+    expect(
+      adapter.buildCommandPlan({
+        type: "thread/discard",
+        threadId: "bb-staging",
+        providerThreadId: "codex-staging",
+      }),
+    ).toEqual({
+      kind: "request",
+      method: "thread/archive",
+      params: { threadId: "codex-staging" },
+    });
+  });
+
   it("buildCommand thread/unarchive routes to provider thread id", () => {
     const adapter = createCodexProviderAdapter();
     const cmd = adapter.buildCommandPlan({
@@ -2661,13 +2697,18 @@ describe("codex provider adapter", () => {
       },
     });
 
+    // Thread scope, not turnScope("turn-1"): this notification failed schema
+    // parsing, so nothing here vouches for that turn id being one bb started.
+    // Turn-scoping an event whose turn/started the server never stored gets the
+    // event dropped; thread scope keeps it. Codex notifications bb *does* parse
+    // still carry turn scope — see the handled item/started cases above.
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "provider/unhandled",
         providerId: "codex",
         rawType: "item/tool/requestUserInput",
         threadId: "t1",
-        scope: turnScope("turn-1"),
+        scope: threadScope(),
       }),
     );
   });

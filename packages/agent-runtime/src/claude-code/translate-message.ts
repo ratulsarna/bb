@@ -67,6 +67,7 @@ export interface ClaudeTurnState {
   currentTurnId: string | undefined;
   cumulativeTokens: ThreadEventTokenUsageBreakdown;
   latestRequestContextTokens: number | undefined;
+  latestProviderCheckpointId: string | undefined;
   lastModelFallback:
     | {
         fallbackModel: string;
@@ -677,6 +678,10 @@ export function translateClaudeSdkMessage(
         });
       }
       const message = parsedMessage.data;
+      // Sidechain assistant messages belong to subagents/tools, not the root
+      // conversation lineage that thread/fork can retain through.
+      const providerCheckpointId =
+        parentToolCallId === undefined ? message.uuid : undefined;
       // Claude sends this model transition before it begins streaming from the
       // fallback model. Its richer system/model_* duplicate arrives only after
       // the response, so emit now and deduplicate that later event.
@@ -684,6 +689,9 @@ export function translateClaudeSdkMessage(
         extractClaudeFallbackOnlyAssistantMessage(message);
       if (fallbackTransition !== null) {
         const turnId = args.ensureTurnStarted({ events, state, threadId });
+        if (providerCheckpointId !== undefined) {
+          state.latestProviderCheckpointId = providerCheckpointId;
+        }
         if (
           !isDuplicateClaudeModelFallback(state, fallbackTransition, turnId)
         ) {
@@ -714,6 +722,9 @@ export function translateClaudeSdkMessage(
         if (!turnId) {
           return [];
         }
+        if (providerCheckpointId !== undefined) {
+          state.latestProviderCheckpointId = providerCheckpointId;
+        }
         if (hasCompletionBlockingClaudeTasks(state.tasksById)) {
           return events;
         }
@@ -723,6 +734,11 @@ export function translateClaudeSdkMessage(
           providerThreadId: "",
           scope: turnScope(turnId),
           status: "completed",
+          ...(state.latestProviderCheckpointId !== undefined
+            ? {
+                providerCheckpointId: state.latestProviderCheckpointId,
+              }
+            : {}),
         });
         args.turnState.finishTurn({ state, threadId: stateKey });
         return events;
@@ -732,6 +748,9 @@ export function translateClaudeSdkMessage(
         state,
         threadId,
       });
+      if (providerCheckpointId !== undefined) {
+        state.latestProviderCheckpointId = providerCheckpointId;
+      }
       const requestContextTokens = extractClaudeRequestContextTokens(message);
       if (requestContextTokens !== null) {
         state.latestRequestContextTokens = requestContextTokens;
@@ -979,6 +998,11 @@ export function translateClaudeSdkMessage(
           providerThreadId: "",
           scope: turnScope(state.currentTurnId),
           status: failed ? "failed" : "completed",
+          ...(state.latestProviderCheckpointId !== undefined
+            ? {
+                providerCheckpointId: state.latestProviderCheckpointId,
+              }
+            : {}),
         });
         args.turnState.finishTurn({ state, threadId: stateKey });
       }

@@ -186,6 +186,14 @@ describe("collectPluginAppRegistrations", () => {
         component: Component,
         run,
       });
+      app.slots.experimental_newThreadPanelAction({
+        id: "template",
+        title: "Apply template",
+        icon: "Wand",
+        component: Component,
+        layout: "flush",
+        run,
+      });
       app.slots.sidebarFooterAction({
         id: "remote",
         title: "Remote access",
@@ -245,6 +253,16 @@ describe("collectPluginAppRegistrations", () => {
         title: "Issue",
         icon: "Columns",
         component: Component,
+        run,
+      },
+    ]);
+    expect(registrations.newThreadPanelActions).toEqual([
+      {
+        id: "template",
+        title: "Apply template",
+        icon: "Wand",
+        component: Component,
+        layout: "flush",
         run,
       },
     ]);
@@ -575,6 +593,19 @@ describe("collectPluginAppRegistrations", () => {
       /"run" must be a function/,
     ],
     [
+      "new thread panel action with a non-function run",
+      () =>
+        definePluginApp((app) => {
+          app.slots.experimental_newThreadPanelAction({
+            id: "x",
+            title: "X",
+            component: Component,
+            run: "nope" as never,
+          });
+        }),
+      /"run" must be a function/,
+    ],
+    [
       "missing component",
       () =>
         definePluginApp((app) => {
@@ -600,6 +631,21 @@ describe("collectPluginAppRegistrations", () => {
           });
         }),
       /"headerContent" must be a React component/,
+    ],
+    [
+      "nav panel with a non-component experimental sidebar accessory",
+      () =>
+        definePluginApp((app) => {
+          app.slots.navPanel({
+            id: "x",
+            title: "X",
+            icon: "columns",
+            path: "x",
+            component: Component,
+            experimental_sidebarAccessory: "nope" as never,
+          });
+        }),
+      /"experimental_sidebarAccessory" must be a React component/,
     ],
     [
       "message directive with uppercase id",
@@ -682,6 +728,27 @@ describe("collectPluginAppRegistrations", () => {
       collectPluginAppRegistrations(definition).navPanels[0],
     ).toMatchObject({
       headerContent: Accessory,
+    });
+  });
+
+  it("keeps an experimental_sidebarAccessory registration", () => {
+    function SidebarAccessory() {
+      return null;
+    }
+    const definition = definePluginApp((app) => {
+      app.slots.navPanel({
+        id: "board",
+        title: "Board",
+        icon: "columns",
+        path: "board",
+        component: Component,
+        experimental_sidebarAccessory: SidebarAccessory,
+      });
+    });
+    expect(
+      collectPluginAppRegistrations(definition).navPanels[0],
+    ).toMatchObject({
+      experimental_sidebarAccessory: SidebarAccessory,
     });
   });
 });

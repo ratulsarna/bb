@@ -308,6 +308,27 @@ describe("claude-code provider adapter", () => {
     });
   });
 
+  it("buildCommand thread/fork forwards the provider checkpoint", () => {
+    const adapter = createClaudeCodeProviderAdapter();
+    const cmd = adapter.buildCommandPlan({
+      type: "thread/fork",
+      cwd: "/tmp/worktree",
+      threadId: "bb-thread-1",
+      sourceProviderThreadId: "claude-session-1",
+      sourceProviderCheckpointId: "assistant-message-42",
+      instructionMode: "append",
+      options: fullProviderExecutionContext,
+    });
+
+    expect(cmd).toMatchObject({
+      method: "thread/fork",
+      params: {
+        sourceProviderCheckpointId: "assistant-message-42",
+        sourceProviderThreadId: "claude-session-1",
+      },
+    });
+  });
+
   it("buildCommand passes workflowsEnabled through explicitly on thread/start and thread/resume", () => {
     const adapter = createClaudeCodeProviderAdapter();
     const start = adapter.buildCommandPlan({
@@ -926,6 +947,21 @@ describe("claude-code provider adapter", () => {
       params: {
         threadId: "bb-thread-1",
       },
+    });
+  });
+
+  it("buildCommand thread/discard closes the staged bridge session", () => {
+    const adapter = createClaudeCodeProviderAdapter();
+    expect(
+      adapter.buildCommandPlan({
+        type: "thread/discard",
+        threadId: "bb-staging",
+        providerThreadId: "claude-staging",
+      }),
+    ).toEqual({
+      kind: "request",
+      method: "thread/stop",
+      params: { threadId: "bb-staging" },
     });
   });
 
@@ -2002,6 +2038,80 @@ describe("claude-code provider adapter", () => {
           id: "msg-1",
           text: "Hello world",
         }),
+      }),
+    );
+  });
+
+  it("records the latest Claude assistant message as the turn checkpoint", () => {
+    const adapter = createClaudeCodeProviderAdapter();
+    adapter.translateEvent({
+      type: "assistant",
+      uuid: "assistant-message-42",
+      message: {
+        id: "msg-1",
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+      },
+      session_id: "sess-1",
+    });
+
+    const events = adapter.translateEvent({
+      type: "result",
+      subtype: "success",
+      session_id: "sess-1",
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "turn/completed",
+        status: "completed",
+        providerCheckpointId: "assistant-message-42",
+      }),
+    );
+  });
+
+  it("does not replace the root checkpoint with a sidechain assistant UUID", () => {
+    const adapter = createClaudeCodeProviderAdapter();
+    adapter.translateEvent(
+      {
+        type: "assistant",
+        uuid: "root-assistant-message",
+        message: {
+          id: "root-message",
+          role: "assistant",
+          content: [{ type: "text", text: "Root response" }],
+        },
+        session_id: "sess-1",
+      },
+      { threadId: "bb-thread-1" },
+    );
+    adapter.translateEvent(
+      {
+        type: "assistant",
+        uuid: "sidechain-assistant-message",
+        message: {
+          id: "sidechain-message",
+          role: "assistant",
+          content: [{ type: "text", text: "Subagent response" }],
+        },
+        session_id: "sess-1",
+      },
+      { threadId: "bb-thread-1", parentToolCallId: "tool-subagent" },
+    );
+
+    const events = adapter.translateEvent(
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "sess-1",
+      },
+      { threadId: "bb-thread-1" },
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "turn/completed",
+        providerCheckpointId: "root-assistant-message",
       }),
     );
   });
@@ -5631,5 +5741,25 @@ describe("claude-code provider adapter", () => {
     const adapter = createClaudeCodeProviderAdapter();
     const events = adapter.translateEvent(loadFixture("system-init.json"));
     expect(events).toMatchObject([]);
+  });
+
+  it("ignores Claude command lifecycle events", () => {
+    const adapter = createClaudeCodeProviderAdapter();
+    const events = adapter.translateEvent({
+      jsonrpc: "2.0",
+      method: "sdk/message",
+      params: {
+        threadId: "thread-1",
+        message: {
+          type: "command_lifecycle",
+          command_uuid: "command-1",
+          state: "started",
+          uuid: "message-1",
+          session_id: "session-1",
+        },
+      },
+    });
+
+    expect(events).toEqual([]);
   });
 });

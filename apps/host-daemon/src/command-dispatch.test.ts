@@ -177,6 +177,10 @@ function createRuntime(): FakeDispatchRuntime {
       hostedThreadIds.add(args.threadId);
       return { providerThreadId: "provider-thread-1" };
     }),
+    prepareThreadRewind: vi.fn(async () => ({
+      providerThreadId: "provider-thread-rewind-1",
+    })),
+    discardThreadRewind: vi.fn(async () => undefined),
     resumeThread: vi.fn(async (args: { threadId: string }) => {
       hostedThreadIds.add(args.threadId);
       return { providerThreadId: "provider-thread-1" };
@@ -231,6 +235,86 @@ function createProviderCliInstallEventStream(
       controller.close();
     },
   });
+}
+
+function claudeCodeStatus(args: {
+  currentVersion: string;
+  latestVersion: string | null;
+}): ProviderCliStatus {
+  return {
+    displayName: "Claude Code",
+    executableName: "claude",
+    executablePath: "/Users/me/.local/bin/claude",
+    installed: true,
+    installSource: "external",
+    currentVersion: args.currentVersion,
+    latestVersion: args.latestVersion,
+    minimumSupportedVersion: null,
+    npmPackageName: "@anthropic-ai/claude-code",
+    npmGlobalPackageVersion: null,
+    installAction: {
+      kind: "update",
+      label: "Update",
+      commandKind: "exec",
+      command: "claude update",
+    },
+    needsUpdate:
+      args.latestVersion === null || args.currentVersion !== args.latestVersion,
+    versionUnsupported: false,
+  };
+}
+
+async function runSuccessfulClaudeCodeUpdateVerification(args: {
+  before: ProviderCliStatus;
+  after: ProviderCliStatus;
+}) {
+  const dataDir = await makeTempDir("bb-command-dispatch-provider-cli-");
+  const manager = new RuntimeManager({
+    dataDir,
+    createRuntime,
+    provisionWorkspace: async () => createWorkspace(),
+  });
+  const getProviderCliStatusForProvider = vi
+    .fn()
+    .mockResolvedValueOnce(args.before)
+    .mockResolvedValueOnce(args.after);
+  const events: ProviderCliInstallEvent[] = [
+    {
+      type: "started",
+      provider: "claudeCode",
+      command: "claude update",
+    },
+    {
+      type: "completed",
+      provider: "claudeCode",
+      exitCode: 0,
+      signal: null,
+      success: true,
+    },
+  ];
+  const result = await dispatchOnlineRpcCommand(
+    {
+      type: "provider_cli.install",
+      provider: "claudeCode",
+      actionKind: "update",
+    },
+    {
+      dataDir,
+      eventSink: {
+        emit: vi.fn(),
+        flush: vi.fn(async () => undefined),
+      },
+      fetchProjectAttachment: async () => {
+        throw new Error("Unexpected project attachment fetch");
+      },
+      getProviderCliStatusForProvider,
+      runtimeManager: manager,
+      streamProviderCliInstall: () =>
+        createProviderCliInstallEventStream(events),
+      threadStorageRootPath: "/tmp/bb-thread-storage",
+    },
+  );
+  return { events, getProviderCliStatusForProvider, result };
 }
 
 describe("dispatchCommand", () => {
@@ -941,6 +1025,130 @@ describe("dispatchCommand", () => {
     expect(runtime.startThread).toHaveBeenCalledOnce();
   });
 
+  it("prepares a Codex rewind through the requested retained turn", async () => {
+    const runtime = createRuntime();
+    const manager = new RuntimeManager({
+      createRuntime: () => runtime,
+      provisionWorkspace: async () => createWorkspace(),
+    });
+    const command: CommandOf<"thread.rewind.prepare"> = {
+      type: "thread.rewind.prepare",
+      environmentId: "env-1",
+      threadId: "thread-1",
+      workspaceContext: {
+        workspacePath: WORKSPACE_PATH,
+        workspaceProvisionType: "unmanaged",
+      },
+      projectId: "proj_1",
+      providerId: "codex",
+      leaseId: "lease-1",
+      sourceProviderThreadId: "provider-source-1",
+      retainThroughProviderCheckpoint: "turn-before-edit",
+      options: {
+        model: "gpt-5",
+        serviceTier: "default",
+        reasoningLevel: "medium",
+        workflowsEnabled: false,
+        permissionMode: "full",
+        permissionScope: "full",
+        approvalReviewer: null,
+        permissionEscalation: null,
+      },
+      instructions: "Be concise.",
+      dynamicTools: [],
+      injectedSkillSources: [],
+      instructionMode: "append",
+    };
+    const supportedCodexStatus: ProviderCliStatus = {
+      displayName: "Codex",
+      executableName: "codex",
+      executablePath: "/usr/local/bin/codex",
+      installed: true,
+      installSource: "npmGlobal",
+      currentVersion: "0.146.0",
+      latestVersion: null,
+      minimumSupportedVersion: "0.136.0",
+      npmPackageName: "@openai/codex",
+      npmGlobalPackageVersion: "0.146.0",
+      installAction: null,
+      needsUpdate: false,
+      versionUnsupported: false,
+    };
+
+    await expect(
+      dispatchCommand(command, {
+        dataDir: "/tmp/bb-data",
+        eventSink: {
+          emit: vi.fn(),
+          flush: vi.fn(async () => undefined),
+        },
+        fetchProjectAttachment: async () => {
+          throw new Error("Unexpected project attachment fetch");
+        },
+        getProviderCliStatusForProvider: async () => supportedCodexStatus,
+        runtimeManager: manager,
+        threadStorageRootPath: "/tmp/bb-thread-storage",
+      }),
+    ).resolves.toEqual({ providerThreadId: "provider-thread-rewind-1" });
+    expect(runtime.prepareThreadRewind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        leaseId: "lease-1",
+        sourceProviderThreadId: "provider-source-1",
+        retainThroughProviderCheckpoint: "turn-before-edit",
+        threadId: "thread-1",
+      }),
+    );
+    await expect(
+      dispatchCommand(
+        { ...command, leaseId: "lease-old-codex" },
+        {
+          dataDir: "/tmp/bb-data",
+          eventSink: {
+            emit: vi.fn(),
+            flush: vi.fn(async () => undefined),
+          },
+          fetchProjectAttachment: async () => {
+            throw new Error("Unexpected project attachment fetch");
+          },
+          getProviderCliStatusForProvider: async () => ({
+            ...supportedCodexStatus,
+            currentVersion: "0.140.0",
+            npmGlobalPackageVersion: "0.140.0",
+          }),
+          runtimeManager: manager,
+          threadStorageRootPath: "/tmp/bb-thread-storage",
+        },
+      ),
+    ).rejects.toMatchObject({ code: "provider_cli_unsupported_version" });
+    expect(runtime.prepareThreadRewind).toHaveBeenCalledOnce();
+
+    await expect(
+      dispatchCommand(
+        {
+          type: "thread.rewind.discard",
+          environmentId: "env-1",
+          threadId: "thread-1",
+          leaseId: "lease-1",
+        },
+        {
+          dataDir: "/tmp/bb-data",
+          eventSink: {
+            emit: vi.fn(),
+            flush: vi.fn(async () => undefined),
+          },
+          fetchProjectAttachment: async () => {
+            throw new Error("Unexpected project attachment fetch");
+          },
+          runtimeManager: manager,
+          threadStorageRootPath: "/tmp/bb-thread-storage",
+        },
+      ),
+    ).resolves.toEqual({});
+    expect(runtime.discardThreadRewind).toHaveBeenCalledWith({
+      leaseId: "lease-1",
+    });
+  });
+
   it("invalidates the provider maintenance runtime after a successful Codex CLI update", async () => {
     const dataDir = await makeTempDir("bb-command-dispatch-provider-cli-");
     const staleRuntime = createRuntime();
@@ -1053,6 +1261,23 @@ describe("dispatchCommand", () => {
       const streamProviderCliInstall = vi.fn(() =>
         createProviderCliInstallEventStream(testCase.events),
       );
+      const getProviderCliStatusForProvider =
+        testCase.provider === "claudeCode"
+          ? vi
+              .fn()
+              .mockResolvedValueOnce(
+                claudeCodeStatus({
+                  currentVersion: "2.1.220",
+                  latestVersion: "2.1.227",
+                }),
+              )
+              .mockResolvedValueOnce(
+                claudeCodeStatus({
+                  currentVersion: "2.1.227",
+                  latestVersion: "2.1.227",
+                }),
+              )
+          : undefined;
 
       const result = await dispatchOnlineRpcCommand(
         {
@@ -1069,6 +1294,9 @@ describe("dispatchCommand", () => {
           fetchProjectAttachment: async () => {
             throw new Error("Unexpected project attachment fetch");
           },
+          ...(getProviderCliStatusForProvider === undefined
+            ? {}
+            : { getProviderCliStatusForProvider }),
           runtimeManager: manager,
           streamProviderCliInstall,
           threadStorageRootPath: "/tmp/bb-thread-storage",
@@ -1082,6 +1310,141 @@ describe("dispatchCommand", () => {
       ).resolves.toBe(runtime);
       expect(createRuntimeSpy).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("reports a successful Claude update command as failed when the active executable stays old", async () => {
+    const dataDir = await makeTempDir("bb-command-dispatch-provider-cli-");
+    const runtime = createRuntime();
+    const manager = new RuntimeManager({
+      createRuntime: () => runtime,
+      dataDir,
+      provisionWorkspace: async () => createWorkspace(),
+    });
+    const getProviderCliStatusForProvider = vi
+      .fn()
+      .mockResolvedValueOnce(
+        claudeCodeStatus({
+          currentVersion: "2.1.220",
+          latestVersion: "2.1.227",
+        }),
+      )
+      .mockResolvedValueOnce(
+        claudeCodeStatus({
+          currentVersion: "2.1.220",
+          latestVersion: "2.1.227",
+        }),
+      );
+
+    const result = await dispatchOnlineRpcCommand(
+      {
+        type: "provider_cli.install",
+        provider: "claudeCode",
+        actionKind: "update",
+      },
+      {
+        dataDir,
+        eventSink: {
+          emit: vi.fn(),
+          flush: vi.fn(async () => undefined),
+        },
+        fetchProjectAttachment: async () => {
+          throw new Error("Unexpected project attachment fetch");
+        },
+        getProviderCliStatusForProvider,
+        runtimeManager: manager,
+        streamProviderCliInstall: () =>
+          createProviderCliInstallEventStream([
+            {
+              type: "started",
+              provider: "claudeCode",
+              command: "claude update",
+            },
+            {
+              type: "output",
+              provider: "claudeCode",
+              stream: "stdout",
+              text: "Successfully updated from 2.1.220 to version 2.1.227\n",
+            },
+            {
+              type: "completed",
+              provider: "claudeCode",
+              exitCode: 0,
+              signal: null,
+              success: true,
+            },
+          ]),
+        threadStorageRootPath: "/tmp/bb-thread-storage",
+      },
+    );
+
+    expect(getProviderCliStatusForProvider).toHaveBeenCalledTimes(2);
+    expect(result.events).toEqual([
+      expect.objectContaining({ type: "started" }),
+      expect.objectContaining({ type: "output" }),
+      expect.objectContaining({
+        type: "error",
+        provider: "claudeCode",
+        message: expect.stringContaining(
+          "still reports 2.1.220 (expected 2.1.227)",
+        ),
+      }),
+      {
+        type: "completed",
+        provider: "claudeCode",
+        exitCode: 0,
+        signal: null,
+        success: false,
+      },
+    ]);
+  });
+
+  it("accepts a Claude update that advances when the release channel is unknown", async () => {
+    const verification = await runSuccessfulClaudeCodeUpdateVerification({
+      before: claudeCodeStatus({
+        currentVersion: "2.1.69",
+        latestVersion: null,
+      }),
+      after: claudeCodeStatus({
+        currentVersion: "2.1.221",
+        latestVersion: null,
+      }),
+    });
+
+    expect(verification.getProviderCliStatusForProvider).toHaveBeenCalledTimes(
+      2,
+    );
+    expect(verification.result).toEqual({ events: verification.events });
+  });
+
+  it("rejects a Claude update that does not advance when the release channel is unknown", async () => {
+    const verification = await runSuccessfulClaudeCodeUpdateVerification({
+      before: claudeCodeStatus({
+        currentVersion: "2.1.69",
+        latestVersion: null,
+      }),
+      after: claudeCodeStatus({
+        currentVersion: "2.1.69",
+        latestVersion: null,
+      }),
+    });
+
+    expect(verification.result.events).toEqual([
+      expect.objectContaining({ type: "started" }),
+      expect.objectContaining({
+        type: "error",
+        provider: "claudeCode",
+        message: expect.stringContaining(
+          "still reports 2.1.69 (expected a version newer than 2.1.69)",
+        ),
+      }),
+      {
+        type: "completed",
+        provider: "claudeCode",
+        exitCode: 0,
+        signal: null,
+        success: false,
+      },
+    ]);
   });
 
   // Regression: a thread.start whose freshly staged skill catalog differed

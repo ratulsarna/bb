@@ -332,6 +332,27 @@ describe("pi provider adapter", () => {
     });
   });
 
+  it("buildCommand thread/fork forwards the provider checkpoint", () => {
+    const adapter = createPiProviderAdapter();
+    const cmd = adapter.buildCommandPlan({
+      type: "thread/fork",
+      cwd: "/tmp/worktree",
+      threadId: "t1",
+      sourceProviderThreadId: "source-session",
+      sourceProviderCheckpointId: "pi-entry-42",
+      instructionMode: "append",
+      options: fullProviderExecutionContext,
+    });
+
+    expect(cmd).toMatchObject({
+      method: "thread/fork",
+      params: {
+        providerCheckpointId: "pi-entry-42",
+        sourceProviderThreadId: "source-session",
+      },
+    });
+  });
+
   it("buildCommand thread/start maps skill roots to Pi additional skill paths", () => {
     const adapter = createPiProviderAdapter();
     const cmd = adapter.buildCommandPlan({
@@ -549,6 +570,21 @@ describe("pi provider adapter", () => {
     });
   });
 
+  it("buildCommand thread/discard maps to destructive bridge cleanup", () => {
+    const adapter = createPiProviderAdapter();
+    expect(
+      adapter.buildCommandPlan({
+        type: "thread/discard",
+        threadId: "bb-staging",
+        providerThreadId: "pi-staging",
+      }),
+    ).toEqual({
+      kind: "request",
+      method: "thread/discard",
+      params: { threadId: "pi-staging" },
+    });
+  });
+
   it("buildCommand turn/start includes input", () => {
     const adapter = createPiProviderAdapter();
     const cmd = adapter.buildCommandPlan({
@@ -665,9 +701,10 @@ describe("pi provider adapter", () => {
     // Start a turn first
     adapter.translateEvent(loadFixture("agent-start.json"));
 
-    const events = adapter.translateEvent(
-      loadFixture("agent-end-with-message.json"),
-    );
+    const events = adapter.translateEvent({
+      ...loadFixture("agent-end-with-message.json"),
+      providerCheckpointId: "pi-entry-42",
+    });
 
     expect(events).toContainEqual(
       expect.objectContaining({
@@ -683,6 +720,7 @@ describe("pi provider adapter", () => {
         type: "turn/completed",
         scope: turnScope("turn-1"),
         status: "completed",
+        providerCheckpointId: "pi-entry-42",
       }),
     );
     expect(events.some((event) => event.type === "provider/error")).toBe(false);

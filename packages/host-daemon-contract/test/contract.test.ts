@@ -473,6 +473,7 @@ const ONLINE_RPC_RESPONSE_RESULT_FIXTURES: OnlineRpcResponseResultFixtures = {
           status: "completed",
           conclusion: "success",
           url: null,
+          startedAt: "2026-06-16T12:25:00Z",
         },
       ],
       reviewDecision: "APPROVED",
@@ -484,6 +485,10 @@ const ONLINE_RPC_RESPONSE_RESULT_FIXTURES: OnlineRpcResponseResultFixtures = {
 };
 
 const SETTLED_RESPONSE_RESULT_FIXTURES: SettledResponseResultFixtures = {
+  "thread.rewind.discard": {},
+  "thread.rewind.prepare": {
+    providerThreadId: "provider-thread-rewind",
+  },
   "thread.start": {
     providerThreadId: "provider-thread-123",
   },
@@ -1051,11 +1056,12 @@ describe("host-daemon local schemas", () => {
 });
 
 describe("host-daemon command schemas", () => {
-  // Version 97 suppresses Codex raw response completion notifications. An
-  // older daemon emits them as provider/unhandled, so it must update before
-  // connecting.
-  it("uses protocol version 97 for Codex raw response completion noise", () => {
-    expect(HOST_DAEMON_PROTOCOL_VERSION).toBe(97);
+  // Version 106 preserves an unknown Claude Code release channel when doctor
+  // cannot report it and recovers native update actions for standard installs.
+  // Older daemons can verify stable against latest or hide the managed update,
+  // so enrolled machines must update for the corrected status behavior.
+  it("uses protocol version 106 for Claude Code status fixes", () => {
+    expect(HOST_DAEMON_PROTOCOL_VERSION).toBe(106);
   });
 
   it("binds Plan cancellation to a required turn id and typed result", () => {

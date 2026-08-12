@@ -39,6 +39,7 @@ import {
   requestEnvironmentCleanupAdvance,
   wouldCleanupEnvironment,
 } from "../../services/environments/environment-cleanup-internal.js";
+import { applyLoggedEnvironmentLifecycleEvent } from "../../services/environments/lifecycle-outcome.js";
 import { requirePublicThread } from "../../services/lib/entity-lookup.js";
 import { parseSafeRelativeRoutePath } from "../relative-route-path.js";
 import { validatePromptAttachmentReferences } from "../../services/projects/attachments.js";
@@ -52,6 +53,7 @@ import {
   resolveMessageSenderThreadId,
   sendThreadMessage,
 } from "../../services/threads/thread-send.js";
+import { editThreadMessage } from "../../services/threads/thread-edit-message.js";
 import {
   buildExecutionOptions,
   buildThreadStopCommand,
@@ -364,6 +366,19 @@ export function registerThreadActionRoutes(app: Hono, deps: AppDeps): void {
         thread,
       }),
     );
+  });
+
+  post(routes.editMessage, async (context, payload) => {
+    const thread = requirePublicThread(deps.db, context.req.param("id"));
+    const environment = await requireThreadCommandEnvironment(deps, {
+      thread,
+    });
+    const result = await editThreadMessage(deps, {
+      environment,
+      payload,
+      thread,
+    });
+    return context.json(result);
   });
 
   post(routes.createQueuedMessage, async (context, payload) => {
@@ -702,10 +717,13 @@ export function registerThreadActionRoutes(app: Hono, deps: AppDeps): void {
     });
   });
 
-  // Un-archive is a pure record op: it clears archivedAt and nothing else. It
-  // deliberately does not touch the environment lifecycle; cleanup is monotonic
-  // and never cancelled, and a thread whose environment is gone surfaces a
-  // read-only "environment is gone" banner instead of resurrecting it.
+  // Un-archive clears archivedAt. When the thread's managed environment is still
+  // inside its archive grace window (`retiring`), un-archiving revives it via the
+  // existing `retire.cancelled` event so the intact worktree is restored — the
+  // lossless undo of an accidental archive. If the grace window already elapsed
+  // and the environment was destroyed, `retire.cancelled` is a no-op (illegal
+  // from destroying/destroyed) and the thread remains read-only. The user can
+  // hand its context and surviving branch off to a new thread instead.
   post(routes.unarchive, (context) => {
     const thread = requirePublicThread(deps.db, context.req.param("id"));
     const providerThreadId = getLastProviderThreadId(deps, thread.id);
@@ -713,6 +731,12 @@ export function registerThreadActionRoutes(app: Hono, deps: AppDeps): void {
     const environment = thread.environmentId
       ? getEnvironment(deps.db, thread.environmentId)
       : null;
+    if (environment?.status === "retiring") {
+      applyLoggedEnvironmentLifecycleEvent(deps, {
+        environmentId: environment.id,
+        event: { type: "retire.cancelled" },
+      });
+    }
     if (providerThreadId && environment) {
       dispatchThreadUnarchiveCommand(deps, {
         environment,

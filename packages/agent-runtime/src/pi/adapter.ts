@@ -28,6 +28,7 @@ import {
 } from "@bb/domain";
 import { decodeNormalizedProviderToolCallRequest } from "../shared/provider-tool-call-contract.js";
 import { resolveBridgeProcessArgs } from "../shared/bridge-path.js";
+import { classifySessionExecutionSettingsChange } from "../execution-options.js";
 import { bashArgsSchema, textBlockSchema } from "../shared/tool-arg-schemas.js";
 import {
   buildEditDiff,
@@ -279,6 +280,7 @@ const piAgentEndEventSchema = z
   .object({
     type: z.literal("agent_end"),
     messages: z.array(piConversationMessageSchema),
+    providerCheckpointId: z.string().min(1).optional(),
     willRetry: z.boolean().default(false),
   })
   .passthrough();
@@ -1085,6 +1087,11 @@ export function createPiProviderAdapter(
           providerThreadId: "",
           scope: turnScope(currentTurnId),
           status: "completed",
+          ...(piEvent.data.providerCheckpointId !== undefined
+            ? {
+                providerCheckpointId: piEvent.data.providerCheckpointId,
+              }
+            : {}),
         });
         resetPiCommandOutputSnapshots(state);
         turnState.finishTurn({ state, threadId: stateKey });
@@ -1298,6 +1305,8 @@ export function createPiProviderAdapter(
     id: providerInfo.id,
     displayName: providerInfo.displayName,
     capabilities,
+    approvalRequestPolicy: "runtime",
+    classifyExecutionSettingsChange: classifySessionExecutionSettingsChange,
     process: {
       command: opts?.bridgeNodeExecutablePath ?? "node",
       args: resolveBridgeProcessArgs({
@@ -1474,6 +1483,11 @@ export function createPiProviderAdapter(
               threadId: command.threadId,
               sourceProviderThreadId: command.sourceProviderThreadId,
               cwd: command.cwd,
+              ...(command.sourceProviderCheckpointId !== undefined
+                ? {
+                    providerCheckpointId: command.sourceProviderCheckpointId,
+                  }
+                : {}),
               ...resolvePiInstructionOverrides(command),
               ...(additionalSkillPathsParams ? additionalSkillPathsParams : {}),
               ...(config ? { config } : {}),
@@ -1503,6 +1517,12 @@ export function createPiProviderAdapter(
             params: {
               threadId: command.providerThreadId,
             },
+          };
+        case "thread/discard":
+          return {
+            kind: "request",
+            method: "thread/discard",
+            params: { threadId: command.providerThreadId },
           };
         case "thread/goal/clear":
           return { kind: "noop", reason: "goals unsupported" };

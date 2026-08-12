@@ -36,7 +36,7 @@ import {
   providerCliStatusResponseSchema,
 } from "./local.js";
 
-export const HOST_DAEMON_PROTOCOL_VERSION = 97 as const;
+export const HOST_DAEMON_PROTOCOL_VERSION = 106 as const;
 
 export {
   BRANCH_LIST_LIMIT_MAX,
@@ -324,6 +324,24 @@ export const threadStartCommandSchema = hostDaemonThreadTargetSchema
     }
     refineGroupedInputMatchesFlatInput(value, ctx);
   });
+
+export const threadRewindPrepareCommandSchema = hostDaemonThreadTargetSchema
+  .merge(hostDaemonThreadRuntimeContextSchema)
+  .extend({
+    type: z.literal("thread.rewind.prepare"),
+    /** Server-minted per-attempt staging id; each lease owns one staged fork. */
+    leaseId: z.string().min(1),
+    sourceProviderThreadId: z.string().min(1),
+    retainThroughProviderCheckpoint: z.string().min(1),
+  })
+  .strict();
+
+export const threadRewindDiscardCommandSchema = hostDaemonThreadTargetSchema
+  .extend({
+    type: z.literal("thread.rewind.discard"),
+    leaseId: z.string().min(1),
+  })
+  .strict();
 
 export const turnSubmitTargetSchema = z.discriminatedUnion("mode", [
   z.object({
@@ -1557,6 +1575,24 @@ function defineHostDaemonCommandDescriptor<
 }
 
 export const hostDaemonCommandRegistry = {
+  "thread.rewind.discard": defineHostDaemonCommandDescriptor({
+    type: "thread.rewind.discard",
+    schema: threadRewindDiscardCommandSchema,
+    resultSchema: emptyCommandResultSchema,
+    transport: "settled",
+    retryable: false,
+    flushEventsBeforeResult: true,
+    envLane: "read",
+  }),
+  "thread.rewind.prepare": defineHostDaemonCommandDescriptor({
+    type: "thread.rewind.prepare",
+    schema: threadRewindPrepareCommandSchema,
+    resultSchema: threadStartResultSchema,
+    transport: "settled",
+    retryable: false,
+    flushEventsBeforeResult: true,
+    envLane: "read",
+  }),
   "thread.start": defineHostDaemonCommandDescriptor({
     type: "thread.start",
     schema: threadStartCommandSchema,

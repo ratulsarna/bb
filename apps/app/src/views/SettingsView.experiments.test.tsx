@@ -13,8 +13,10 @@ function renderSection(overrides?: {
     <ExperimentsSettingsSection
       claudeCodeMockCliTrafficEnabled={false}
       disabled={false}
+      editMessagesEnabled={false}
       newOnboardingEnabled={false}
       onClaudeCodeMockCliTrafficEnabledChange={vi.fn()}
+      onEditMessagesEnabledChange={vi.fn()}
       onNewOnboardingEnabledChange={
         overrides?.onNewOnboardingEnabledChange ?? vi.fn()
       }

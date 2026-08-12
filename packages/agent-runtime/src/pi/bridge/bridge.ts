@@ -152,6 +152,7 @@ const piThreadForkParamsSchema = z
     threadId: z.string(),
     sourceProviderThreadId: z.string(),
     cwd: z.string(),
+    providerCheckpointId: z.string().min(1).optional(),
     additionalSkillPaths: piAdditionalSkillPathsSchema,
     baseInstructions: z.string().optional(),
     appendSystemPrompt: z.string().optional(),
@@ -223,6 +224,12 @@ const piCommandSchema = z.discriminatedUnion("method", [
   z.object({
     method: z.literal("thread/compact"),
     params: piThreadIdParamsSchema,
+  }),
+  z.object({
+    method: z.literal("thread/discard"),
+    params: z.object({
+      threadId: z.string(),
+    }),
   }),
 ]);
 
@@ -400,10 +407,20 @@ function createOnPiEvent(
       threadId: args.threadId,
     });
     if (!threadSession) return;
+    const providerCheckpointId =
+      event.type === "agent_end"
+        ? threadSession.session.getProviderCheckpointId()
+        : undefined;
     send({
       jsonrpc: "2.0",
       method: "sdk/message",
-      params: { threadId: args.threadId, message: event },
+      params: {
+        threadId: args.threadId,
+        message:
+          providerCheckpointId === undefined
+            ? event
+            : { ...event, providerCheckpointId },
+      },
     });
     if (event.type === "agent_end" || event.type === "compaction_end") {
       emitContextWindowUsage(args.threadId);
@@ -616,6 +633,9 @@ async function handleRequest(
     case "thread/compact":
       handleThreadCompact(request.id, request.params);
       break;
+    case "thread/discard":
+      sendResult(request.id, await handleThreadDiscard(request.params));
+      break;
   }
 }
 
@@ -631,6 +651,10 @@ type ThreadForkParams = Extract<PiCommand, { method: "thread/fork" }>["params"];
 type TurnStartParams = Extract<PiCommand, { method: "turn/start" }>["params"];
 type TurnSteerParams = Extract<PiCommand, { method: "turn/steer" }>["params"];
 type ThreadIdParams = Extract<PiCommand, { method: "thread/stop" }>["params"];
+type ThreadDiscardParams = Extract<
+  PiCommand,
+  { method: "thread/discard" }
+>["params"];
 type PiSessionParams =
   | ThreadStartParams
   | ThreadResumeParams
@@ -717,7 +741,10 @@ async function startPiThreadSession({
     throw error;
   }
 
-  sendResult(id, { threadId });
+  // Pi has no separately minted session id: its provider identity is the BB
+  // thread id. Return that identity synchronously so callers do not have to
+  // race the thread/identity notification emitted after start/fork.
+  sendResult(id, { threadId, providerThreadId: threadId });
 }
 
 async function handleThreadStart(
@@ -773,12 +800,18 @@ async function handleThreadFork(
   });
 
   const bridgeSessionDir = resolvePiBridgeSessionDir({ env: process.env });
-  const forked = SessionManager.forkFrom(
-    sourceSessionFile,
-    params.cwd,
-    bridgeSessionDir,
-  );
-  const forkedFile = forked.getSessionFile();
+  const forkedFile =
+    params.providerCheckpointId === undefined
+      ? SessionManager.forkFrom(
+          sourceSessionFile,
+          params.cwd,
+          bridgeSessionDir,
+        ).getSessionFile()
+      : SessionManager.open(
+          sourceSessionFile,
+          bridgeSessionDir,
+          params.cwd,
+        ).createBranchedSession(params.providerCheckpointId);
   if (!forkedFile) {
     sendError(id, -32000, "Cannot fork: forked pi session was not persisted");
     return;
@@ -898,6 +931,20 @@ function handleThreadCompact(
     });
   });
   sendResult(id, { threadId: params.threadId });
+}
+
+async function handleThreadDiscard(
+  params: ThreadDiscardParams,
+): Promise<PiThreadStopResult> {
+  await closeThreadSession({
+    message: "Pi staged thread discarded while tool call was pending",
+    threadId: params.threadId,
+  });
+  rmSync(
+    resolvePiSessionFilePath({ env: process.env, threadId: params.threadId }),
+    { force: true },
+  );
+  return { ok: true };
 }
 
 interface ExtractedInput {

@@ -60,6 +60,8 @@ import type {
   CreateQueuedMessageRequest,
   CreateThreadSectionRequest,
   CreateThreadRequest,
+  EditMessageRequest,
+  EditMessageResponse,
   ForkThreadRequest,
   RestartTerminalRequest,
   DeleteThreadSectionRequest,
@@ -275,6 +277,7 @@ import {
   resolvePendingInteractionRequestSchema,
   respondPluginInteractionRequestSchema,
   sendMessageRequestSchema,
+  editMessageRequestSchema,
   setQueuedMessageGroupBoundaryRequestSchema,
   sendQueuedMessageRequestSchema,
   systemExecutionOptionsQuerySchema,
@@ -991,6 +994,14 @@ export const publicApiRoutes = {
         continueAfterProviderRateLimitRequestSchema,
       ),
       response: jsonResponse<ContinueAfterProviderRateLimitResponse>(),
+    }),
+    editMessage: defineRoute({
+      path: "/threads/:id/edit-message",
+      method: "post",
+      request: jsonRequest<PathId, EditMessageRequest>(
+        editMessageRequestSchema,
+      ),
+      response: jsonResponse<EditMessageResponse>(),
     }),
     /** @deprecated App code uses dedicated composer queries. */
     composerBootstrap: defineRoute({

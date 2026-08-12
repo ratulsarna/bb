@@ -1054,6 +1054,21 @@ describe("Tasks RPC domain API", () => {
       title: "Implement nested detail",
       liveStatus: "working",
     });
+    store.tasks.createTask({
+      projectId: project.id,
+      title: "Open top-level follow-up",
+      status: "todo",
+    });
+    store.tasks.createTask({
+      projectId: project.id,
+      title: "Canceled top-level follow-up",
+      status: "canceled",
+    });
+
+    const openCount = tasksRpcContract.sidebarOpenTaskCount.output.parse(
+      await harness.callRpc("sidebarOpenTaskCount", null),
+    );
+    expect(openCount).toEqual({ openTaskCount: 2 });
 
     const summary = tasksRpcContract.sidebarSummary.output.parse(
       await harness.callRpc("sidebarSummary", null),
@@ -1062,7 +1077,7 @@ describe("Tasks RPC domain API", () => {
       projects: [
         {
           projectId: project.id,
-          taskCount: 1,
+          taskCount: 3,
           activeAgentCount: 1,
         },
       ],

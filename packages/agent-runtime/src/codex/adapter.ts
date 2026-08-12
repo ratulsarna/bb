@@ -56,6 +56,7 @@ import type {
   ProviderExecutionContext,
 } from "../provider-adapter.js";
 import { flattenPromptInputGroups } from "../provider-adapter.js";
+import { classifySessionExecutionSettingsChange } from "../execution-options.js";
 import type {
   JsonRpcMessage,
   ProviderInboundRequest,
@@ -103,6 +104,7 @@ type BbThreadStartParams = ThreadStartParams & {
 
 type BbThreadForkParams = {
   threadId: string;
+  lastTurnId?: string | null;
   model?: string | null;
   serviceTier?: string | null;
   cwd?: string | null;
@@ -1792,6 +1794,8 @@ export function createCodexProviderAdapter(
     id: providerInfo.id,
     displayName: providerInfo.displayName,
     capabilities,
+    approvalRequestPolicy: "runtime",
+    classifyExecutionSettingsChange: classifySessionExecutionSettingsChange,
     // Codex app-server connections are owned by the runtime process manager.
     // BB runs live Codex threads on thread-scoped app-server processes, while
     // provider-only probes can still use a provider-scoped maintenance process.
@@ -1907,6 +1911,9 @@ export function createCodexProviderAdapter(
           const preparedGitRoots = prepareWorkspaceWriteGitRoots({ command });
           const params: BbThreadForkParams = {
             threadId: command.sourceProviderThreadId,
+            ...(command.sourceProviderCheckpointId !== undefined
+              ? { lastTurnId: command.sourceProviderCheckpointId }
+              : {}),
             approvalPolicy: preparedGitRoots.permissionSettings.approvalPolicy,
             approvalsReviewer:
               preparedGitRoots.permissionSettings.approvalsReviewer,
@@ -2020,6 +2027,15 @@ export function createCodexProviderAdapter(
               threadId: command.providerThreadId,
               turnId: command.activeTurnId,
             },
+          };
+        case "thread/discard":
+          if (!capabilities.supportsArchive) {
+            return { kind: "noop", reason: "archive unsupported" };
+          }
+          return {
+            kind: "request",
+            method: "thread/archive",
+            params: { threadId: command.providerThreadId },
           };
         case "thread/goal/clear":
           return {

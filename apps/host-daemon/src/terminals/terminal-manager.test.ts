@@ -212,6 +212,10 @@ function createFakeRuntime(): AgentRuntime {
     startThread: vi.fn(async () => ({
       providerThreadId: "provider-thread",
     })),
+    prepareThreadRewind: vi.fn(async () => ({
+      providerThreadId: "provider-thread-rewind",
+    })),
+    discardThreadRewind: vi.fn(async () => undefined),
     resumeThread: vi.fn(async () => ({
       providerThreadId: "provider-thread",
     })),
@@ -1189,6 +1193,25 @@ describe("TerminalManager", () => {
       harness.runtimeManager.evictIdleEnvironments(),
     ).resolves.toEqual(["env-1"]);
     expect(harness.runtime.shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("acknowledges closing a terminal that is already gone", async () => {
+    const harness = createHarness();
+
+    await harness.manager.handleMessage({
+      type: "terminal.close",
+      terminalId: "term-missing",
+      reason: "user",
+    });
+
+    expect(harness.messages).toEqual([
+      {
+        type: "terminal.exited",
+        terminalId: "term-missing",
+        exitCode: null,
+        closeReason: "user",
+      },
+    ]);
   });
 
   it("force kills and cleans up a terminal when node-pty never emits exit", async () => {

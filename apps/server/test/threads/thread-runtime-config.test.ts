@@ -857,6 +857,7 @@ describe("thread runtime config", () => {
 
       setExperiments(harness.db, {
         claudeCodeMockCliTraffic: true,
+        editMessages: false,
         newOnboarding: false,
         toolsHub: false,
       });
@@ -918,7 +919,7 @@ describe("thread runtime config", () => {
     });
   });
 
-  it("disables provider-native subagent tools independently", async () => {
+  it("carries provider-native feature settings independently", async () => {
     await withTestHarness(async (harness) => {
       setAppSettings(harness.db, {
         ...defaultAppSettings,
@@ -971,7 +972,7 @@ describe("thread runtime config", () => {
       const claudeCode = await build("claude-code");
       expect(claudeCode.options.providerSubagentsEnabled).toBe(false);
       expect(claudeCode.options.workflowsEnabled).toBe(false);
-      expect(claudeCode.disallowedTools).toEqual(["Task", "Workflow"]);
+      expect(claudeCode.disallowedTools).toBeUndefined();
     });
   });
 

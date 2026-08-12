@@ -356,6 +356,7 @@ type ExpectedThreadsKey =
   | "conversationOutline"
   | "defaultExecutionOptions"
   | "delete"
+  | "editMessage"
   | "events"
   | "fork"
   | "get"

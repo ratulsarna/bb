@@ -10,9 +10,8 @@
 
 [![npm version](https://img.shields.io/npm/v/bb-app.svg)](https://www.npmjs.com/package/bb-app)
 
-bb is an agentic IDE that can control itself. You can seamlessly
-orchestrate all of your favorite coding agents together and have them
-programmatically use bb too.
+bb is an agentic IDE that builds itself. It can control, customize, and automate
+itself, laying the groundwork for your own software factory.
 
 This package provides the `npx bb-app` launcher, bundled `bb` CLI entry, and
 Node SDK export. Every surface — the web app, CLI, and HTTP API — is a
@@ -174,6 +173,7 @@ Use `bb-app config` for persistent non-secret package settings under
 ```bash
 npx bb-app config set BB_APP_URL https://<machine>.<tailnet>.ts.net
 npx bb-app config set BB_INFERENCE codex/gpt-5.6-luna
+npx bb-app config set BB_INFERENCE_FALLBACK codex/gpt-5.4-mini
 npx bb-app config set BB_TRANSCRIPTION codex/gpt-transcribe
 npx bb-app config list
 npx bb-app config refresh
