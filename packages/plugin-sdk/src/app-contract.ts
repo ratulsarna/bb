@@ -440,7 +440,7 @@ export interface PluginSidebarThread {
   parentThreadId: string | null;
   sectionId: string | null;
   /** How this thread came to exist under its parent; null for root threads. */
-  originKind: "fork" | "side-chat" | null;
+  originKind: "fork" | null;
   /** The plugin that spawned it, or null for non-plugin origins. */
   originPluginId: string | null;
   /** The agent provider this thread runs on, e.g. "codex", "claude-code". */
@@ -1153,6 +1153,13 @@ export interface ThreadChatProps {
  * composer props.
  */
 export interface NewThreadRequest {
+  /**
+   * The selected project id. Choosing "Don't work in a project" submits BB's
+   * personal-project id (not `null`) together with a `personal` workspace
+   * environment. Forward those fields unchanged to `threads.spawn`; if the
+   * plugin needs project metadata, request it from the plugin backend with
+   * `bb.sdk.projects.list({ includePersonal: true })`.
+   */
   projectId: string;
   providerId: string;
   model: string;
@@ -1181,7 +1188,11 @@ export interface NewThreadRequest {
  * exception to the no-host-components rule (§5.5), same additive versioning.
  */
 export interface NewThreadComposerProps {
-  /** Seeds the project picker. The user can change it. */
+  /**
+   * Seeds the project picker. The user can change it, including choosing
+   * "Don't work in a project"; see {@link NewThreadRequest.projectId} for the
+   * submitted projectless shape.
+   */
   defaultProjectId?: string;
   /**
    * Seeds the provider picker. Like every `default*` prop this is a SEED, not

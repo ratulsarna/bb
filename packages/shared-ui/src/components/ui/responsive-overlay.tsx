@@ -2,7 +2,6 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import { Slot } from "@radix-ui/react-slot";
 
-import { Drawer, DrawerContent, DrawerTitle } from "./drawer.js";
 import {
   blurActiveKeyboardInputBeforeOverlayOpen,
   blurActiveKeyboardInputBeforeOverlayClose,
@@ -11,7 +10,6 @@ import {
   preventOverlayTriggerSelection,
 } from "./overlay-trigger.js";
 import { useIsCompactViewport } from "./hooks/use-compact-viewport.js";
-import { usePointerCoarse } from "./hooks/use-pointer-coarse.js";
 import { usePortalScopeProps } from "../../lib/portal-scope.js";
 import { cn } from "../../lib/utils.js";
 
@@ -25,27 +23,13 @@ export interface ResponsiveOverlayContextValue {
   onOpenChange: (open: boolean) => void;
 }
 
-const ResponsiveDrawerDepthContext = React.createContext(0);
-const SONNER_TOASTER_SELECTOR = "[data-sonner-toaster]";
-
-type DrawerContentPointerDownOutsideEvent = Parameters<
-  NonNullable<
-    React.ComponentPropsWithoutRef<typeof DrawerContent>["onPointerDownOutside"]
-  >
->[0];
+const RESPONSIVE_DRAWER_REALIZE_FALLBACK_MS = 120;
 
 function resetDrawerKeyboardStyles(drawerElement: HTMLElement | null): void {
   if (drawerElement === null) return;
 
   drawerElement.style.height = "";
   drawerElement.style.bottom = "";
-}
-
-function isSonnerToasterPointerTarget(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.closest(SONNER_TOASTER_SELECTOR) !== null
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -211,11 +195,10 @@ export function stripRadixContentProps<T extends Record<string, unknown>>(
 }
 
 // ---------------------------------------------------------------------------
-// ResponsiveDrawerShell: shared scaffold for the mobile branch of any
-// responsive overlay. Wraps children in Drawer > DrawerContent, with an
-// optional sr-only DrawerTitle. Callers supply the body (ref, padding,
-// className, etc.) since those differ between Dialog, Popover, DropdownMenu,
-// and ThreadDetailSecondaryContent.
+// ResponsiveDrawerShell: shared scaffold for compact menus, popovers, and
+// dialogs. It uses the persistent shell so opening an overlay never applies
+// modal attributes to the app tree. It also lets the transform start before
+// it mounts the overlay body, then retains that body for later opens.
 // ---------------------------------------------------------------------------
 
 interface ResponsiveDrawerShellProps {
@@ -226,113 +209,102 @@ interface ResponsiveDrawerShellProps {
    * renders its own labeled heading inside children (e.g. DialogTitle).
    */
   srLabel?: string;
-  /** Class name on the DrawerContent wrapper. */
+  /** Existing visible title used to label a dialog body. */
+  labelledBy?: string;
+  /** Existing visible description for a dialog body. */
+  describedBy?: string;
+  /** Class name on the drawer panel. */
   contentClassName?: string;
-  /**
-   * When true, the drawer can only be dragged via the handle bar. Pointer
-   * events on the content area are not consumed by vaul, which would
-   * otherwise call setPointerCapture on the click target and break clicks
-   * inside web components (e.g. Pierre tree's shadow DOM).
-   */
-  handleOnly?: boolean;
-  /**
-   * Whether Vaul should mutate drawer height/bottom around focused inputs when
-   * the visual viewport changes. Defaults off for nested drawers because the
-   * parent drawer cannot distinguish a nested drawer's focused input.
-   */
-  repositionInputs?: boolean;
-  /** Called when the DrawerContent element's own animation completes. */
+  /** Called when the drawer transform completes. */
   onContentAnimationEnd?: (open: boolean) => void;
   children: React.ReactNode;
+}
+
+export function useResponsiveDrawerRealization({
+  open,
+  enabled = true,
+}: {
+  open: boolean;
+  enabled?: boolean;
+}): { isContentRealized: boolean; realizeContent: () => void } {
+  const [isContentRealized, setIsContentRealized] = React.useState(false);
+  const realizeContent = React.useCallback(
+    () => setIsContentRealized(true),
+    [],
+  );
+
+  React.useEffect(() => {
+    if (!enabled || !open || isContentRealized) {
+      return;
+    }
+
+    let firstFrame: number | null = null;
+    let secondFrame: number | null = null;
+    firstFrame = window.requestAnimationFrame(() => {
+      firstFrame = null;
+      secondFrame = window.requestAnimationFrame(() => {
+        secondFrame = null;
+        realizeContent();
+      });
+    });
+    const fallback = window.setTimeout(
+      realizeContent,
+      RESPONSIVE_DRAWER_REALIZE_FALLBACK_MS,
+    );
+
+    return () => {
+      if (firstFrame !== null) {
+        window.cancelAnimationFrame(firstFrame);
+      }
+      if (secondFrame !== null) {
+        window.cancelAnimationFrame(secondFrame);
+      }
+      window.clearTimeout(fallback);
+    };
+  }, [enabled, isContentRealized, open, realizeContent]);
+
+  return {
+    isContentRealized: enabled && isContentRealized,
+    realizeContent,
+  };
 }
 
 export function ResponsiveDrawerShell({
   open,
   onOpenChange,
   srLabel,
+  labelledBy,
+  describedBy,
   contentClassName,
-  handleOnly,
-  repositionInputs,
   onContentAnimationEnd,
   children,
 }: ResponsiveDrawerShellProps) {
-  const parentDrawerDepth = React.useContext(ResponsiveDrawerDepthContext);
-  const drawerContentRef = React.useRef<HTMLDivElement>(null);
-  const isPointerCoarse = usePointerCoarse();
-  const isNestedDrawer = parentDrawerDepth > 0;
-  const shouldRepositionInputs = repositionInputs ?? !isNestedDrawer;
-  const resetClosingKeyboardState = React.useCallback(() => {
-    blurActiveKeyboardInputWithin(drawerContentRef.current);
-    resetDrawerKeyboardStyles(drawerContentRef.current);
-  }, []);
-  const handleOpenChange = React.useCallback(
-    (nextOpen: boolean) => {
-      if (!nextOpen) {
-        resetClosingKeyboardState();
-      }
-      onOpenChange(nextOpen);
-    },
-    [onOpenChange, resetClosingKeyboardState],
-  );
-  const handleContentAnimationEnd = React.useCallback<
-    React.AnimationEventHandler<HTMLDivElement>
-  >(
-    (event) => {
-      if (event.currentTarget !== event.target) {
-        return;
-      }
-      onContentAnimationEnd?.(open);
-    },
-    [onContentAnimationEnd, open],
-  );
-  const handleOpenAutoFocus = React.useCallback(
-    (event: Event) => {
-      if (isPointerCoarse) {
-        event.preventDefault();
-      }
-    },
-    [isPointerCoarse],
-  );
-  const handlePointerDownOutside = React.useCallback(
-    (event: DrawerContentPointerDownOutsideEvent) => {
-      if (isSonnerToasterPointerTarget(event.detail.originalEvent.target)) {
-        event.preventDefault();
-      }
-    },
-    [],
-  );
-  const previousOpenRef = React.useRef(open);
+  const { isContentRealized } = useResponsiveDrawerRealization({ open });
 
-  React.useLayoutEffect(() => {
-    if (previousOpenRef.current && !open) {
-      resetClosingKeyboardState();
-    }
-    previousOpenRef.current = open;
-  }, [open, resetClosingKeyboardState]);
+  if (!open && !isContentRealized) {
+    return null;
+  }
 
   return (
-    <Drawer
+    <PersistentResponsiveDrawerShell
       open={open}
-      onOpenChange={handleOpenChange}
-      handleOnly={handleOnly}
-      nested={isNestedDrawer}
-      repositionInputs={shouldRepositionInputs}
+      onOpenChange={onOpenChange}
+      srLabel={srLabel}
+      labelledBy={labelledBy}
+      describedBy={describedBy}
+      contentClassName={contentClassName}
+      onContentAnimationEnd={onContentAnimationEnd}
     >
-      <DrawerContent
-        ref={drawerContentRef}
-        className={contentClassName}
-        onAnimationEnd={handleContentAnimationEnd}
-        onOpenAutoFocus={handleOpenAutoFocus}
-        onPointerDownOutside={handlePointerDownOutside}
-      >
-        <ResponsiveDrawerDepthContext.Provider value={parentDrawerDepth + 1}>
-          {srLabel !== undefined ? (
-            <DrawerTitle className="sr-only">{srLabel}</DrawerTitle>
-          ) : null}
-          {children}
-        </ResponsiveDrawerDepthContext.Provider>
-      </DrawerContent>
-    </Drawer>
+      {isContentRealized ? (
+        children
+      ) : (
+        <div
+          aria-hidden="true"
+          className="min-h-32"
+          data-responsive-drawer-placeholder=""
+        />
+      )}
+    </PersistentResponsiveDrawerShell>
   );
 }
 
@@ -347,7 +319,9 @@ export function ResponsiveDrawerShell({
 interface PersistentResponsiveDrawerShellProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  srLabel: string;
+  srLabel?: string;
+  labelledBy?: string;
+  describedBy?: string;
   contentClassName?: string;
   motionDurationMs?: number;
   onContentAnimationEnd?: (open: boolean) => void;
@@ -366,6 +340,127 @@ const PERSISTENT_DRAWER_FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(",");
 
+type PersistentDrawerStackEntry = {
+  panel: () => HTMLElement | null;
+  requestClose: () => void;
+};
+
+type PersistentDrawerStack = {
+  entries: PersistentDrawerStackEntry[];
+  handleKeyDown: (event: KeyboardEvent) => void;
+};
+
+const persistentDrawerStacks = new WeakMap<Document, PersistentDrawerStack>();
+
+function getDrawerFocusableElements(panel: HTMLElement): HTMLElement[] {
+  return Array.from(
+    panel.querySelectorAll<HTMLElement>(PERSISTENT_DRAWER_FOCUSABLE_SELECTOR),
+  ).filter(
+    (element) => element.closest('[aria-hidden="true"], [inert]') === null,
+  );
+}
+
+function activeElementIsInAnotherOverlay(
+  activeElement: Element | null,
+  panel: HTMLElement,
+): boolean {
+  const overlay = activeElement?.closest<HTMLElement>(
+    "[data-bb-portaled-overlay]",
+  );
+  return overlay !== null && overlay !== undefined && overlay !== panel;
+}
+
+function handleDrawerTab(event: KeyboardEvent, panel: HTMLElement): void {
+  const activeElement = panel.ownerDocument.activeElement;
+  if (
+    !panel.contains(activeElement) &&
+    activeElementIsInAnotherOverlay(activeElement, panel)
+  ) {
+    return;
+  }
+
+  const focusable = getDrawerFocusableElements(panel);
+  event.preventDefault();
+  if (focusable.length === 0) {
+    panel.focus({ preventScroll: true });
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey) {
+    if (
+      !panel.contains(activeElement) ||
+      activeElement === panel ||
+      activeElement === first
+    ) {
+      last?.focus({ preventScroll: true });
+      return;
+    }
+    const index = focusable.indexOf(activeElement as HTMLElement);
+    focusable[Math.max(0, index - 1)]?.focus({ preventScroll: true });
+    return;
+  }
+
+  if (
+    !panel.contains(activeElement) ||
+    activeElement === panel ||
+    activeElement === last
+  ) {
+    first?.focus({ preventScroll: true });
+    return;
+  }
+  const index = focusable.indexOf(activeElement as HTMLElement);
+  focusable[Math.min(focusable.length - 1, index + 1)]?.focus({
+    preventScroll: true,
+  });
+}
+
+function registerOpenDrawer(
+  ownerDocument: Document,
+  entry: PersistentDrawerStackEntry,
+): () => void {
+  let stack = persistentDrawerStacks.get(ownerDocument);
+  if (stack === undefined) {
+    const entries: PersistentDrawerStackEntry[] = [];
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+      const topEntry = entries[entries.length - 1];
+      const panel = topEntry?.panel() ?? null;
+      if (topEntry === undefined || panel === null) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        topEntry.requestClose();
+      } else if (event.key === "Tab") {
+        handleDrawerTab(event, panel);
+      }
+    };
+    stack = { entries, handleKeyDown };
+    persistentDrawerStacks.set(ownerDocument, stack);
+    ownerDocument.addEventListener("keydown", handleKeyDown);
+  }
+  stack.entries.push(entry);
+
+  return () => {
+    const currentStack = persistentDrawerStacks.get(ownerDocument);
+    if (currentStack === undefined) {
+      return;
+    }
+    const index = currentStack.entries.indexOf(entry);
+    if (index >= 0) {
+      currentStack.entries.splice(index, 1);
+    }
+    if (currentStack.entries.length === 0) {
+      ownerDocument.removeEventListener("keydown", currentStack.handleKeyDown);
+      persistentDrawerStacks.delete(ownerDocument);
+    }
+  };
+}
+
 type PersistentDrawerDrag = {
   pointerId: number;
   startY: number;
@@ -379,18 +474,19 @@ export function PersistentResponsiveDrawerShell({
   open,
   onOpenChange,
   srLabel,
+  labelledBy,
+  describedBy,
   contentClassName,
   motionDurationMs = 220,
   onContentAnimationEnd,
   children,
 }: PersistentResponsiveDrawerShellProps) {
-  const parentDrawerDepth = React.useContext(ResponsiveDrawerDepthContext);
   const panelRef = React.useRef<HTMLDivElement>(null);
   const backdropRef = React.useRef<HTMLDivElement>(null);
   const dragRef = React.useRef<PersistentDrawerDrag | null>(null);
+  const returnFocusRef = React.useRef<HTMLElement | null>(null);
   const settledStateRef = React.useRef<boolean | null>(null);
   const labelId = React.useId();
-  const isPointerCoarse = usePointerCoarse();
   const portalScopeProps = usePortalScopeProps();
   const transition = `transform ${motionDurationMs}ms ${PERSISTENT_DRAWER_EASING}`;
   const backdropTransition = `opacity ${motionDurationMs}ms ${PERSISTENT_DRAWER_EASING}`;
@@ -424,85 +520,42 @@ export function PersistentResponsiveDrawerShell({
     return () => window.clearTimeout(timeout);
   }, [motionDurationMs, open, reportSettled]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!open) {
       return;
     }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) {
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        requestClose();
-        return;
-      }
-      if (event.key !== "Tab") {
-        return;
-      }
-
-      const panel = panelRef.current;
-      if (panel === null) {
-        return;
-      }
-      const activeElement = panel.ownerDocument.activeElement;
-      if (
-        activeElement !== panel.ownerDocument.body &&
-        !panel.contains(activeElement)
-      ) {
-        return;
-      }
-      const focusable = Array.from(
-        panel.querySelectorAll<HTMLElement>(
-          PERSISTENT_DRAWER_FOCUSABLE_SELECTOR,
-        ),
-      ).filter((element) => element.getAttribute("aria-hidden") !== "true");
-      if (focusable.length === 0) {
-        event.preventDefault();
-        panel.focus({ preventScroll: true });
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (
-        event.shiftKey &&
-        (activeElement === first ||
-          activeElement === panel ||
-          activeElement === panel.ownerDocument.body)
-      ) {
-        event.preventDefault();
-        last?.focus({ preventScroll: true });
-      } else if (
-        !event.shiftKey &&
-        (activeElement === last || activeElement === panel.ownerDocument.body)
-      ) {
-        event.preventDefault();
-        first?.focus({ preventScroll: true });
-      }
-    };
-
-    document.addEventListener("keydown", handleKeyDown);
-    let focusFrame: number | null = null;
-    if (!isPointerCoarse) {
-      focusFrame = window.requestAnimationFrame(() => {
-        panelRef.current?.focus({ preventScroll: true });
-      });
+    const panel = panelRef.current;
+    if (panel === null) {
+      return;
     }
+    const ownerDocument = panel.ownerDocument;
+    const previousFocus = ownerDocument.activeElement;
+    returnFocusRef.current =
+      previousFocus instanceof HTMLElement ? previousFocus : null;
+    const unregister = registerOpenDrawer(ownerDocument, {
+      panel: () => panelRef.current,
+      requestClose,
+    });
+    panel.focus({ preventScroll: true });
+
     return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      if (focusFrame !== null) {
-        window.cancelAnimationFrame(focusFrame);
-      }
+      unregister();
     };
-  }, [isPointerCoarse, open, requestClose]);
+  }, [open, requestClose]);
 
   const previousOpenRef = React.useRef(open);
   React.useLayoutEffect(() => {
     if (previousOpenRef.current && !open) {
       blurActiveKeyboardInputWithin(panelRef.current);
       resetDrawerKeyboardStyles(panelRef.current);
+      const returnFocus = returnFocusRef.current;
+      if (
+        returnFocus?.isConnected &&
+        returnFocus.closest('[aria-hidden="true"], [inert]') === null
+      ) {
+        returnFocus.focus({ preventScroll: true });
+      }
+      returnFocusRef.current = null;
     }
     previousOpenRef.current = open;
   }, [open]);
@@ -618,8 +671,12 @@ export function PersistentResponsiveDrawerShell({
         ref={panelRef}
         {...portalScopeProps}
         aria-hidden={!open}
-        aria-labelledby={labelId}
+        aria-labelledby={
+          labelledBy ?? (srLabel === undefined ? undefined : labelId)
+        }
+        aria-describedby={describedBy}
         aria-modal={open || undefined}
+        data-bb-portaled-overlay=""
         data-persistent-drawer-content=""
         data-state={open ? "open" : "closed"}
         inert={!open}
@@ -632,7 +689,7 @@ export function PersistentResponsiveDrawerShell({
         style={{
           transform: open ? "translate3d(0, 0, 0)" : "translate3d(0, 100%, 0)",
           transition,
-          willChange: "transform",
+          willChange: open ? "transform" : undefined,
         }}
         onTransitionEnd={(event) => {
           if (
@@ -653,12 +710,12 @@ export function PersistentResponsiveDrawerShell({
         >
           <div className="h-1 w-10 rounded-full bg-muted-foreground/20" />
         </div>
-        <h2 id={labelId} className="sr-only">
-          {srLabel}
-        </h2>
-        <ResponsiveDrawerDepthContext.Provider value={parentDrawerDepth + 1}>
-          {children}
-        </ResponsiveDrawerDepthContext.Provider>
+        {srLabel === undefined ? null : (
+          <h2 id={labelId} className="sr-only">
+            {srLabel}
+          </h2>
+        )}
+        {children}
       </div>
     </>,
     portalTarget,

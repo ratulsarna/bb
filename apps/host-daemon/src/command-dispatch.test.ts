@@ -190,6 +190,7 @@ function createRuntime(): FakeDispatchRuntime {
     stopThread: vi.fn(async (args: { threadId: string }) => {
       activeTurnsByThreadId.delete(args.threadId);
       hostedThreadIds.delete(args.threadId);
+      return { providerCheckpointId: null };
     }),
     clearThreadGoal: vi.fn(async () => ({ cleared: true })),
     renameThread: vi.fn(async () => undefined),
@@ -349,8 +350,9 @@ describe("dispatchCommand", () => {
       },
       runtimeManager: manager,
       threadStorageRootPath: "/tmp/bb-thread-storage",
-    }).then(() => {
+    }).then((result) => {
       resolved = true;
+      return result;
     });
 
     await vi.waitFor(() => {
@@ -360,7 +362,9 @@ describe("dispatchCommand", () => {
     expect(resolved).toBe(false);
 
     flushDeferred.resolve(undefined);
-    await dispatchPromise;
+    await expect(dispatchPromise).resolves.toEqual({
+      providerCheckpointId: null,
+    });
 
     expect(resolved).toBe(true);
     expect(runtime.hasThread("thread-1")).toBe(false);
@@ -632,6 +636,9 @@ describe("dispatchCommand", () => {
       workspacePath: "/tmp/bb-stop-old",
     });
     oldRuntime.setActiveTurn("thread-1", "turn-old");
+    (oldRuntime.stopThread as Mock).mockResolvedValueOnce({
+      providerCheckpointId: "pi-entry-at-stop",
+    });
 
     // The thread already points at its new environment, which the daemon has
     // never loaded. The stop must still reach the turn in the old runtime.
@@ -652,7 +659,7 @@ describe("dispatchCommand", () => {
       threadStorageRootPath: "/tmp/bb-thread-storage",
     });
 
-    expect(result).toEqual({});
+    expect(result).toEqual({ providerCheckpointId: "pi-entry-at-stop" });
     expect(oldRuntime.stopThread).toHaveBeenCalledWith({
       threadId: "thread-1",
     });
@@ -1570,5 +1577,55 @@ describe("dispatchCommand", () => {
     expect(fixture.manager.get("env-1")?.skillCatalogHash).toBe(
       fixture.originalCatalogHash,
     );
+  });
+
+  it("detects known ACP agents on the resolved user shell PATH, not the daemon's process PATH", async () => {
+    // Regression: known_acp_agents.status must query `which` with the user's
+    // resolved login-shell PATH (like provider_cli.status), otherwise ACP CLIs
+    // installed only on the login PATH — e.g. Hermes' `hermes` under
+    // ~/.local/bin — are invisible to a daemon launched by launchd/systemd with
+    // a stripped PATH.
+    const binDir = await makeTempDir("bb-acp-shell-path-");
+    const executableName = `bb-acp-probe-${process.pid}`;
+    const executablePath = path.join(binDir, executableName);
+    await fs.writeFile(executablePath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    const runtime = createRuntime();
+    const manager = new RuntimeManager({
+      createRuntime: () => runtime,
+      provisionWorkspace: async () => createWorkspace(),
+    });
+    // The probe executable exists ONLY on the shell PATH the manager reports,
+    // never on process.env.PATH, so a detection that ignores the shell env
+    // fails to find it. System bin dirs stay on PATH so `which` itself resolves;
+    // only binDir (the stand-in for ~/.local/bin) is exclusive to the shell env.
+    manager.replaceManagedShellEnv({ PATH: `${binDir}:/usr/bin:/bin` });
+
+    const result = await dispatchOnlineRpcCommand(
+      {
+        type: "known_acp_agents.status",
+        agents: [{ id: "acp-probe", executableName }],
+      },
+      {
+        dataDir: "/tmp/bb-data",
+        eventSink: { emit: vi.fn(), flush: vi.fn(async () => undefined) },
+        fetchProjectAttachment: async () => {
+          throw new Error("Unexpected project attachment fetch");
+        },
+        runtimeManager: manager,
+        threadStorageRootPath: "/tmp/bb-thread-storage",
+      },
+    );
+
+    expect(result).toEqual({
+      agents: [
+        {
+          id: "acp-probe",
+          executableName,
+          installed: true,
+          executablePath,
+        },
+      ],
+    });
   });
 });

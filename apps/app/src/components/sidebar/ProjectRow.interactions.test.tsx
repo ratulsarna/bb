@@ -68,6 +68,18 @@ vi.mock("@/components/project/ProjectActionsProvider", () => ({
   }),
 }));
 
+vi.mock("@/components/thread/ThreadActionsProvider", () => ({
+  useThreadActions: () => ({
+    renameThread: vi.fn(),
+    requestRename: vi.fn(),
+    requestDelete: vi.fn(),
+    archiveThreadAndChildren: vi.fn(),
+    unarchiveThread: vi.fn(),
+    togglePin: vi.fn(),
+    toggleRead: vi.fn(),
+  }),
+}));
+
 function makeProject(): ProjectResponse {
   return {
     id: "proj_test",
@@ -95,7 +107,6 @@ function makeThread(overrides: Partial<ThreadListEntry> = {}): ThreadListEntry {
     originKind: null,
     originPluginId: null,
     visibility: "visible",
-    childOrigin: null,
     archivedAt: null,
     pinnedAt: null,
     pinSortKey: null,

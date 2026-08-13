@@ -184,38 +184,48 @@ before bb receives them.
 pane shortcuts follow Slack's browser-safe convention: web uses
 `Control+1…9` on macOS and `Ctrl+Shift+1…9` on Windows/Linux, while desktop
 uses `Mod+1…9`. The web aliases leave native browser `Mod+1…9` tab switching
-untouched.
+untouched. Previous and next thread use `Mod+Shift+[/]` on desktop and
+`Control+Shift+[/]` on the web.
 
 The "Show keyboard hints when holding CMD / Control" preference defaults
 to on. Set it with
 `bb settings keyboard hints <true|false>`. Turning it off hides the
 delayed shortcut badges without disabling any shortcuts.
 
-| Area      | Command                       | Default                           | Availability             |
-| --------- | ----------------------------- | --------------------------------- | ------------------------ |
-| Threads   | New thread                    | `Mod+N` / `Mod+Shift+O`           | Desktop / web            |
-| Threads   | Search threads                | `Mod+K`                           | All clients              |
-| Threads   | Rename focused thread         | Unassigned                        | Thread view              |
-| Threads   | Archive focused thread        | Unassigned                        | Thread view              |
-| Threads   | Previous / next thread        | `Mod+Shift+[/]` / `Mod+Shift+↑/↓` | Desktop / web            |
-| Threads   | Open visible thread 1–9       | Platform defaults above           | Web / desktop            |
-| Layout    | Previous / next chat pane     | `Mod+Shift+[/]`                   | While split              |
-| Layout    | Focus chat pane 1–8           | Platform defaults above           | Split (web / desktop)    |
-| Layout    | Maximize / restore chat pane  | `Mod+Shift+E`                     | While split              |
-| Layout    | Close focused chat pane       | `Mod+Shift+X`                     | While split              |
-| Window    | New window                    | `Mod+Shift+N`                     | Desktop                  |
-| Window    | Settings                      | `Mod+,`                           | All clients              |
-| Layout    | Toggle sidebar                | `Mod+\`                           | All clients              |
-| Panel     | New tab / close tab / toggle  | `Mod+T` / `Mod+W` / `Mod+J`       | All clients              |
-| Workspace | Quick open file / toggle diff | `Mod+P` / `Mod+D`                 | All clients              |
-| Workspace | Open terminal                 | `Mod+Shift+Enter` / `Mod+Shift+T` | Web / desktop            |
-| Workspace | Open in preferred app         | `Mod+O`                           | All clients              |
-| Composer  | Focus composer                | `Mod+Shift+C`                     | All clients              |
-| Composer  | Toggle model picker           | `Mod+Shift+M`                     | All clients              |
-| Composer  | Next model                    | `Alt+M`                           | All clients              |
-| Composer  | Next reasoning level          | `Alt+T`                           | All clients              |
-| Browser   | Focus location / reload       | `Mod+L` / `Mod+R`                 | Desktop embedded browser |
-| Questions | Choose visible answer 1–9     | `1` … `9`                         | While a question is open |
+| Area      | Command                            | Default                           | Availability             |
+| --------- | ---------------------------------- | --------------------------------- | ------------------------ |
+| Threads   | New thread                         | `Mod+N` / `Mod+Shift+O`           | Desktop / web            |
+| Threads   | Search threads                     | `Mod+K`                           | All clients              |
+| Threads   | Rename focused thread              | Unassigned                        | Thread view              |
+| Threads   | Archive focused thread             | Unassigned                        | Thread view              |
+| Threads   | Previous / next thread             | Surface defaults above            | Desktop / web            |
+| Threads   | Open visible thread 1–9            | Platform defaults above           | Web / desktop            |
+| Layout    | Previous / next chat pane          | Unassigned                        | While split              |
+| Layout    | Focus chat pane 1–8                | Platform defaults above           | Split (web / desktop)    |
+| Layout    | Maximize / restore chat pane       | `Mod+Shift+E`                     | While split              |
+| Layout    | Close focused chat pane            | `Mod+Shift+X`                     | While split              |
+| Window    | New window                         | `Mod+Shift+N`                     | Desktop                  |
+| Window    | Settings                           | `Mod+,`                           | All clients              |
+| Layout    | Toggle sidebar                     | `Mod+\`                           | All clients              |
+| Panel     | New tab / close tab / toggle       | `Mod+T` / `Mod+W` / `Mod+J`       | All clients              |
+| Workspace | Quick open file / toggle diff      | `Mod+P` / `Mod+D`                 | All clients              |
+| Workspace | Open terminal                      | `Mod+Shift+Enter` / `Mod+Shift+T` | Web / desktop            |
+| Workspace | Open in preferred app              | `Mod+O`                           | All clients              |
+| Composer  | Focus composer                     | `Mod+Shift+C`                     | All clients              |
+| Composer  | Toggle model picker                | `Mod+Shift+M`                     | All clients              |
+| Composer  | Cycle model forward / backward     | `Alt+M` / `Alt+Shift+M`           | All clients              |
+| Composer  | Cycle provider forward / backward  | `Alt+P` / `Alt+Shift+P`           | All clients              |
+| Composer  | Cycle reasoning effort forward / backward | `Alt+T` / `Alt+Shift+T`    | All clients              |
+| Browser   | Focus location / reload            | `Mod+L` / `Mod+R`                 | Desktop embedded browser |
+| Questions | Choose visible answer 1–9          | `1` … `9`                         | While a question is open |
+
+Cycle commands wrap in both directions. Reasoning cycles only through the
+current model's supported efforts in canonical low-to-high rank order, not the
+provider response order. The cycle shortcuts act only from the active composer
+or an open picker; unrelated editable controls retain their Option-composed
+character input. A configured app shortcut takes precedence in editable
+controls; when no matching command handles a chord, the control retains its
+native behavior.
 
 The desktop application menu uses the same resolved bindings for New Thread,
 New Window, New Tab, Close, and Settings. There is no separate menu shortcut
@@ -513,13 +523,15 @@ machine. The current value is readable through the host API and
 Machine installation and daemon protocol repair use the owning server as the
 distribution source: `/install/version` reports the server package/protocol and
 `/install/bb-app.tgz` serves its exact installable package. The installer falls
-back to npm only when the package route returns 404. Installed services enable
-`--auto-update`; remove that flag from the launchd plist or systemd user unit
-and reload the service to opt out. Updates only move to a newer server protocol,
-retry failures with a persisted exponential backoff from 5 seconds to 5
-minutes, and never downgrade a daemon. Settings → Machines and `bb machine
-retry-update <id-or-name>` can bypass the current backoff after a transient
-failure.
+back to the npm registry only when the package route returns 404. It installs
+the package under the machine's bb data directory rather than npm's system-wide
+prefix, so enrollment needs neither `sudo` nor a global npm configuration.
+Installed services enable `--auto-update`; remove that flag from the launchd
+plist or systemd user unit and reload the service to opt out. Updates only move
+to a newer server protocol, retry failures with a persisted exponential backoff
+from 5 seconds to 5 minutes, and never downgrade a daemon. Settings → Machines
+and `bb machine retry-update <id-or-name>` can bypass the current backoff after
+a transient failure.
 
 ## Thread splits
 
@@ -535,11 +547,13 @@ viewports show the ordinary single-page surface while preserving that desktop
 layout state.
 It also enables explicit split placement through
 `bb thread open <thread-id> --split right|down|left|top|replace` and the matching
-SDK request, plus ephemeral maximize/restore delivery through
-`bb thread pane maximize|restore|toggle [thread-id]` and
+SDK request, plus pane presentation controls through
+`bb thread pane maximize|restore|toggle|spotlight|clear-spotlight [thread-id]` and
 `sdk.threads.paneAction({ threadId, action })`. Pane actions apply only when the
 target thread is already open in a multi-pane app window; the response reports
-how many connected clients received the broadcast.
+how many connected clients received the broadcast. `spotlight` focuses the
+target pane and persistently dims the others; `clear-spotlight` focuses it and
+persistently restores undimmed splits.
 
 ## bb connect
 
@@ -578,18 +592,21 @@ ports).
 
 ## Experiments
 
-Experimental surfaces are off by default and can be changed in Settings →
-Experiments or with `bb settings experiment <key> <true|false>`. The
-`newOnboarding` experiment exposes the first-run agent and project setup guide.
+Experimental surfaces are changed in Settings → Experiments or with
+`bb settings experiment <key> <true|false>`. Most start off; `editMessages`
+starts on and its toggle is the opt-out. The `newOnboarding` experiment exposes
+the first-run agent and project setup guide.
 The `toolsHub` experiment exposes Extensions for managing skills and plugins,
 while Automations stays in the Plugins section beside threads. The `toolsHub`
 gate only controls the UI. Installed skills, automation execution, plugin
 runtimes, CLI commands, and backend APIs keep working while it is off.
-The `editMessages` experiment enables replacing an eligible, successfully
-completed root user message in an idle Codex, Claude Code, or Pi thread.
-Grouped multi-message requests are not yet editable. Opening the editor does
-not change history; submission atomically replaces that message and every later
-turn while keeping workspace changes.
+The `editMessages` experiment is on by default and enables replacing an
+eligible, accepted root user message in a Codex, Claude Code, or Pi thread,
+including failed or incomplete turns. Turn it off to hide the editor. Grouped
+multi-message requests are not yet editable. Opening the editor does not change
+history; if the thread is running, submission stops the current turn and waits
+for it to settle before atomically replacing that message and every later turn
+while keeping workspace changes.
 
 ## Thread Timeline Window
 
@@ -685,11 +702,14 @@ bb plugin config provider-retry set maximumWait "24 hours"
 
 Pending waits are coordinated by machine/provider subscription and live only
 in the current server/plugin process. Restarting bb, reloading the plugin, or
-disabling it clears the timers without changing the original failed thread.
+disabling it clears the timers without changing the original failed thread. A
+later 429 without a fresh provider rate-limit update can still inherit the last
+blocked window during that process.
 Inspect them with `bb provider-retry status`, or cancel one from its composer
 banner or with `bb provider-retry cancel <thread-id>`. `bb thread retry`
-remains the manual recovery path. Credit or spend-control exhaustion without a
-reset time is ignored by the plugin.
+remains the manual recovery path and is labeled as manually requested in the
+timeline rather than claiming the reset occurred. Credit or spend-control
+exhaustion without a reset time is ignored by the plugin.
 
 ### Workflows plugin
 
@@ -758,8 +778,16 @@ wildcard-bound server to an untrusted network. The only accepted bind hosts are
 `127.0.0.1` and `0.0.0.0`; this startup-only setting is not available through
 `bb-app config`.
 
+The startup `Server listening` and `app` lines show the actual listener address.
+With wildcard binding they show `http://0.0.0.0:<port>`, while bb's health check
+and colocated host daemon continue to connect through `127.0.0.1`. That local
+connection does not narrow the listener. `0.0.0.0` exposes IPv4 interfaces only;
+bb does not currently offer an IPv6 wildcard bind option.
+
 The data directory is the root directory for all bb-managed state: the SQLite
-database, logs, host identity, thread storage, custom themes (`theme/`), and
+database, logs, host identity, thread storage, custom themes (`theme/`,
+including optional Pierre / VS Code `pierre-dark.json` and `pierre-light.json`),
+and
 plugins. It defaults to `~/.bb/` for the packaged app. The `pnpm dev` source launcher derives an isolated data
 directory under `~/.bb-dev/<checkout-instance>/` from the checkout path. The
 checkout instance id is the sanitized path to the checkout, relative to your

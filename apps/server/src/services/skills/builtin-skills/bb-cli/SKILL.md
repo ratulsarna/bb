@@ -24,7 +24,10 @@ message agents, or inspect projects, providers, and environments.
   connect or a private Tailscale Serve URL for remote browsers and execution
   machines. `--server-bind-host 0.0.0.0` is a compatibility escape hatch only:
   the public API is unauthenticated and permits command execution and file
-  reads, so wildcard binding requires a trusted network boundary.
+  reads, so wildcard binding requires a trusted network boundary. The startup
+  listener and `app` rows then show `http://0.0.0.0:<port>`; health checks and
+  the colocated daemon still use loopback. This opt-in is IPv4-only. Containers
+  must also publish the port to the host.
 
 ## Environment Setup Script
 
@@ -105,8 +108,10 @@ message agents, or inspect projects, providers, and environments.
   project setup guide. Change it with
   `bb settings experiment newOnboarding <true|false>`. Use
   `bb settings replay-onboarding` to enable it and show the guide again.
-- The default-off `editMessages` experiment allows completed user messages in
-  Codex, Claude Code, and Pi threads to be replaced and rerun. Change it with
+- The default-on `editMessages` experiment allows accepted root user messages
+  in Codex, Claude Code, and Pi threads to be replaced and rerun, including
+  failed or incomplete turns. Submitting an edit to a running thread stops and
+  settles the current turn first. Change it with:
   `bb settings experiment editMessages <true|false>`.
 - Thread timeline windows are capped by event count as well as by user-message
   count (`BB_FF_TIMELINE_WINDOW_EVENT_BUDGET`, default 1500), because a thread
@@ -212,13 +217,14 @@ isolated|reuse`, or anchor with `--source-seq-end`. Permission mode inherits
   installer stores the bb connect machine credential locally and configures
   both the daemon protocol and agent-launched `bb` CLI to traverse the account
   gate; revoke a lost machine from the getbb.app dashboard. The installer uses
-  the server's exact `/install/bb-app.tgz` artifact (npm only on a 404) and
-  enables daemon `--auto-update`; newer protocol mismatches update from that
-  artifact with a persisted exponential retry backoff from 5 seconds to 5
-  minutes, then let launchd/systemd restart the daemon. Auto-update never
-  downgrades. Use `bb machine retry-update <id-or-name>` to bypass the current
-  backoff after a transient failure. Remove `--auto-update` from the service
-  definition and reload it to opt out.
+  the server's exact `/install/bb-app.tgz` artifact and uses the npm registry
+  only on a 404. It installs under the enrollment's bb data directory, without
+  `sudo` or a global npm configuration, and enables daemon `--auto-update`.
+  Newer protocol mismatches update that private install with a persisted
+  exponential retry backoff from 5 seconds to 5 minutes, then let
+  launchd/systemd restart the daemon. Auto-update never downgrades. To bypass a
+  transient backoff, use `bb machine retry-update <id-or-name>`. Remove
+  `--auto-update` from the service definition and reload it to opt out.
 - Run `bb machine list` to see machine names, IDs, connection status, and last
   seen time (`--json` returns the raw host list). Use `--machine <id-or-name>`
   (alias `--host`) on `bb thread spawn` to run in a personal or unmanaged
@@ -344,12 +350,14 @@ or artifacts, validation performed, and blockers.
 - Use `bb thread tell <thread-id> "..."` when requirements change, a blocker
   needs clarification, or follow-up work is needed.
 - Use `bb thread edit-message <thread-id> --message "..."` to replace and rerun
-  the latest completed user message in an idle Codex, Claude Code, or Pi thread.
-  Pass `--expected-request-sequence <sequence>` to select an earlier message.
-  Opening edit mode in the app is non-destructive; history changes only when the
-  edit is submitted successfully, and workspace changes remain. When an agent
-  edits another thread, the CLI carries its `BB_THREAD_ID` so the replacement
-  runs under agent permission policy.
+  the latest eligible user message in a Codex, Claude Code, or Pi thread. Pass
+  `--expected-request-sequence <sequence>` to select an earlier message. Failed
+  and incomplete turns are eligible; submitting against a running thread stops
+  and settles its current turn first. Opening edit mode in the app is
+  non-destructive; history changes only when the edit is submitted successfully,
+  and workspace changes remain. When an agent edits another thread, the CLI
+  carries its `BB_THREAD_ID` so the replacement runs under agent permission
+  policy.
 - `bb thread tell` steers by default, delivering the message immediately into
   the active turn. Use `--mode queue` when the message is non-urgent and the
   agent can finish its current work first. Steer is especially important for a
@@ -388,10 +396,12 @@ For review or fix pipelines, get the environment ID from
   target thread workspace.
 - Absolute paths under `BB_THREAD_STORAGE` open as thread-storage files for the
   current thread.
-- Use `bb thread pane maximize|restore|toggle [thread-id]` to change a matching
-  already-open pane in every connected BB app window. Inside a BB thread, omit
-  the id to use `BB_THREAD_ID`. The command reports how many connected clients
-  received the ephemeral action. The SDK equivalent is
+- Use `bb thread pane maximize|restore|toggle|spotlight|clear-spotlight
+[thread-id]` to change a matching already-open pane in every connected BB app
+  window. `spotlight` focuses that pane and dims the others; `clear-spotlight`
+  focuses it and removes split dimming. Inside a BB thread, omit the id to use
+  `BB_THREAD_ID`. The command reports how many connected clients received the
+  ephemeral action. The SDK equivalent is
   `sdk.threads.paneAction({ threadId, action })`.
 - Users can also toggle the focused pane from its header or with the configurable
   `pane.maximize.toggle` app command (default `Mod+Shift+E`).
@@ -442,12 +452,15 @@ For review or fix pipelines, get the environment ID from
   configure longer waits with
   `bb plugin config provider-retry set maximumWait "24 hours"` or select
   `No limit` in the plugin settings. Resets beyond the configured horizon are
-  not scheduled.
+  not scheduled. Each reported reset window is attempted automatically at most
+  once during that process. A later failed turn that omits a fresh rate-limit
+  update can still inherit the last blocked window.
 - Use `bb thread retry [id] [--request-id <id>]` for the same core
   continuation when no plugin timer remains. It sends agent-only “Please
-  continue.” on the existing provider conversation and declines when input was
-  not accepted, execution settings are unavailable, a newer request exists, or
-  the provider still owns the retry.
+  continue.” on the existing provider conversation, records the continuation
+  as manually requested, and declines when input was not accepted, execution
+  settings are unavailable, a newer request exists, or the provider still owns
+  the retry.
 - For interrupted or stopped threads, inspect first. If the user stopped the
   thread, treat that as intentional unless they ask you to continue.
 - Use `bb thread stop <id>` when a thread is stuck or no longer needed.
@@ -669,6 +682,17 @@ This is the BB habit: custom app-theme work belongs in
    id). To edit an existing theme, change its `theme.css` in place.
 3. Activate it: `bb theme set <name>`. Changes apply live to every open window.
 
+Code colors follow the active palette. Built-in palettes use the matching
+Shiki pair (Nord, Dracula, Solarized, Gruvbox, Catppuccin). To restyle diffs
+for a custom palette, put Pierre / VS Code theme JSON next to the stylesheet:
+
+- `pierre-dark.json` and `pierre-light.json` in the same folder, or
+- `theme.json` with `{ "codeTheme": { "dark": "…", "light": "…" } }` — each
+  side is a bundled Shiki name (`github-dark`) or a folder-relative `.json`
+  file.
+
+See [Pierre theme authoring](https://diffs.com/theme) for the JSON shape.
+
 To author the stylesheet, **read `references/theming.md` (in this skill's
 directory) first.** It is the full design-token reference — what every CSS
 variable drives, which tokens to set vs. which auto-derive — plus the two-block
@@ -736,7 +760,7 @@ them by mixing ink into canvas), the `--primary` accent, the secondary text tier
   - `bb plugin run <id> [args...]` — explicit form of a plugin's CLI command.
   - `bb plugin new <name> [--app]` — scaffold a plugin and install its npm
     dependencies (`--app` adds a frontend entry plus a typecheck-only
-    `tsconfig.json`; scaffold sets `engines.bbPluginSdk` to `^0.4.1`). The
+    `tsconfig.json`; scaffold sets `engines.bbPluginSdk` to `^0.4.2`). The
     install is best-effort and verified: if npm is missing or leaves a package
     out, it says so and prints the manual `npm install --include=dev` step
     rather than reporting success; `bb plugin build [path]` —

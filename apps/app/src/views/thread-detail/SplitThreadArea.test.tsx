@@ -17,7 +17,13 @@ import { TooltipProvider } from "@bb/shared-ui/tooltip";
 import type { BbDesktopInfo } from "@bb/desktop-contract";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQueryClientTestHarness } from "@/test/queryClientTestHarness";
-import { maximizedPaneIdAtom, splitLayoutAtom } from "@/lib/split-layout/atoms";
+import {
+  DIM_INACTIVE_SPLITS_STORAGE_KEY,
+  dimInactiveSplitsAtom,
+  maximizedPaneIdAtom,
+  splitLayoutAtom,
+} from "@/lib/split-layout/atoms";
+import { wsManager } from "@/lib/ws";
 import {
   listPanes,
   movePane,
@@ -38,6 +44,7 @@ import {
 } from "@/components/plugin/plugin-composer-host";
 import { PaneContext, usePaneSecondaryPanelRegistration } from "./PaneContext";
 import { SplitThreadArea } from "./SplitThreadArea";
+import { SplitDimmingButton } from "./SplitDimmingButton";
 import { applyThreadOpenToLayout } from "./splitThreadNavigation";
 
 // Per-thread archived/deleted state consulted by the mocked useThread, driving
@@ -261,6 +268,7 @@ vi.mock("./ThreadDetailView", () => ({
         data-focused={pane?.isFocused ? "true" : "false"}
         data-window-top-left-owner={pane?.ownsWindowTopLeft ? "true" : "false"}
       >
+        {pane?.isSplitPane ? <SplitDimmingButton /> : null}
         <div
           data-testid={`drag-${threadId}`}
           onPointerDown={(event) => pane?.beginPaneDrag?.(event, threadId)}
@@ -516,7 +524,7 @@ function renderSplitArea(options: {
     store.set(maximizedPaneIdAtom, options.maximizedPaneId);
   }
   render(
-    <TooltipProvider>
+    <TooltipProvider delayDuration={0}>
       <JotaiProvider store={store}>
         <QueryClientProvider client={queryClient}>
           <MemoryRouter initialEntries={[options.path]}>
@@ -561,6 +569,55 @@ afterEach(() => {
 });
 
 describe("SplitThreadArea", () => {
+  it("applies spotlight pane actions to the targeted open split and preference", async () => {
+    const store = renderSplitArea({
+      path: threadPath("thr-b"),
+      layout: twoPaneLayout("pane-2"),
+    });
+    store.set(dimInactiveSplitsAtom, false);
+
+    act(() => {
+      wsManager.handleIncomingMessage(
+        JSON.stringify({
+          type: "thread-pane-action",
+          projectId: PERSONAL_PROJECT_ID,
+          threadId: "thr-a",
+          action: "spotlight",
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(store.get(splitLayoutAtom)?.focusedPaneId).toBe("pane-1");
+      expect(store.get(dimInactiveSplitsAtom)).toBe(true);
+      expect(screen.getByTestId("location").textContent).toBe(
+        threadPath("thr-a"),
+      );
+    });
+
+    act(() => {
+      wsManager.handleIncomingMessage(
+        JSON.stringify({
+          type: "thread-pane-action",
+          projectId: PERSONAL_PROJECT_ID,
+          threadId: "thr-b",
+          action: "clear-spotlight",
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(store.get(splitLayoutAtom)?.focusedPaneId).toBe("pane-2");
+      expect(store.get(dimInactiveSplitsAtom)).toBe(false);
+      expect(screen.getByTestId("location").textContent).toBe(
+        threadPath("thr-b"),
+      );
+    });
+    expect(window.localStorage.getItem(DIM_INACTIVE_SPLITS_STORAGE_KEY)).toBe(
+      "false",
+    );
+  });
+
   it("maximizes without changing the split tree and restores mounted pane state", async () => {
     const initialLayout = twoPaneLayout("pane-1");
     const store = renderSplitArea({
@@ -897,6 +954,78 @@ describe("SplitThreadArea", () => {
     expect(separator.classList).toContain("bg-border-seam");
     expect(separator.classList).not.toContain("w-1.5");
     expect(separator.firstElementChild?.classList).toContain("w-3");
+  });
+
+  it("shows one persisted dimming toggle only for splits and updates every pane immediately", async () => {
+    renderSplitArea({ path: threadPath("thr-a") });
+    expect(
+      screen.queryByRole("button", { name: "Clear spotlight" }),
+    ).toBeNull();
+
+    cleanup();
+    renderSplitArea({
+      path: threadPath("thr-a"),
+      layout: twoPaneLayout("pane-1"),
+    });
+
+    const toggle = screen.getByRole("button", {
+      name: "Clear spotlight",
+    });
+    expect(
+      screen.getAllByRole("button", {
+        name: "Clear spotlight",
+      }),
+    ).toHaveLength(1);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(toggle.querySelector('[data-icon="Idea"]')).not.toBeNull();
+
+    fireEvent.focus(toggle);
+    await waitFor(() => {
+      expect(
+        screen
+          .getAllByRole("tooltip")
+          .some((tooltip) => tooltip.textContent === "Clear spotlight"),
+      ).toBe(true);
+    });
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(toggle.getAttribute("aria-label")).toBe("Spotlight this split");
+    expect(toggle.querySelector('[data-icon="LightbulbOff"]')).not.toBeNull();
+    expect(window.localStorage.getItem(DIM_INACTIVE_SPLITS_STORAGE_KEY)).toBe(
+      "false",
+    );
+    for (const scrim of document.querySelectorAll("[data-pane-focus-scrim]")) {
+      expect(scrim.classList).toContain("bg-transparent");
+      expect(scrim.classList).not.toContain("bg-background/30");
+    }
+    fireEvent.blur(toggle);
+    fireEvent.focus(toggle);
+    await waitFor(() => {
+      expect(
+        screen
+          .getAllByRole("tooltip")
+          .some((tooltip) => tooltip.textContent === "Spotlight this split"),
+      ).toBe(true);
+    });
+
+    cleanup();
+    renderSplitArea({
+      path: threadPath("thr-a"),
+      layout: twoPaneLayout("pane-1"),
+    });
+    const reloadedToggle = screen.getByRole("button", {
+      name: "Spotlight this split",
+    });
+    expect(reloadedToggle.getAttribute("aria-pressed")).toBe("false");
+    expect(
+      reloadedToggle.querySelector('[data-icon="LightbulbOff"]'),
+    ).not.toBeNull();
+    expect(
+      document
+        .querySelector('[data-split-pane-id="pane-2"] [data-pane-focus-scrim]')
+        ?.classList.contains("bg-transparent"),
+    ).toBe(true);
   });
 
   it("keeps the divider above pane headers so stacked splits stay resizable", () => {

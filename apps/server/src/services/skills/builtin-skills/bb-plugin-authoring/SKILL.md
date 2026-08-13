@@ -29,7 +29,7 @@ The manifest is `package.json`:
   "name": "bb-plugin-hello",
   "version": "0.1.0",
   "type": "module",
-  "engines": { "bb": ">=0.9", "bbPluginSdk": "^0.4.1" },
+  "engines": { "bb": ">=0.9", "bbPluginSdk": "^0.4.2" },
   "bb": {
     "name": "Hello",
     "description": "A friendly example plugin.",
@@ -69,8 +69,11 @@ The manifest is `package.json`:
   injected into agent threads as the plugin skills tier.
 - `bb.themes` (optional) — contributes palettes to Settings → Appearance and
   `bb theme list`. Each entry is
-  `{ id, name, description?, css: "./themes/name.css" }`; bb namespaces its
-  selectable id as `plugin:<plugin-id>:<id>`. Only loaded plugins contribute.
+  `{ id, name, description?, css: "./themes/name.css", codeTheme? }`;
+  `codeTheme` is `{ dark?, light? }` where each side is a bundled Shiki /
+  Pierre name or a plugin-relative VS Code theme `.json` file. bb namespaces
+  its selectable id as `plugin:<plugin-id>:<id>`. Only loaded plugins
+  contribute.
 - `bb.name` and `bb.description` (required) — non-empty human-facing plugin
   identity. The top-level package `name` remains the package identity and
   source of the plugin id.
@@ -97,7 +100,7 @@ The manifest is `package.json`:
   different branded artwork and provide a dark variant when needed.
 - `engines.bb` — optional semver range checked against the bb app version.
 - `engines.bbPluginSdk` — optional semver range for the plugin SDK surface
-  (currently `0.4.1`; the scaffold writes `"^0.4.1"`). Absent means a legacy
+  (currently `0.4.2`; the scaffold writes `"^0.4.2"`). Absent means a legacy
   manifest. Managed (`git:`/`npm:`) installs **refuse** a mismatch against
   the running SDK; path installs surface it as `incompatible` at load.
   Compatible updates (`bb plugin outdated` / `bb plugin update`) only select
@@ -1308,6 +1311,13 @@ className?, draftKey? }` — the `default*` props are SEEDS, not controlled
   `project-default` environment seeds nothing, and a seeded host/worktree
   that no longer exists falls back to the composer's default environment.
 
+  Projectless threads: the project picker always offers "Don't work in a
+  project". That choice submits BB's personal-project id in `projectId` (not
+  `null`) and a host environment with `workspace: { type: "personal" }`.
+  Forward both fields unchanged to `threads.spawn`. If you need metadata for
+  the selected project, call `bb.sdk.projects.list({ includePersonal: true })`
+  because the ordinary list omits the personal project.
+
   The composer resolves selections; YOUR PLUGIN creates the thread. On
   submit it calls `onSubmit(request)` with a JSON-serializable
   `NewThreadRequest`
@@ -1459,8 +1469,11 @@ only `definePluginApp` + the hooks):
   `FileDiff` from `@pierre/diffs/react` render patches exactly like the
   app's own diff panel (the host provides the highlighting worker pool via
   React context on every plugin surface; add `@pierre/diffs` to
-  devDependencies for types). Synthesize a `diff --git a/<p> b/<p>` header
-  when your patch source (e.g. the GitHub REST API) omits it — see
+  devDependencies for types). Pass
+  `theme: { dark: document.documentElement.dataset.bbCodeThemeDark,
+  light: document.documentElement.dataset.bbCodeThemeLight }` so a custom
+  UI theme's Pierre JSON applies. Synthesize a `diff --git a/<p> b/<p>`
+  header when your patch source (e.g. the GitHub REST API) omits it — see
   `plugins/github/app.tsx`.
 - Everything else bundles from YOUR `node_modules` (hugeicons, lucide,
   cva/clsx/tailwind-merge, form/calendar/chart libs): run `npm install`

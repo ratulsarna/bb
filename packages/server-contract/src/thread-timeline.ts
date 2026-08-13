@@ -90,6 +90,7 @@ export const timelineConversationTurnRequestKindValues = [
 export const timelineConversationTurnRequestStatusValues = [
   "pending",
   "accepted",
+  "rejected",
 ] as const;
 export const timelineConversationTurnRequestSchema = z.object({
   isGrouped: z.boolean(),
@@ -140,6 +141,7 @@ export type TimelineConversationRow = z.infer<
 export const timelineSystemOperationKindValues = [
   "generic",
   "compaction",
+  "context-clear",
   "parent-change",
   "thread-provisioning",
   "thread-interrupted",
@@ -156,6 +158,7 @@ export type TimelineSystemOperationKind = z.infer<
 const timelineGenericSystemOperationKindSchema = z.enum([
   "generic",
   "compaction",
+  "context-clear",
   "thread-provisioning",
   "thread-interrupted",
   "provider-unhandled",

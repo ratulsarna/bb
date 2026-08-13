@@ -4,7 +4,7 @@ import type {
   TimelineRowBase,
   TimelineUserConversationRow,
 } from "@bb/server-contract";
-import type { PromptTextMention, ThreadChildOrigin } from "@bb/domain";
+import type { PromptTextMention, ThreadOriginKind } from "@bb/domain";
 import { fileNameFromPath } from "@bb/thread-view";
 import { cn } from "@bb/shared-ui/lib/utils";
 import {
@@ -46,7 +46,11 @@ import {
   useMessageDirectiveRegistry,
   type MarkdownMessageDirectives,
 } from "@/components/ui/markdown-message-directives.js";
-import { USER_MESSAGE_CHAR_CAP } from "./conversation-message-limits.js";
+import {
+  boundedMarkdownPreview,
+  closeUnterminatedMarkdownCodeSpan,
+  USER_MESSAGE_CHAR_CAP,
+} from "./conversation-message-limits.js";
 import { turnRequestLabel } from "./conversation-turn-request-label.js";
 import { TurnRequestLabel } from "./TurnRequestLabel.js";
 import { MessageActionBar } from "./MessageActionBar.js";
@@ -78,11 +82,11 @@ export interface ConversationMessageContentUserProps extends ConversationMessage
   /** Mobile presentation for the regular user message's action footer. */
   mobileActionDisplay?: "inline" | "overflow";
   /**
-   * `childOrigin` of the thread this row belongs to. Selects the fork leading
+   * `originKind` of the thread this row belongs to. Selects the fork leading
    * icon when an agent-initiated thread-start anchor (a fork's seed-without-run
    * row) renders as "Message from {source}". Null for non-fork threads.
    */
-  childOrigin: ThreadChildOrigin | null;
+  originKind: ThreadOriginKind | null;
   initiator: TimelineUserConversationRow["initiator"];
   mentions: readonly PromptTextMention[];
   onAddToChat?: ThreadTimelineAddToChatHandler;
@@ -182,7 +186,7 @@ export type ConversationMessageContentProps =
 interface UserConversationMessageProps {
   addToChatAttachments: readonly PromptDraftAttachment[];
   attachmentItems: ConversationAttachmentItems;
-  childOrigin: ThreadChildOrigin | null;
+  originKind: ThreadOriginKind | null;
   pluginActions?: readonly ThreadTimelinePluginMessageAction[];
   initiator: TimelineUserConversationRow["initiator"];
   mentions: readonly PromptTextMention[];
@@ -262,10 +266,11 @@ function CollapsibleMessageText({
   // initial timeline render. Expanding is an explicit request for the complete
   // message, so only then hand the full body to the markdown renderer.
   const exceedsCollapsedRenderCap = bodyText.length > USER_MESSAGE_CHAR_CAP;
-  const renderedBodyText =
+  const collapsedPreview =
     !isExpanded && exceedsCollapsedRenderCap
-      ? bodyText.slice(0, USER_MESSAGE_CHAR_CAP)
-      : bodyText;
+      ? boundedMarkdownPreview(bodyText, USER_MESSAGE_CHAR_CAP)
+      : null;
+  const renderedBodyText = collapsedPreview?.text ?? bodyText;
   // Rebase mentions onto the prefix-stripped body currently being rendered. A
   // mention straddling the collapsed cap is omitted from the preview and
   // restored when the complete body is rendered after expansion.
@@ -306,8 +311,7 @@ function CollapsibleMessageText({
     enabled: !isExpanded,
     measurementKey: body.text,
   });
-  const showToggle =
-    isExpanded || exceedsCollapsedRenderCap || isOverflowing;
+  const showToggle = isExpanded || exceedsCollapsedRenderCap || isOverflowing;
 
   return (
     <>
@@ -329,12 +333,20 @@ function CollapsibleMessageText({
           !isExpanded && showToggle ? COLLAPSED_MESSAGE_FADE_STYLE : undefined
         }
       >
-        <MarkdownPreview
-          content={body.text}
-          promptMentions={promptMentions}
-          threadMentions={rawThreadMentions}
-          linkRouting={linkRouting}
-        />
+        {collapsedPreview?.parseAsMarkdown === false ? (
+          <span>{body.text}</span>
+        ) : (
+          <MarkdownPreview
+            content={
+              collapsedPreview?.wasCapped === true
+                ? closeUnterminatedMarkdownCodeSpan(body.text)
+                : body.text
+            }
+            promptMentions={promptMentions}
+            threadMentions={rawThreadMentions}
+            linkRouting={linkRouting}
+          />
+        )}
       </div>
       {showToggle ? (
         <ConversationMessageOverflowToggle
@@ -373,7 +385,7 @@ function buildAddToChatAttachments(
 function UserConversationMessage({
   addToChatAttachments,
   attachmentItems,
-  childOrigin,
+  originKind,
   initiator,
   mentions,
   mobileActionDisplay,
@@ -404,7 +416,7 @@ function UserConversationMessage({
     return (
       <GeneratedConversationMessage
         attachmentItems={attachmentItems}
-        childOrigin={childOrigin}
+        originKind={originKind}
         mentions={bodyMentions}
         onOpenLink={onOpenLink}
         onOpenLocalFileLink={onOpenLocalFileLink}
@@ -436,7 +448,7 @@ function UserConversationMessage({
     return (
       <GeneratedConversationMessage
         attachmentItems={attachmentItems}
-        childOrigin={null}
+        originKind={null}
         mentions={bodyMentions}
         onOpenLink={onOpenLink}
         onOpenLocalFileLink={onOpenLocalFileLink}
@@ -710,7 +722,7 @@ export function ConversationMessageContent(
       <UserConversationMessage
         addToChatAttachments={addToChatAttachments}
         attachmentItems={attachmentItems}
-        childOrigin={props.childOrigin}
+        originKind={props.originKind}
         pluginActions={props.pluginActions}
         initiator={props.initiator}
         mentions={props.mentions}

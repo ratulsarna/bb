@@ -1,105 +1,32 @@
 // @vitest-environment jsdom
 
-import type {
-  AnimationEvent as ReactAnimationEvent,
-  HTMLAttributes,
-  ReactNode,
-} from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { POINTER_COARSE_QUERY } from "@bb/shared-ui/hooks/use-pointer-coarse";
+import { CompactViewportOverrideProvider } from "@bb/shared-ui/hooks/use-compact-viewport";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@bb/shared-ui/dialog";
 import {
   PersistentResponsiveDrawerShell,
   ResponsiveDrawerShell,
 } from "@bb/shared-ui/responsive-overlay";
 
-type CapturedAnimationEnd = (args: {
-  currentTarget: HTMLElement;
-  target: EventTarget;
-}) => void;
-type CapturedPointerDownOutside = (
-  event: CustomEvent<{ originalEvent: Event }>,
-) => void;
-
-const drawerContentState = vi.hoisted(() => ({
-  fireAnimationEnd: undefined as CapturedAnimationEnd | undefined,
-  fireOpenAutoFocus: undefined as ((event: Event) => void) | undefined,
-  firePointerDownOutside: undefined as CapturedPointerDownOutside | undefined,
-}));
-
-// ResponsiveDrawerShell now lives in @bb/shared-ui and imports its own
-// `./drawer.js`; mock that module (the same resolved file) so the shared-ui
-// import graph — not the app re-export shim — picks up the stub.
-vi.mock("@bb/shared-ui/drawer", async () => {
-  const React = await import("react");
-
-  const Drawer = ({ children }: { children: ReactNode }) =>
-    React.createElement("div", { "data-testid": "drawer" }, children);
-
-  interface MockDrawerContentProps extends HTMLAttributes<HTMLDivElement> {
-    onOpenAutoFocus?: (event: Event) => void;
-    onPointerDownOutside?: CapturedPointerDownOutside;
-  }
-
-  const DrawerContent = React.forwardRef<
-    HTMLDivElement,
-    MockDrawerContentProps
-  >(
-    (
-      {
-        children,
-        onAnimationEnd,
-        onOpenAutoFocus,
-        onPointerDownOutside,
-        ...props
-      },
-      ref,
-    ) => {
-      drawerContentState.fireAnimationEnd = ({ currentTarget, target }) => {
-        onAnimationEnd?.({
-          currentTarget,
-          target,
-        } as ReactAnimationEvent<HTMLDivElement>);
-      };
-      drawerContentState.fireOpenAutoFocus = onOpenAutoFocus;
-      drawerContentState.firePointerDownOutside = onPointerDownOutside;
-
-      return React.createElement(
-        "div",
-        { ...props, ref, "data-testid": "drawer-content" },
-        children,
-      );
-    },
-  );
-  DrawerContent.displayName = "MockDrawerContent";
-
-  const DrawerTitle = ({
-    children,
-    ...props
-  }: HTMLAttributes<HTMLHeadingElement>) =>
-    React.createElement("h2", props, children);
-
-  return { Drawer, DrawerContent, DrawerTitle };
-});
-
 afterEach(() => {
   cleanup();
-  vi.clearAllMocks();
-  drawerContentState.fireAnimationEnd = undefined;
-  drawerContentState.fireOpenAutoFocus = undefined;
-  drawerContentState.firePointerDownOutside = undefined;
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
-
-function fireDrawerContentAnimationEnd(target: EventTarget) {
-  const fireAnimationEnd = drawerContentState.fireAnimationEnd;
-  if (fireAnimationEnd === undefined) {
-    throw new Error("DrawerContent did not receive an animation handler");
-  }
-  fireAnimationEnd({
-    currentTarget: screen.getByTestId("drawer-content"),
-    target,
-  });
-}
 
 function mockPointerCoarse(matches: boolean) {
   vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
@@ -114,141 +41,174 @@ function mockPointerCoarse(matches: boolean) {
   }));
 }
 
-function fireDrawerOpenAutoFocus(): Event {
-  const fireOpenAutoFocus = drawerContentState.fireOpenAutoFocus;
-  if (fireOpenAutoFocus === undefined) {
-    throw new Error("DrawerContent did not receive an autofocus handler");
-  }
-  const event = new Event("openAutoFocus", { cancelable: true });
-  fireOpenAutoFocus(event);
-  return event;
-}
-
-function fireDrawerPointerDownOutside(
-  originalTarget: HTMLElement,
-): CustomEvent<{ originalEvent: Event }> {
-  const firePointerDownOutside = drawerContentState.firePointerDownOutside;
-  if (firePointerDownOutside === undefined) {
-    throw new Error(
-      "DrawerContent did not receive a pointer down outside handler",
-    );
-  }
-  const originalEvent = new Event("pointerdown", {
-    bubbles: true,
-    cancelable: true,
-  });
-  originalTarget.dispatchEvent(originalEvent);
-  const event = new CustomEvent("pointerDownOutside", {
-    cancelable: true,
-    detail: { originalEvent },
-  });
-  firePointerDownOutside(event);
-  return event;
-}
-
 describe("ResponsiveDrawerShell", () => {
-  it("forwards own content animation completion and ignores bubbled child animation events", () => {
-    const onContentAnimationEnd = vi.fn();
-
-    render(
-      <ResponsiveDrawerShell
-        open={true}
-        onOpenChange={() => {}}
-        onContentAnimationEnd={onContentAnimationEnd}
-      >
-        <div data-testid="animated-child" />
-      </ResponsiveDrawerShell>,
-    );
-
-    fireDrawerContentAnimationEnd(screen.getByTestId("animated-child"));
-    expect(onContentAnimationEnd).not.toHaveBeenCalled();
-
-    fireDrawerContentAnimationEnd(screen.getByTestId("drawer-content"));
-    expect(onContentAnimationEnd).toHaveBeenCalledTimes(1);
-    expect(onContentAnimationEnd).toHaveBeenCalledWith(true);
-  });
-
-  it("reports closed content animation completion with the current closed state", () => {
-    const onContentAnimationEnd = vi.fn();
-
-    render(
-      <ResponsiveDrawerShell
-        open={false}
-        onOpenChange={() => {}}
-        onContentAnimationEnd={onContentAnimationEnd}
-      >
-        <div />
-      </ResponsiveDrawerShell>,
-    );
-
-    fireDrawerContentAnimationEnd(screen.getByTestId("drawer-content"));
-    expect(onContentAnimationEnd).toHaveBeenCalledTimes(1);
-    expect(onContentAnimationEnd).toHaveBeenCalledWith(false);
-  });
-
-  it("prevents drawer open autofocus on coarse pointers", () => {
+  it("does not create portal nodes before its first open", () => {
     mockPointerCoarse(true);
-
     render(
-      <ResponsiveDrawerShell open={true} onOpenChange={() => {}}>
-        <input aria-label="Search" />
+      <ResponsiveDrawerShell open={false} onOpenChange={() => {}}>
+        <button type="button">Project option</button>
       </ResponsiveDrawerShell>,
     );
 
-    expect(fireDrawerOpenAutoFocus().defaultPrevented).toBe(true);
+    expect(
+      document.querySelector("[data-persistent-drawer-content]"),
+    ).toBeNull();
+    expect(
+      document.querySelector("[data-persistent-drawer-backdrop]"),
+    ).toBeNull();
   });
 
-  it("allows drawer open autofocus on fine pointers", () => {
-    mockPointerCoarse(false);
-
-    render(
-      <ResponsiveDrawerShell open={true} onOpenChange={() => {}}>
-        <input aria-label="Search" />
-      </ResponsiveDrawerShell>,
-    );
-
-    expect(fireDrawerOpenAutoFocus().defaultPrevented).toBe(false);
-  });
-
-  it("prevents drawer outside dismissal for Sonner toast interactions", () => {
-    render(
-      <ResponsiveDrawerShell open={true} onOpenChange={() => {}}>
-        <div />
-      </ResponsiveDrawerShell>,
-    );
-
-    const toaster = document.createElement("ol");
-    toaster.setAttribute("data-sonner-toaster", "");
-    const toastAction = document.createElement("button");
-    toaster.appendChild(toastAction);
-    document.body.appendChild(toaster);
+  it("starts the persistent shell before it realizes content two frames later", () => {
+    mockPointerCoarse(true);
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const appTree = document.createElement("main");
+    document.body.appendChild(appTree);
 
     try {
-      expect(fireDrawerPointerDownOutside(toastAction).defaultPrevented).toBe(
-        true,
+      render(
+        <ResponsiveDrawerShell
+          open={true}
+          onOpenChange={() => {}}
+          srLabel="Models"
+        >
+          <button type="button">Choose model</button>
+        </ResponsiveDrawerShell>,
       );
+
+      const content = document.querySelector<HTMLElement>(
+        "[data-persistent-drawer-content]",
+      );
+      expect(content?.getAttribute("data-state")).toBe("open");
+      expect(
+        document.querySelector("[data-responsive-drawer-placeholder]"),
+      ).not.toBeNull();
+      expect(screen.queryByRole("button", { name: "Choose model" })).toBeNull();
+      expect(appTree.hasAttribute("inert")).toBe(false);
+      expect(appTree.getAttribute("aria-hidden")).toBeNull();
+
+      act(() => frames.shift()?.(0));
+      expect(screen.queryByRole("button", { name: "Choose model" })).toBeNull();
+      act(() => frames.shift()?.(16));
+      expect(screen.getByRole("button", { name: "Choose model" })).toBeTruthy();
     } finally {
-      toaster.remove();
+      appTree.remove();
     }
   });
 
-  it("allows ordinary outside pointer interactions to dismiss the drawer", () => {
-    render(
+  it("retains realized content across close and reopen", () => {
+    mockPointerCoarse(true);
+    const frames: FrameRequestCallback[] = [];
+    const requestAnimationFrame = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        frames.push(callback);
+        return frames.length;
+      });
+
+    const view = render(
       <ResponsiveDrawerShell open={true} onOpenChange={() => {}}>
-        <div />
+        <input aria-label="Search models" />
       </ResponsiveDrawerShell>,
     );
+    act(() => frames.shift()?.(0));
+    act(() => frames.shift()?.(16));
+    const input = screen.getByRole("textbox", { name: "Search models" });
 
-    const outsideButton = document.createElement("button");
-    document.body.appendChild(outsideButton);
+    view.rerender(
+      <ResponsiveDrawerShell open={false} onOpenChange={() => {}}>
+        <input aria-label="Search models" />
+      </ResponsiveDrawerShell>,
+    );
+    expect(
+      screen.getByRole("textbox", { name: "Search models", hidden: true }),
+    ).toBe(input);
 
-    try {
-      expect(fireDrawerPointerDownOutside(outsideButton).defaultPrevented).toBe(
-        false,
-      );
-    } finally {
-      outsideButton.remove();
-    }
+    view.rerender(
+      <ResponsiveDrawerShell open={true} onOpenChange={() => {}}>
+        <input aria-label="Search models" />
+      </ResponsiveDrawerShell>,
+    );
+    expect(screen.getByRole("textbox", { name: "Search models" })).toBe(input);
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the timer fallback when animation frames do not run", () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    render(
+      <ResponsiveDrawerShell open={true} onOpenChange={() => {}}>
+        <button type="button">Project option</button>
+      </ResponsiveDrawerShell>,
+    );
+    act(() => vi.advanceTimersByTime(120));
+    expect(screen.getByRole("button", { name: "Project option" })).toBeTruthy();
+  });
+});
+
+describe("responsive Dialog", () => {
+  it("links the persistent mobile dialog to its title and description", () => {
+    mockPointerCoarse(true);
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+
+    render(
+      <CompactViewportOverrideProvider isCompactViewport>
+        <Dialog open>
+          <DialogContent>
+            <DialogTitle>New project</DialogTitle>
+            <DialogDescription>Choose a project location.</DialogDescription>
+          </DialogContent>
+        </Dialog>
+      </CompactViewportOverrideProvider>,
+    );
+
+    act(() => frames.shift()?.(0));
+    act(() => frames.shift()?.(16));
+
+    const dialog = screen.getByRole("dialog", { name: "New project" });
+    expect(dialog.getAttribute("aria-describedby")).toBe(
+      screen.getByText("Choose a project location.").id,
+    );
+  });
+
+  it("uses custom IDs and asChild elements for mobile dialog labels", () => {
+    mockPointerCoarse(true);
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+
+    render(
+      <CompactViewportOverrideProvider isCompactViewport>
+        <Dialog open>
+          <DialogContent>
+            <DialogTitle asChild id="custom-title">
+              <h3>Custom project</h3>
+            </DialogTitle>
+            <DialogDescription asChild id="custom-description">
+              <div>Custom project details.</div>
+            </DialogDescription>
+          </DialogContent>
+        </Dialog>
+      </CompactViewportOverrideProvider>,
+    );
+
+    act(() => frames.shift()?.(0));
+    act(() => frames.shift()?.(16));
+
+    const dialog = screen.getByRole("dialog", { name: "Custom project" });
+    expect(screen.getByRole("heading", { level: 3 }).id).toBe("custom-title");
+    expect(dialog.getAttribute("aria-labelledby")).toBe("custom-title");
+    expect(dialog.getAttribute("aria-describedby")).toBe("custom-description");
+    expect(document.querySelector("#custom-description")?.tagName).toBe("DIV");
   });
 });
 
@@ -340,6 +300,7 @@ describe("PersistentResponsiveDrawerShell", () => {
     );
 
     const nestedAction = document.createElement("button");
+    nestedAction.setAttribute("data-bb-portaled-overlay", "");
     nestedAction.addEventListener("keydown", (event) => {
       event.preventDefault();
     });
@@ -366,6 +327,7 @@ describe("PersistentResponsiveDrawerShell", () => {
     );
 
     const nestedAction = document.createElement("button");
+    nestedAction.setAttribute("data-bb-portaled-overlay", "");
     document.body.appendChild(nestedAction);
     nestedAction.focus();
 
@@ -377,6 +339,89 @@ describe("PersistentResponsiveDrawerShell", () => {
     } finally {
       nestedAction.remove();
     }
+  });
+
+  it("closes nested drawers from the top and then closes the parent", () => {
+    mockPointerCoarse(true);
+
+    function NestedDrawers() {
+      const [parentOpen, setParentOpen] = useState(true);
+      const [childOpen, setChildOpen] = useState(false);
+      return (
+        <>
+          <output data-testid="parent-state">{String(parentOpen)}</output>
+          <output data-testid="child-state">{String(childOpen)}</output>
+          <PersistentResponsiveDrawerShell
+            open={parentOpen}
+            onOpenChange={setParentOpen}
+            srLabel="Parent"
+          >
+            <button type="button">Parent action</button>
+            <button type="button" onClick={() => setChildOpen(true)}>
+              Open child
+            </button>
+            <PersistentResponsiveDrawerShell
+              open={childOpen}
+              onOpenChange={setChildOpen}
+              srLabel="Child"
+            >
+              <button type="button">Child action</button>
+            </PersistentResponsiveDrawerShell>
+          </PersistentResponsiveDrawerShell>
+        </>
+      );
+    }
+
+    render(<NestedDrawers />);
+    fireEvent.click(screen.getByRole("button", { name: "Open child" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByTestId("child-state").textContent).toBe("false");
+    expect(screen.getByTestId("parent-state").textContent).toBe("true");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByTestId("parent-state").textContent).toBe("false");
+  });
+
+  it("traps focus on coarse pointers and restores the trigger after close", () => {
+    mockPointerCoarse(true);
+
+    function FocusDrawer() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Open details
+          </button>
+          <PersistentResponsiveDrawerShell
+            open={open}
+            onOpenChange={setOpen}
+            srLabel="Details"
+          >
+            <button type="button">First action</button>
+            <button type="button">Last action</button>
+          </PersistentResponsiveDrawerShell>
+        </>
+      );
+    }
+
+    render(<FocusDrawer />);
+    const trigger = screen.getByRole("button", { name: "Open details" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const panel = screen.getByRole("dialog", { name: "Details" });
+    expect(document.activeElement).toBe(panel);
+
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "First action" }),
+    );
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Last action" }),
+    );
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(document.activeElement).toBe(trigger);
   });
 
   it("keeps panel focus and uses the latest close callback after a parent rerender", () => {
@@ -411,7 +456,7 @@ describe("PersistentResponsiveDrawerShell", () => {
       </PersistentResponsiveDrawerShell>,
     );
 
-    expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(input);
     fireEvent.click(
       document.querySelector<HTMLElement>(

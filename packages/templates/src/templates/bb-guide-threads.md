@@ -77,7 +77,7 @@ Forking:
   create a fresh managed worktree (or personal workspace for personal threads);
   reuse attaches the source environment. Omit --prompt to create an idle fork.
 
-Editing a sent message (requires the `editMessages` experiment):
+Editing a sent message (requires the default-on `editMessages` experiment):
 
   bb thread edit-message <id> --message "Replacement text"
     --self                              Target the current thread (BB_THREAD_ID)
@@ -86,7 +86,9 @@ Editing a sent message (requires the `editMessages` experiment):
   Without --expected-request-sequence, the latest eligible message is edited.
   Codex, Claude Code, and Pi threads are supported. The original conversation
   remains unchanged until the provider prepares the replacement history.
-  Submitting replaces that turn and every later turn while retaining workspace
+  Failed and incomplete turns are eligible. If the thread is running,
+  submission stops the current turn and waits for it to settle. It then
+  replaces the selected turn and every later turn while retaining workspace
   changes. From an agent thread, the command carries `BB_THREAD_ID` so the
   replacement runs under agent permission policy.
 
@@ -144,7 +146,7 @@ Opening threads and files in the app:
   bb thread open <thread-id> [path]        Open a thread, optionally with a panel file
     --line <number>                        Line number to focus
     --split <placement>                    right, down, left, top, or replace
-  bb thread pane <action> [thread-id]      Maximize, restore, or toggle an open thread pane
+  bb thread pane <action> [thread-id]      Maximize, restore, toggle, spotlight, or clear spotlight
 
   Inside a BB thread, BB_THREAD_ID selects the current thread automatically and
   the thread ID argument is omitted for file-only opens. Pass an explicit thread
@@ -153,7 +155,8 @@ Opening threads and files in the app:
   duplicated. Edge placement creates panes through the eighth pane; at eight
   panes, it replaces the focused pane.
   Pane actions broadcast to connected BB app windows and affect the matching
-  already-open pane without changing its split tree.
+  already-open pane without changing its split tree. Spotlight focuses that
+  pane and dims the others; clear-spotlight focuses it and removes split dimming.
   Paths can be thread-relative workspace paths, or absolute paths inside the
   target thread workspace. Absolute paths under BB_THREAD_STORAGE open as
   thread-storage files for the current thread. Use this for Markdown or HTML

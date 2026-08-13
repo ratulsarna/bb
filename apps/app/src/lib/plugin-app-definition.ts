@@ -26,7 +26,6 @@ import {
   requireSlotId,
   requireUniqueId,
 } from "@bb/plugin-sdk/internal/composer-customization-validation";
-import type { PluginFrontendRecord } from "./plugin-frontend";
 import type { PluginRegistrationSet } from "./plugin-slots";
 
 export type CollectedPluginAppRegistrations = PluginRegistrationSet & {
@@ -381,51 +380,4 @@ export function collectPluginAppRegistrations(
     messageActions,
     contentScripts,
   };
-}
-
-export interface InterpretPluginFrontendsDeps {
-  setRegistrations: (
-    pluginId: string,
-    registrations: PluginRegistrationSet,
-  ) => void;
-  warn: (message: string) => void;
-}
-
-/**
- * Interpret every loaded record's `module.default` into slot registrations.
- * Mutates `records` in place: a plugin whose default export is not a
- * `definePluginApp` product (or whose setup throws) is downgraded to a
- * "failed" record — contained per plugin, backend untouched. Returns the
- * same map for convenience.
- */
-export function interpretPluginFrontends(
-  records: Map<string, PluginFrontendRecord>,
-  deps: InterpretPluginFrontendsDeps,
-): Map<string, PluginFrontendRecord> {
-  for (const [pluginId, record] of records) {
-    if (record.status !== "loaded") continue;
-    try {
-      const definition = record.module.default;
-      if (!isPluginAppDefinition(definition)) {
-        throw new Error(
-          "the bundle's default export is not definePluginApp(...) from @bb/plugin-sdk/app",
-        );
-      }
-      deps.setRegistrations(
-        pluginId,
-        collectPluginAppRegistrations(definition, (reason) => {
-          deps.warn(
-            `[plugin:${pluginId}] composer customization rejected: ${reason}`,
-          );
-        }),
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      deps.warn(
-        `[plugin:${pluginId}] frontend registration failed: ${message}`,
-      );
-      records.set(pluginId, { pluginId, status: "failed", error: message });
-    }
-  }
-  return records;
 }
