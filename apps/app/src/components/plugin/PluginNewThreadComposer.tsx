@@ -863,8 +863,9 @@ export function PluginNewThreadComposer({
         }}
         project={{
           projects: projectOptions,
-          value: projectId,
+          value: isProjectless ? null : projectId,
           onChange: handleProjectChange,
+          allowNoProject: true,
           disabled: isCopyingAttachments,
         }}
         execution={{

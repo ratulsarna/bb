@@ -9,10 +9,11 @@
  * environment to project defaults.
  */
 
+import { PERSONAL_PROJECT_ID } from "@bb/domain";
+import type { NewThreadRequest } from "@bb/plugin-sdk";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NewThreadRequest } from "@bb/plugin-sdk";
 import { PluginNewThreadComposer } from "./PluginNewThreadComposer";
 
 const mocks = vi.hoisted(() => ({
@@ -70,7 +71,12 @@ vi.mock("@/hooks/queries/sidebar-navigation-query", () => ({
 }));
 
 vi.mock("@/hooks/queries/host-queries", () => ({
-  useHosts: () => ({ data: [{ id: "host_1", name: "Machine" }] }),
+  useHosts: () => ({
+    data: [
+      { id: "host_1", name: "Machine" },
+      { id: "host_2", name: "Second Machine" },
+    ],
+  }),
   selectPrimaryHost: (
     hosts: Array<{ id: string }> | undefined,
     primaryHostId: string | null,
@@ -413,6 +419,45 @@ describe("PluginNewThreadComposer seeding", () => {
       workspace: {
         type: "managed-worktree",
         baseBranch: { kind: "default" },
+      },
+    });
+  });
+
+  it("allows submitting a projectless thread", async () => {
+    const submitted: NewThreadRequest[] = [];
+    renderComposer(
+      STORED_REQUEST,
+      (request) => {
+        submitted.push(request);
+      },
+      "projectless",
+    );
+
+    await waitFor(() => {
+      expect(latestPromptBoxProps().disabled).toBe(false);
+      expect(latestPromptBoxProps().project.allowNoProject).toBe(true);
+    });
+    await act(async () => {
+      await latestPromptBoxProps().project.onChange(null);
+    });
+    await waitFor(() => {
+      expect(latestPromptBoxProps().project.value).toBeNull();
+      expect(latestPromptBoxProps().disabled).toBe(false);
+    });
+    await act(async () => {
+      latestPromptBoxProps().modeConfig.environment.onChange(
+        "host:host_2:local",
+      );
+    });
+    await submit();
+
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]).toMatchObject({
+      projectId: PERSONAL_PROJECT_ID,
+      environment: {
+        type: "host",
+        hostId: "host_2",
+        workspace: { type: "personal" },
       },
     });
   });
