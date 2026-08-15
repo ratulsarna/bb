@@ -36,7 +36,7 @@ import {
   providerCliStatusResponseSchema,
 } from "./local.js";
 
-export const HOST_DAEMON_PROTOCOL_VERSION = 117 as const;
+export const HOST_DAEMON_PROTOCOL_VERSION = 123 as const;
 
 export {
   BRANCH_LIST_LIMIT_MAX,
@@ -376,9 +376,20 @@ const turnSubmitCommandSchema = hostDaemonThreadTargetSchema
   .strict()
   .superRefine(refineGroupedInputMatchesFlatInput);
 
+/**
+ * `interrupt` stops a live turn: the daemon waits for the runtime to learn the
+ * active turn so the provider stop carries the right turn id. `release` only
+ * unloads a runtime the server already knows is idle, so the daemon skips that
+ * wait and the server leaves thread lifecycle state alone.
+ */
+export const threadStopIntentSchema = z.enum(["interrupt", "release"]);
+
+export type ThreadStopIntent = z.infer<typeof threadStopIntentSchema>;
+
 export const threadStopCommandSchema = hostDaemonThreadTargetSchema
   .extend({
     type: z.literal("thread.stop"),
+    intent: threadStopIntentSchema,
   })
   .strict();
 
@@ -1053,6 +1064,8 @@ const environmentDestroyCommandSchema = hostDaemonWorkspaceTargetSchema
 const workspaceStatusCommandSchema = hostDaemonWorkspaceTargetSchema.extend({
   type: z.literal("workspace.status"),
   mergeBaseBranch: gitBranchNameSchema.optional(),
+  maxUntrackedLineStatFiles: z.number().int().positive(),
+  maxUntrackedLineStatBytes: z.number().int().positive(),
 });
 
 const workspaceDiffCommandSchema = hostDaemonWorkspaceTargetSchema.extend({
@@ -1060,11 +1073,13 @@ const workspaceDiffCommandSchema = hostDaemonWorkspaceTargetSchema.extend({
   target: workspaceDiffTargetSchema,
   maxDiffBytes: z.number().int().positive(),
   maxFileListBytes: z.number().int().positive(),
+  maxUntrackedFiles: z.number().int().positive(),
 });
 
 const workspaceDiffFilesCommandSchema = hostDaemonWorkspaceTargetSchema.extend({
   type: z.literal("workspace.diffFiles"),
   target: workspaceDiffTargetSchema,
+  maxFiles: z.number().int().positive(),
 });
 
 const workspaceDiffPatchCommandSchema = hostDaemonWorkspaceTargetSchema.extend({
@@ -1202,6 +1217,7 @@ const workspaceDiffFilesResultSchema = z.discriminatedUnion("outcome", [
       files: z.array(rawDiffFileStatSchema),
       shortstat: z.string(),
       mergeBaseRef: z.string().nullable(),
+      truncated: z.boolean(),
     })
     .strict(),
   z

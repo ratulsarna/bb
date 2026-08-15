@@ -58,6 +58,7 @@ import {
   type AcpBridgeNativeReasoning,
   type AcpBridgePermissionCli,
   type AcpBridgeReasoningCli,
+  type AcpBridgeThreadForkParams,
   type AcpBridgeThreadResumeParams,
   type AcpBridgeThreadStartParams,
 } from "../bridge-protocol.js";
@@ -69,6 +70,7 @@ import {
   acpPromptResultSchema,
   acpReadTextFileParamsSchema,
   acpRequestPermissionParamsSchema,
+  acpSessionForkResultSchema,
   acpSessionNewResultSchema,
   acpSessionNotificationParamsSchema,
   acpUsageUpdateSchema,
@@ -125,6 +127,7 @@ interface AcpThreadSession {
   connection: AcpAgentConnection;
   agentLabel: string;
   supportsImageInput: boolean;
+  supportsLoadSession: boolean;
   policy: AcpSessionPolicy;
   cwd: string;
   pendingInstructions: string | undefined;
@@ -1416,7 +1419,8 @@ function getSessionByProviderThreadId(
 
 type AcpSessionStartParams =
   | { kind: "start"; params: AcpBridgeThreadStartParams }
-  | { kind: "resume"; params: AcpBridgeThreadResumeParams };
+  | { kind: "resume"; params: AcpBridgeThreadResumeParams }
+  | { kind: "fork"; params: AcpBridgeThreadForkParams };
 
 async function startAgentSession(
   request: AcpSessionStartParams,
@@ -1475,6 +1479,7 @@ async function startAgentSession(
     connection,
     agentLabel,
     supportsImageInput: false,
+    supportsLoadSession: false,
     policy: {
       permissionMode: params.permissionMode,
       permissionEscalation: params.permissionEscalation,
@@ -1516,12 +1521,55 @@ async function startAgentSession(
       initializeResult.agentCapabilities?.promptCapabilities?.image ?? false;
     const supportsLoadSession =
       initializeResult.agentCapabilities?.loadSession ?? false;
+    const supportsFork =
+      initializeResult.agentCapabilities?.sessionCapabilities?.fork != null;
+    if (request.kind === "fork" && !supportsFork) {
+      throw new Error(
+        `ACP agent "${agentLabel}" does not advertise session/fork support.`,
+      );
+    }
+    // ACP session/fork clones the whole source session. It cannot stop at a
+    // message checkpoint, so a message edit would keep source turns that the
+    // BB timeline no longer shows. Reject the fork instead.
+    if (
+      request.kind === "fork" &&
+      request.params.sourceProviderCheckpointId !== undefined
+    ) {
+      throw new Error(
+        `ACP agent "${agentLabel}" does not support a session/fork checkpoint.`,
+      );
+    }
+    session.supportsLoadSession = supportsLoadSession;
     const mcpServers = await buildSessionMcpServers(params);
 
     let sessionId: string | undefined;
     let loadedConfigOptions: readonly AcpConfigOption[] | undefined;
     let loadedModels: AcpSessionModels | undefined;
-    if (request.kind === "resume" && supportsLoadSession) {
+    if (request.kind === "fork") {
+      const forkedSession = await connection.request({
+        method: "session/fork",
+        params: {
+          sessionId: request.params.sourceProviderThreadId,
+          cwd: params.cwd,
+          mcpServers,
+        },
+        resultSchema: acpSessionForkResultSchema,
+      });
+      // The agent owns this value and the schema checks only that it is a
+      // string. A reused ID would overwrite the map entry of the source or of
+      // another live thread, so reject it instead of registering it.
+      if (
+        forkedSession.sessionId === request.params.sourceProviderThreadId ||
+        getSessionByProviderThreadId(forkedSession.sessionId) !== undefined
+      ) {
+        throw new Error(
+          `ACP agent "${agentLabel}" returned an active session ID for session/fork.`,
+        );
+      }
+      sessionId = forkedSession.sessionId;
+      loadedConfigOptions = forkedSession.configOptions;
+      loadedModels = forkedSession.models;
+    } else if (request.kind === "resume" && supportsLoadSession) {
       session.loading = true;
       session.loadingSessionId = request.params.providerThreadId;
       session.pendingLoadUsageUpdate = undefined;
@@ -1919,13 +1967,28 @@ async function handleRequest(
         kind: "start",
         params: request.params,
       });
-      sendResult(request.id, { providerThreadId: session.providerThreadId });
+      sendResult(request.id, {
+        providerThreadId: session.providerThreadId,
+        sessionRestorable: session.supportsLoadSession,
+      });
       return;
     }
 
     case "thread/resume": {
       const session = await startAgentSession({
         kind: "resume",
+        params: request.params,
+      });
+      sendResult(request.id, {
+        providerThreadId: session.providerThreadId,
+        sessionRestorable: session.supportsLoadSession,
+      });
+      return;
+    }
+
+    case "thread/fork": {
+      const session = await startAgentSession({
+        kind: "fork",
         params: request.params,
       });
       sendResult(request.id, { providerThreadId: session.providerThreadId });

@@ -11,7 +11,6 @@ import {
 } from "@bb/host-daemon-contract";
 import semver from "semver";
 import {
-  CommandDispatchError,
   defaultListModels,
   ExpectedCommandDispatchError,
   type CommandOf,
@@ -190,19 +189,32 @@ async function tryGetProviderCliStatusForProvider(
 }
 
 function verifyClaudeCodeUpdateEvents(args: {
-  before: ProviderCliStatus;
+  before: ProviderCliStatus | null;
   after: ProviderCliStatus | null;
   events: ProviderCliInstallEvent[];
 }): ProviderCliInstallEvent[] {
   const completedIndex = args.events.findIndex(
     (event) => event.type === "completed" && event.success,
   );
-  const expectedVersion = args.before.latestVersion;
-  const previousVersion = args.before.currentVersion;
-  const actualVersion = args.after?.currentVersion ?? null;
   if (completedIndex === -1) {
     return args.events;
   }
+  const executable =
+    args.after?.executablePath ??
+    args.before?.executablePath ??
+    args.before?.executableName ??
+    "claude";
+  if (args.before === null) {
+    return failClaudeCodeUpdateVerification({
+      ...args,
+      completedIndex,
+      message: `Claude Code's update command exited successfully, but bb could not read ${executable}'s version before the update. bb cannot confirm that the active executable changed. Run \`claude --version\` and \`claude doctor\` on this machine, then use the command output to update the installation they report.`,
+    });
+  }
+
+  const expectedVersion = args.before.latestVersion;
+  const previousVersion = args.before.currentVersion;
+  const actualVersion = args.after?.currentVersion ?? null;
 
   const validExpectedVersion =
     expectedVersion === null ? null : semver.valid(expectedVersion);
@@ -214,7 +226,11 @@ function verifyClaudeCodeUpdateEvents(args: {
   const canVerifyAdvancement =
     expectedVersion === null && validPreviousVersion !== null;
   if (!hasKnownTarget && !canVerifyAdvancement) {
-    return args.events;
+    return failClaudeCodeUpdateVerification({
+      ...args,
+      completedIndex,
+      message: `Claude Code's update command exited successfully, but bb could not compare ${executable}'s version before and after the update. Run \`claude --version\` and \`claude doctor\` on this machine, then use the command output to update the installation they report.`,
+    });
   }
   const updateVerified =
     validActualVersion !== null &&
@@ -226,24 +242,32 @@ function verifyClaudeCodeUpdateEvents(args: {
     return args.events;
   }
 
-  const executable =
-    args.after?.executablePath ??
-    args.before.executablePath ??
-    args.before.executableName;
   const expectation = hasKnownTarget
     ? `expected ${validExpectedVersion}`
     : `expected a version newer than ${validPreviousVersion}`;
   const message = `Claude Code's update command exited successfully, but ${executable} still reports ${actualVersion ?? "an unknown version"} (${expectation}). The executable may be pinned by PATH or managed by another installer. Run \`claude doctor\` on this machine and update the installation it reports.`;
+  return failClaudeCodeUpdateVerification({
+    ...args,
+    completedIndex,
+    message,
+  });
+}
+
+function failClaudeCodeUpdateVerification(args: {
+  completedIndex: number;
+  events: ProviderCliInstallEvent[];
+  message: string;
+}): ProviderCliInstallEvent[] {
   const verifiedEvents = [...args.events];
-  const completedEvent = verifiedEvents[completedIndex];
+  const completedEvent = verifiedEvents[args.completedIndex];
   if (completedEvent?.type !== "completed") {
     return args.events;
   }
-  verifiedEvents[completedIndex] = { ...completedEvent, success: false };
-  verifiedEvents.splice(completedIndex, 0, {
+  verifiedEvents[args.completedIndex] = { ...completedEvent, success: false };
+  verifiedEvents.splice(args.completedIndex, 0, {
     type: "error",
     provider: "claudeCode",
-    message,
+    message: args.message,
   });
   return verifiedEvents;
 }
@@ -274,7 +298,8 @@ async function installProviderCliOnHost(
       }),
     );
     if (
-      claudeCodeStatusBefore !== null &&
+      command.provider === "claudeCode" &&
+      command.actionKind === "update" &&
       events.some((event) => event.type === "completed" && event.success)
     ) {
       const claudeCodeStatusAfter = await tryGetProviderCliStatusForProvider(
@@ -393,13 +418,7 @@ const commandHandlers: CommandHandlerMap = {
       command.environmentId,
     );
     if (!entry) {
-      if (released.releasedEnvironmentIds.length === 0) {
-        throw new CommandDispatchError(
-          "unknown_environment",
-          `No runtime exists for environment ${command.environmentId}`,
-        );
-      }
-      // The old owner stopped, so the stop reached the running turn.
+      // No loaded runtime means the idempotent stop already reached its goal.
       await options.eventSink.flush();
       return {
         providerCheckpointId: released.providerCheckpointId,
@@ -411,10 +430,24 @@ const commandHandlers: CommandHandlerMap = {
       // and the turn/started event has not been observed yet. Wait for the
       // runtime to learn the active turn (event-driven, resolves null on
       // timeout or when the thread goes idle) so the provider stop carries
-      // the right turn id.
-      await entry.runtime.waitForActiveTurn(command.threadId, {
-        timeoutMs: THREAD_STOP_ACTIVE_TURN_WAIT_MS,
-      });
+      // the right turn id. A release does not wait: the server already
+      // settled the thread as idle, so waiting only burns the full timeout on
+      // every runtime it unloads.
+      //
+      // A release can still lose a race with a turn that started after the
+      // server read the thread. Stopping then would end accepted work and
+      // leave the server holding an active thread with no runtime, so a
+      // release skips a busy runtime instead. A later idle release unloads it.
+      if (command.intent === "release") {
+        if (entry.runtime.getActiveTurnId(command.threadId) !== null) {
+          await options.eventSink.flush();
+          return { providerCheckpointId };
+        }
+      } else {
+        await entry.runtime.waitForActiveTurn(command.threadId, {
+          timeoutMs: THREAD_STOP_ACTIVE_TURN_WAIT_MS,
+        });
+      }
       const result = await entry.runtime.stopThread({
         threadId: command.threadId,
       });
@@ -661,6 +694,8 @@ const onlineRpcHandlers: OnlineRpcHandlerMap = {
         outcome: "available",
         workspaceStatus: await resolution.entry.workspace.getStatus({
           mergeBaseBranch: command.mergeBaseBranch,
+          maxUntrackedLineStatFiles: command.maxUntrackedLineStatFiles,
+          maxUntrackedLineStatBytes: command.maxUntrackedLineStatBytes,
         }),
       };
     } catch (error) {
@@ -692,6 +727,7 @@ const onlineRpcHandlers: OnlineRpcHandlerMap = {
           target: command.target,
           maxDiffBytes: command.maxDiffBytes,
           maxFileListBytes: command.maxFileListBytes,
+          maxUntrackedFiles: command.maxUntrackedFiles,
         }),
       };
     } catch (error) {
@@ -721,6 +757,7 @@ const onlineRpcHandlers: OnlineRpcHandlerMap = {
         outcome: "available",
         ...(await resolution.entry.workspace.diffFiles({
           target: command.target,
+          maxFiles: command.maxFiles,
         })),
       };
     } catch (error) {

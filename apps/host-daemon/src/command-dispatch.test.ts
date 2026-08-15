@@ -202,8 +202,9 @@ function createRuntime(): FakeDispatchRuntime {
     })),
     listRunningProviders: vi.fn(() => ["fake"]),
     getActiveTurnId: (threadId) => activeTurnsByThreadId.get(threadId) ?? null,
-    waitForActiveTurn: async (threadId) =>
-      activeTurnsByThreadId.get(threadId) ?? null,
+    waitForActiveTurn: vi.fn(
+      async (threadId: string) => activeTurnsByThreadId.get(threadId) ?? null,
+    ),
     getProviderSession: (threadId) =>
       hostedThreadIds.has(threadId)
         ? { providerId: "fake", providerThreadId: "provider-thread-1" }
@@ -335,6 +336,7 @@ describe("dispatchCommand", () => {
     const flush = vi.fn(async () => flushDeferred.promise);
     const command: CommandOf<"thread.stop"> = {
       type: "thread.stop",
+      intent: "interrupt",
       environmentId: "env-1",
       threadId: "thread-1",
     };
@@ -644,6 +646,7 @@ describe("dispatchCommand", () => {
     // never loaded. The stop must still reach the turn in the old runtime.
     const command: CommandOf<"thread.stop"> = {
       type: "thread.stop",
+      intent: "interrupt",
       environmentId: "env-new",
       threadId: "thread-1",
     };
@@ -666,13 +669,106 @@ describe("dispatchCommand", () => {
     expect(flush).toHaveBeenCalledOnce();
   });
 
-  it("rejects thread.stop when no runtime holds the thread", async () => {
+  it("releases an idle runtime without the active-turn wait", async () => {
+    const runtime = createRuntime();
+    const manager = new RuntimeManager({
+      createRuntime: () => runtime,
+      provisionWorkspace: async () => createWorkspace("/tmp/bb-release"),
+    });
+    await manager.ensureEnvironment({
+      environmentId: "env-release",
+      workspacePath: "/tmp/bb-release",
+    });
+    runtime.setIdle("thread-1");
+
+    const options = {
+      dataDir: "/tmp/bb-data",
+      eventSink: { emit: vi.fn(), flush: vi.fn(async () => undefined) },
+      fetchProjectAttachment: async () => {
+        throw new Error("Unexpected project attachment fetch");
+      },
+      runtimeManager: manager,
+      threadStorageRootPath: "/tmp/bb-thread-storage",
+    };
+
+    // The server already settled this thread as idle. Waiting for an active
+    // turn would burn the full stop timeout on every runtime released.
+    await dispatchCommand(
+      {
+        type: "thread.stop",
+        intent: "release",
+        environmentId: "env-release",
+        threadId: "thread-1",
+      },
+      options,
+    );
+    expect(runtime.waitForActiveTurn).not.toHaveBeenCalled();
+    expect(runtime.stopThread).toHaveBeenCalledWith({ threadId: "thread-1" });
+
+    // An interrupt keeps the wait: the stop can race a start whose
+    // turn/started event the runtime has not observed yet.
+    runtime.setIdle("thread-1");
+    await dispatchCommand(
+      {
+        type: "thread.stop",
+        intent: "interrupt",
+        environmentId: "env-release",
+        threadId: "thread-1",
+      },
+      options,
+    );
+    expect(runtime.waitForActiveTurn).toHaveBeenCalledWith("thread-1", {
+      timeoutMs: expect.any(Number),
+    });
+  });
+
+  it("skips a release when a turn started after the server read the thread", async () => {
+    const runtime = createRuntime();
+    const manager = new RuntimeManager({
+      createRuntime: () => runtime,
+      provisionWorkspace: async () => createWorkspace("/tmp/bb-release-race"),
+    });
+    await manager.ensureEnvironment({
+      environmentId: "env-release-race",
+      workspacePath: "/tmp/bb-release-race",
+    });
+    // The server chose a release from an idle read. A send won the race and
+    // started a turn before this command reached the daemon.
+    runtime.setActiveTurn("thread-1", "turn-new");
+
+    const result = await dispatchCommand(
+      {
+        type: "thread.stop",
+        intent: "release",
+        environmentId: "env-release-race",
+        threadId: "thread-1",
+      },
+      {
+        dataDir: "/tmp/bb-data",
+        eventSink: { emit: vi.fn(), flush: vi.fn(async () => undefined) },
+        fetchProjectAttachment: async () => {
+          throw new Error("Unexpected project attachment fetch");
+        },
+        runtimeManager: manager,
+        threadStorageRootPath: "/tmp/bb-thread-storage",
+      },
+    );
+
+    // Stopping here would end accepted work and leave the server holding an
+    // active thread with no runtime.
+    expect(runtime.stopThread).not.toHaveBeenCalled();
+    expect(runtime.getActiveTurnId("thread-1")).toBe("turn-new");
+    expect(result).toEqual({ providerCheckpointId: null });
+  });
+
+  it("treats thread.stop as successful when no runtime holds the thread", async () => {
     const manager = new RuntimeManager({
       createRuntime: () => createRuntime(),
       provisionWorkspace: async () => createWorkspace(),
     });
     const command: CommandOf<"thread.stop"> = {
       type: "thread.stop",
+      intent: "interrupt",
       environmentId: "env-missing-runtime",
       threadId: "thread-1",
     };
@@ -687,7 +783,7 @@ describe("dispatchCommand", () => {
         runtimeManager: manager,
         threadStorageRootPath: "/tmp/bb-thread-storage",
       }),
-    ).rejects.toMatchObject({ code: "unknown_environment" });
+    ).resolves.toEqual({ providerCheckpointId: null });
   });
 
   it("cancels a plan in the environment the thread moved away from", async () => {
@@ -1393,6 +1489,79 @@ describe("dispatchCommand", () => {
         provider: "claudeCode",
         message: expect.stringContaining(
           "still reports 2.1.220 (expected 2.1.227)",
+        ),
+      }),
+      {
+        type: "completed",
+        provider: "claudeCode",
+        exitCode: 0,
+        signal: null,
+        success: false,
+      },
+    ]);
+  });
+
+  it("reports a successful Claude update as unverified when the pre-update version check fails", async () => {
+    const dataDir = await makeTempDir("bb-command-dispatch-provider-cli-");
+    const manager = new RuntimeManager({
+      createRuntime,
+      dataDir,
+      provisionWorkspace: async () => createWorkspace(),
+    });
+    const getProviderCliStatusForProvider = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        claudeCodeStatus({
+          currentVersion: "2.1.220",
+          latestVersion: "2.1.227",
+        }),
+      );
+
+    const result = await dispatchOnlineRpcCommand(
+      {
+        type: "provider_cli.install",
+        provider: "claudeCode",
+        actionKind: "update",
+      },
+      {
+        dataDir,
+        eventSink: {
+          emit: vi.fn(),
+          flush: vi.fn(async () => undefined),
+        },
+        fetchProjectAttachment: async () => {
+          throw new Error("Unexpected project attachment fetch");
+        },
+        getProviderCliStatusForProvider,
+        runtimeManager: manager,
+        streamProviderCliInstall: () =>
+          createProviderCliInstallEventStream([
+            {
+              type: "started",
+              provider: "claudeCode",
+              command: "claude update",
+            },
+            {
+              type: "completed",
+              provider: "claudeCode",
+              exitCode: 0,
+              signal: null,
+              success: true,
+            },
+          ]),
+        threadStorageRootPath: "/tmp/bb-thread-storage",
+      },
+    );
+
+    expect(getProviderCliStatusForProvider).toHaveBeenCalledTimes(2);
+    expect(result.events).toEqual([
+      expect.objectContaining({ type: "started" }),
+      expect.objectContaining({
+        type: "error",
+        provider: "claudeCode",
+        message: expect.stringContaining(
+          "bb could not read /Users/me/.local/bin/claude's version before the update",
         ),
       }),
       {

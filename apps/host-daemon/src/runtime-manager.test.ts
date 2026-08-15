@@ -197,6 +197,7 @@ function createFakeWorkspace(path: string, isGitRepo = true) {
       files: [],
       shortstat: "",
       mergeBaseRef: null,
+      truncated: false,
     })),
     diffPatch: vi.fn(async () => []),
     getPullRequest: vi.fn(async () => ({ outcome: "none" as const })),
@@ -417,7 +418,11 @@ describe("RuntimeManager", () => {
     });
 
     await expect(
-      manager.reapIdleProviderSessions({ idleForMs: 1_000, nowMs: 5_000 }),
+      manager.reapIdleProviderSessions({
+        idleForMs: 1_000,
+        nowMs: 5_000,
+        providerSessionReapingEnabled: false,
+      }),
     ).resolves.toEqual({
       reapedSessions: [
         {
@@ -439,11 +444,54 @@ describe("RuntimeManager", () => {
     expect(firstRuntime.reapIdleProviderSessions).toHaveBeenCalledWith({
       idleForMs: 1_000,
       nowMs: 5_000,
+      providerSessionReapingEnabled: false,
+      runThreadExclusive: expect.any(Function),
     });
     expect(secondRuntime.reapIdleProviderSessions).toHaveBeenCalledWith({
       idleForMs: 1_000,
       nowMs: 5_000,
+      providerSessionReapingEnabled: false,
+      runThreadExclusive: expect.any(Function),
     });
+  });
+
+  it("does not release a session while its thread command is in flight", async () => {
+    const runtime = createFakeRuntime();
+    const releaseWork = vi.fn(async () => ({
+      idleForMs: 2_000,
+      providerId: "claude-code",
+      providerThreadId: "provider-thread-1",
+      threadId: "thread-1",
+    }));
+    runtime.reapIdleProviderSessions.mockImplementation(async (args) => {
+      if (!args.runThreadExclusive) {
+        throw new Error("Expected thread control callback");
+      }
+      const released = await args.runThreadExclusive("thread-1", releaseWork);
+      return { reapedSessions: released ? [released] : [] };
+    });
+    const manager = new RuntimeManager({
+      provisionWorkspace: createProvisionWorkspaceMock("/tmp/env-1"),
+      createRuntime: () => runtime,
+    });
+    await manager.ensureEnvironment({
+      environmentId: "env-1",
+      workspacePath: "/tmp/env-1",
+    });
+    const finishCommand = await manager.retainEnvironmentForThreadCommand(
+      "env-1",
+      "thread-1",
+    );
+
+    const result = await manager.reapIdleProviderSessions({
+      idleForMs: 1_000,
+      nowMs: 5_000,
+      providerSessionReapingEnabled: true,
+    });
+
+    expect(result.reapedSessions).toEqual([]);
+    expect(releaseWork).not.toHaveBeenCalled();
+    finishCommand();
   });
 
   it("passes staged injected skill roots to created runtimes", async () => {

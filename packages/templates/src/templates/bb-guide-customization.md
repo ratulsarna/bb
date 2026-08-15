@@ -104,16 +104,18 @@ while the experiment is on.
 
 The `newOnboarding` experiment exposes the first-run agent and project setup
 guide.
-The `toolsHub` experiment exposes Extensions for managing skills and plugins.
-Automations stays in the Plugins section beside threads. It does not enable or
-disable installed skills, automation execution, plugin runtimes, CLI commands,
-or backend APIs.
 The default-on `editMessages` experiment enables editing eligible, accepted
 root user messages in Codex, Claude Code, and Pi threads, including failed or
 incomplete turns; turn it off to hide the editor. Opening the editor is
 client-local; submitting stops and settles a running thread, then replaces the
 selected turn and all later conversation history while retaining workspace side
 effects. Grouped multi-message requests are not yet editable.
+
+The default-off `providerSessionReaping` experiment extends idle release to
+every restorable provider. BB releases those sessions after 30 idle minutes.
+The daemon applies a changed value within five minutes. Active turns, commands,
+agents, workflows, and monitors keep their sessions loaded. BB releases idle
+Codex sessions with the experiment off as well.
 
 Thread timeline windows are bounded by event count as well as user-message
 count (`BB_FF_TIMELINE_WINDOW_EVENT_BUDGET`, default 1500), so a long thread

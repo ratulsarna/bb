@@ -793,6 +793,22 @@ interface SequenceWindowItemRowsArgs extends TimelineWindowRowsArgs {
   sequenceStart: number;
 }
 
+function rowIdentifiesBufferedTextItem(row: StoredEventRow): boolean {
+  if (row.type === "item/started") {
+    return (
+      row.itemKind === "agentMessage" ||
+      row.itemKind === "plan" ||
+      row.itemKind === "reasoning"
+    );
+  }
+  return (
+    row.type === "item/agentMessage/delta" ||
+    row.type === "item/plan/delta" ||
+    row.type === "item/reasoning/summaryTextDelta" ||
+    row.type === "item/reasoning/textDelta"
+  );
+}
+
 /**
  * Makes a sequence-cut window own whole items rather than halves of them.
  *
@@ -893,22 +909,18 @@ function ensureSequenceWindowWholeItemRows(
       completedItemKeys.add(scopedItemRefKey(storedEventRowItemRef(row)));
     }
   }
-  // Delta rows are stored with a null itemKind, and an item that started below
-  // the cut has only delta rows inside the window — so the kind must be read
-  // from the backfilled item/started row, never from the in-window rows.
+  // Delta rows are stored with a null itemKind, and providers may begin an
+  // assistant, plan, or reasoning item with its first delta rather than an
+  // item/started event. Classify from either the backfilled lifecycle row or
+  // the in-window delta type so those delta-only items keep their prefix too.
   const bufferedTextItems = new Map<string, ScopedItemRef>();
-  for (const row of backfillRows) {
-    if (row.type !== "item/started" || row.itemId === null) {
+  for (const row of [...backfillRows, ...rows]) {
+    if (row.itemId === null || !rowIdentifiesBufferedTextItem(row)) {
       continue;
     }
     const ref = storedEventRowItemRef(row);
     const key = scopedItemRefKey(ref);
-    if (
-      !completedItemKeys.has(key) &&
-      (row.itemKind === "agentMessage" ||
-        row.itemKind === "plan" ||
-        row.itemKind === "reasoning")
-    ) {
+    if (!completedItemKeys.has(key) && itemsStartingBeforeWindow.has(key)) {
       bufferedTextItems.set(key, ref);
     }
   }
@@ -1948,7 +1960,6 @@ export function buildTimelineTurnSummaryDetails(
     maxDataBytes: THREAD_TIMELINE_EVENT_DATA_BYTE_LIMIT,
     maxInlineOutputChars: null,
   });
-  let detailsEventDataBytes = fullDetailsFloor.eventDataBytes;
   let detailsInlineOutputLimit: InlineOutputCharLimit = null;
   if (fullDetailsFloor.kind !== "fits") {
     detailsInlineOutputLimit = DEFAULT_MAX_INLINE_OUTPUT_CHARS;
@@ -1964,7 +1975,6 @@ export function buildTimelineTurnSummaryDetails(
         "Timeline turn details exceed the safe response limit",
       );
     }
-    detailsEventDataBytes = cappedDetailsFloor.eventDataBytes;
   }
   const exactEventRows = listStoredTimelineWindowEventRows(db, {
     ...detailsWindow,
@@ -2044,6 +2054,25 @@ export function buildTimelineTurnSummaryDetails(
     },
     useExactEventRowBounds: exactEventRowsForRequestedTurn.removedRows,
   });
+  // The same whole-item ownership rule the timeline window applies, for the
+  // same reason. A byte cut can fall between an item's `item/started` and its
+  // `item/completed`, and the timeline gives such an item to the newest slice.
+  // Without the rule here, the older slice's details project the item from its
+  // `item/started` row alone and render it "pending" after the turn finished.
+  const wholeItemEventRows = ensureSequenceWindowWholeItemRows(db, {
+    beforeSequence: detailsWindow.beforeSequence,
+    maxInlineOutputChars: detailsInlineOutputLimit,
+    rows: mergeStoredEventRowsById([...requestedTurnStartedRows, ...eventRows]),
+    sequenceStart: detailsWindow.sequenceStart,
+    threadId: thread.id,
+  });
+  // The floor queries measured the slice before closure, and closure backfills
+  // the earlier lifecycle rows of the items this slice owns. Measure what the
+  // route actually holds, so the parent expansion spends what is left rather
+  // than a pre-closure estimate of it. The subtraction may go negative, which
+  // is the safe direction: the parent fetch then stays inside its bounds.
+  const detailsEventDataBytes =
+    byteLengthOfStoredEventRows(wholeItemEventRows);
   const eventRowsWithParentedChildren = ensureTimelineWindowParentedRows(db, {
     maxInlineOutputChars: detailsInlineOutputLimit,
     outOfBoundsChildDataByteLimit:
@@ -2053,7 +2082,7 @@ export function buildTimelineTurnSummaryDetails(
       sequenceStart: detailsWindow.sequenceStart,
     },
     threadId: thread.id,
-    rows: mergeStoredEventRowsById([...requestedTurnStartedRows, ...eventRows]),
+    rows: wholeItemEventRows,
   }).rows;
   const eventRowsWithTurnStarts = ensureTimelineWindowTurnStartedRows(db, {
     threadId: thread.id,

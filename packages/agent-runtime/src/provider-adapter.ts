@@ -293,6 +293,16 @@ export interface ProviderAdapter {
   ): ProviderExecutionSettingsChange;
   process: { command: string; args: string[]; env?: Record<string, string> };
 
+  /**
+   * Whether this thread owns provider work that can outlive its turn. Some
+   * providers track that work by BB thread and others by provider session, so
+   * both identifiers are given.
+   */
+  hasOpenThreadWork?(args: {
+    providerThreadId: string;
+    threadId: string;
+  }): boolean;
+
   buildCommandPlan(command: AdapterCommand): ProviderCommandPlan;
   /**
    * Optional provider-specific reads performed after the protocol initialize

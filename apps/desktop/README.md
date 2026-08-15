@@ -73,9 +73,8 @@ pnpm exec turbo run desktop:build --filter=@bb/desktop
 pnpm exec turbo run smoke:packaged --filter=@bb/desktop
 ```
 
-Artifacts are written under `apps/desktop/release/`. The desktop build is
-macOS-only and produces separate Apple Silicon arm64 and Intel x64 artifacts.
-Without signing secrets, local builds
+Artifacts are written under `apps/desktop/release/`. The macOS build is Apple
+Silicon arm64-only; Intel Macs are not a target. Without signing secrets, local builds
 sign with a code-signing identity auto-discovered from the keychain and skip
 notarization. A valid signature matters even for local builds: macOS
 provenance-tracks unsigned apps, forcing syspolicyd to evaluate every exec in
@@ -158,7 +157,7 @@ tag:
 
 | Platform | Artifacts               | electron-updater metadata | Version feed                 |
 | -------- | ----------------------- | ------------------------- | ---------------------------- |
-| macOS    | `.dmg`, `.zip` (2 arch) | `latest-mac.yml`          | `desktop-version.json`       |
+| macOS    | `.dmg`, `.zip` (arm64)  | `latest-mac.yml`          | `desktop-version.json`       |
 | Linux    | `.AppImage` (x64)       | `latest-linux.yml`        | `desktop-version-linux.json` |
 
 macOS keeps the unsuffixed feed name because released macOS builds already
