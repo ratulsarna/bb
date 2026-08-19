@@ -6,6 +6,8 @@ import {
   buildProjectThreadGroups,
   compareByCreatedAtDescending,
   compareStandardThreads,
+  createSidebarProjectIdResolver,
+  resolveSidebarProjectId,
   type ProjectThreadItem,
   type ProjectThreadNode,
   type ThreadComparator,
@@ -822,6 +824,96 @@ describe("section bucketing", () => {
 
     expect(summarizeItems(items)).toEqual([
       { section: "chronological::sec_work", name: "Work", items: ["a", "b"] },
+    ]);
+  });
+});
+
+describe("resolveSidebarProjectId", () => {
+  it("files a child from another project under its root ancestor's project", () => {
+    const root = createThread({ id: "thr_root", projectId: "proj_a" });
+    const child = createThread({
+      id: "thr_child",
+      parentThreadId: "thr_root",
+      projectId: "proj_b",
+    });
+    const grandchild = createThread({
+      id: "thr_grandchild",
+      parentThreadId: "thr_child",
+      projectId: "proj_c",
+    });
+    const threadById = new Map(
+      [root, child, grandchild].map((thread) => [thread.id, thread]),
+    );
+
+    expect(resolveSidebarProjectId(root, threadById)).toBe("proj_a");
+    expect(resolveSidebarProjectId(child, threadById)).toBe("proj_a");
+    expect(resolveSidebarProjectId(grandchild, threadById)).toBe("proj_a");
+  });
+
+  it("falls back to the thread's own project when the parent is not listed", () => {
+    const orphan = createThread({
+      id: "thr_orphan",
+      parentThreadId: "thr_missing",
+      projectId: "proj_b",
+    });
+    expect(
+      resolveSidebarProjectId(orphan, new Map([[orphan.id, orphan]])),
+    ).toBe("proj_b");
+  });
+
+  it("stops at a cycle instead of looping", () => {
+    const left = createThread({
+      id: "thr_left",
+      parentThreadId: "thr_right",
+      projectId: "proj_a",
+    });
+    const right = createThread({
+      id: "thr_right",
+      parentThreadId: "thr_left",
+      projectId: "proj_b",
+    });
+    const threadById = new Map([
+      [left.id, left],
+      [right.id, right],
+    ]);
+    expect(resolveSidebarProjectId(left, threadById)).toBe("proj_b");
+  });
+
+  it("memoizes ancestor walks across siblings and descendants", () => {
+    const root = createThread({ id: "thr_root", projectId: "proj_a" });
+    const child = createThread({
+      id: "thr_child",
+      parentThreadId: "thr_root",
+      projectId: "proj_b",
+    });
+    const grandchildren = Array.from({ length: 5 }, (_, index) =>
+      createThread({
+        id: `thr_grandchild_${index}`,
+        parentThreadId: "thr_child",
+        projectId: "proj_c",
+      }),
+    );
+    const all = [root, child, ...grandchildren];
+    const lookups: string[] = [];
+    const threadById = new Map(all.map((thread) => [thread.id, thread]));
+    const spyingMap: ReadonlyMap<string, ThreadListEntry> = {
+      ...threadById,
+      get: (id: string) => {
+        lookups.push(id);
+        return threadById.get(id);
+      },
+    } as unknown as ReadonlyMap<string, ThreadListEntry>;
+    const resolve = createSidebarProjectIdResolver(spyingMap);
+
+    expect(all.map(resolve)).toEqual(Array(all.length).fill("proj_a"));
+    // Root and child resolve once; each grandchild stops at the cached child.
+    expect(lookups).toEqual([
+      "thr_root",
+      "thr_child",
+      "thr_child",
+      "thr_child",
+      "thr_child",
+      "thr_child",
     ]);
   });
 });

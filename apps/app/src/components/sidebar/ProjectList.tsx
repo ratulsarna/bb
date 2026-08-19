@@ -82,7 +82,9 @@ import type { ProjectThreadListState } from "./ProjectRow";
 import {
   compareByCreatedAtDescending,
   compareStandardThreads,
+  createSidebarProjectIdResolver,
   isSidebarProjectThread,
+  resolveSidebarProjectId,
   type ProjectThreadItem,
   type SidebarSectionDefinition,
   type ThreadComparator,
@@ -267,6 +269,9 @@ interface SelectedThreadSidebarExpansionArgs {
   organizationMode: SidebarOrganizationMode;
   isPinned: boolean;
   selectedThread: ThreadListEntry;
+  // Project group that renders the thread in "By project" mode. A cross-project
+  // child renders under its root ancestor's project, not its own.
+  sidebarProjectId: string;
 }
 
 interface SelectedThreadSidebarExpansion {
@@ -317,6 +322,7 @@ export function getSelectedThreadSidebarExpansion({
   organizationMode,
   isPinned,
   selectedThread,
+  sidebarProjectId,
 }: SelectedThreadSidebarExpansionArgs): SelectedThreadSidebarExpansion {
   if (isPinned) {
     return { sidebarSectionId: "pinned" };
@@ -336,13 +342,11 @@ export function getSelectedThreadSidebarExpansion({
     return sectionKey ? { sectionKey } : { sidebarSectionId: "threads" };
   }
 
-  if (selectedThread.projectId === PERSONAL_PROJECT_ID) {
+  if (sidebarProjectId === PERSONAL_PROJECT_ID) {
     return { sidebarSectionId: "threads" };
   }
 
-  return {
-    projectId: selectedThread.projectId,
-  };
+  return { projectId: sidebarProjectId };
 }
 
 function isCollapsibleSidebarSectionId(
@@ -1066,13 +1070,18 @@ function ProjectModeSections({
   const pathExistence = useHostPathExistence(workHostId, localPaths);
   const threadsByProject = useMemo(() => {
     const grouped = new Map<string, ThreadListEntry[]>();
+    const resolveSidebarProjectId = createSidebarProjectIdResolver(
+      new Map(threads.map((thread) => [thread.id, thread])),
+    );
     for (const thread of threads) {
       if (effectivePinnedThreadIds.has(thread.id)) continue;
-      const existing = grouped.get(thread.projectId);
+      // Cross-project children render under their parent's project group.
+      const sidebarProjectId = resolveSidebarProjectId(thread);
+      const existing = grouped.get(sidebarProjectId);
       if (existing) {
         existing.push(thread);
       } else {
-        grouped.set(thread.projectId, [thread]);
+        grouped.set(sidebarProjectId, [thread]);
       }
     }
     return grouped;
@@ -1854,6 +1863,7 @@ function ProjectListComponent({
       organizationMode,
       isPinned,
       selectedThread,
+      sidebarProjectId: resolveSidebarProjectId(selectedThread, threadById),
     });
     if (expansion.machineKey) {
       const machineKey = expansion.machineKey;

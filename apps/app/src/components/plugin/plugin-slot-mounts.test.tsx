@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PERSONAL_PROJECT_ID } from "@bb/domain";
 import type {
   PluginComposerApi,
+  PluginFileOpenerProps,
   PluginNewThreadPanelProps,
   PluginThreadPanelProps,
 } from "@get-bb/plugin-sdk";
@@ -35,7 +36,7 @@ import {
   PluginPanelHeaderCenter,
 } from "./PluginPanelHeader";
 import { resetAllCrashedPluginSlotsForTest } from "./PluginSlotMount";
-import { PluginComposerActions } from "./PluginComposerActions";
+import { ComposerActionsSlot } from "./PluginComposerActions";
 import { PluginContext } from "./plugin-context";
 import {
   PluginComposerHostProvider,
@@ -60,6 +61,7 @@ import {
   type OpenPluginPanelArgs,
 } from "./PluginPanelActions";
 import { NewTabActions } from "@/components/secondary-panel/NewTabFileSearch";
+import { buildFileOpenerPanelTab } from "./file-opener-tabs";
 import { splitLayoutAtom } from "@/lib/split-layout/atoms";
 import type { PromptDraftState } from "@/lib/prompt-draft";
 
@@ -336,7 +338,7 @@ describe("useComposer", () => {
 
   function ComposerCustomizationMount() {
     const view = useComposerView();
-    return <PluginComposerActions view={view} />;
+    return <ComposerActionsSlot view={view} />;
   }
 
   it("writes quotes into the thread draft and fires the focus bus", () => {
@@ -1474,16 +1476,17 @@ describe("plugin panel shared title bar and full-bleed body", () => {
     ).toBeDefined();
   });
 
-  it("gives the component a zero-padding full-bleed body", () => {
-    setPluginSlotRegistrations(
-      "demo",
-      registrationSet({ navPanels: [panelSlot({})] }),
+  it("keys the right-panel toggle target to its owning pane", () => {
+    const panel = panelSlot({});
+    render(
+      <PluginPanelHeaderActions panel={panel} paneId="pane-docs" subPath="" />,
     );
-    renderPanelBody();
-    const body = screen.getByTestId("plugin-panel-body");
-    expect(body.className).toContain("-m-4");
-    expect(body.className).toContain("md:-m-5");
-    expect(body.className).not.toMatch(/(?:^|\s)p[trblxy]?-/u);
+
+    expect(
+      document
+        .querySelector("[data-plugin-right-panel-toggle-portal]")
+        ?.getAttribute("data-plugin-right-panel-toggle-portal"),
+    ).toBe("plugin-panel:demo:board:pane-docs");
   });
 
   it("still contains a crashing panel inside the error boundary", () => {
@@ -1594,8 +1597,12 @@ describe("plugin thread panel actions", () => {
     ).toBeDefined();
   });
 
-  it("contains a throwing run and rejects non-JSON params without opening", () => {
+  it("contains a throwing run and declines non-JSON params without opening", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // What each declined openPanel reported back to the plugin: a bad
+    // `params` must surface as false, never as a throw the plugin has to
+    // catch (the host swallows run errors, so a throw would be invisible).
+    const declines: boolean[] = [];
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     setPluginSlotRegistrations(
@@ -1614,14 +1621,19 @@ describe("plugin thread panel actions", () => {
             id: "cyclic",
             title: "Cyclic",
             component: PanelProbe,
-            run: ({ openPanel }) => openPanel({ params: cyclic as never }),
+            run: ({ openPanel }) => {
+              declines.push(openPanel({ params: cyclic as never }));
+            },
           },
           {
             id: "coerced",
             title: "Coerced",
             component: PanelProbe,
-            run: ({ openPanel }) =>
-              openPanel({ params: new Date("2026-01-01") as never }),
+            run: ({ openPanel }) => {
+              declines.push(
+                openPanel({ params: new Date("2026-01-01") as never }),
+              );
+            },
           },
         ],
       }),
@@ -1632,7 +1644,67 @@ describe("plugin thread panel actions", () => {
     fireEvent.click(screen.getByText("Cyclic"));
     fireEvent.click(screen.getByText("Coerced"));
     expect(openPluginPanel).not.toHaveBeenCalled();
+    expect(declines).toEqual([false, false]);
     expect(warn).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports an accepted open as true from both panel action kinds", () => {
+    // The contract every openPanel entry point shares: an accepted open is
+    // true. Both action kinds are exercised in one test because the value of
+    // the boolean is that a plugin registering more than one kind can branch
+    // on it uniformly.
+    const accepted: boolean[] = [];
+    setPluginSlotRegistrations(
+      "demo",
+      registrationSet({
+        threadPanelActions: [
+          {
+            id: "issue",
+            title: "Thread action",
+            component: PanelProbe,
+            run: ({ openPanel }) => {
+              accepted.push(openPanel({ params: { source: "thread" } }));
+            },
+          },
+        ],
+        newThreadPanelActions: [
+          {
+            id: "setup",
+            title: "Root action",
+            component: NewThreadPanelProbe,
+            run: ({ openPanel }) => {
+              accepted.push(openPanel({ params: { source: "root" } }));
+            },
+          },
+        ],
+      }),
+    );
+
+    function BothActionsHarness() {
+      const threadEntries = usePluginPanelActions({
+        openPluginPanel: () => undefined,
+        threadId: "thr_9",
+      });
+      const rootEntries = usePluginNewThreadPanelActions({
+        openPluginPanel: () => undefined,
+        projectId: "proj_1",
+      });
+      return (
+        <div>
+          {[...threadEntries, ...rootEntries].map((entry) => (
+            <button key={entry.id} type="button" onClick={entry.onSelect}>
+              {entry.title}
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    render(<BothActionsHarness />);
+    fireEvent.click(screen.getByText("Thread action"));
+    fireEvent.click(screen.getByText("Root action"));
+
+    expect(accepted).toEqual([true, true]);
   });
 
   it("offers no actions outside a thread context", () => {
@@ -1661,11 +1733,12 @@ describe("plugin thread panel actions", () => {
             title: "Set up thread",
             icon: "Wand",
             component: NewThreadPanelProbe,
-            run: ({ projectId, openPanel }) =>
+            run: ({ projectId, openPanel }) => {
               openPanel({
                 title: `Setup for ${String(projectId)}`,
                 params: { source: "root" },
-              }),
+              });
+            },
           },
         ],
       }),
@@ -1781,25 +1854,40 @@ describe("plugin file opener tabs", () => {
         ],
       }),
     );
-    const tab = createPluginPanelFixedPanelTab({
-      actionId: "file-opener:editor",
-      paramsJson: JSON.stringify({
-        path: "notes/todo.md",
-        source: {
-          kind: "workspace",
-          threadId: null,
-          environmentId: "env_1",
-          projectId: null,
-        },
+    const tab = {
+      ...createPluginPanelFixedPanelTab({
+        actionId: "file-opener:editor",
+        paramsJson: JSON.stringify({
+          path: "notes/todo.md",
+          source: {
+            kind: "workspace",
+            threadId: null,
+            environmentId: "env_1",
+            projectId: null,
+          },
+        }),
+        pluginId: "notes",
+        title: "todo.md",
       }),
-      pluginId: "notes",
-      title: "todo.md",
-    });
+      fileOpenerOwner: {
+        kind: "workspace-file-preview" as const,
+        environmentId: "env_1",
+        projectId: null,
+        tab: {
+          lineRange: { startLineNumber: 7, endLineNumber: 9 },
+          path: "notes/todo.md",
+          source: { kind: "working-tree" as const },
+          statusLabel: null,
+        },
+        threadId: null,
+      },
+    };
 
     render(
       <PluginPanelTabContent
         tab={tab}
         context={{ kind: "new-thread", projectId: null }}
+        fileOpenerOriginal={<div>native preview</div>}
       />,
     );
 
@@ -1808,23 +1896,106 @@ describe("plugin file opener tabs", () => {
     ).toBeDefined();
   });
 
-  it("degrades to a placeholder when the opener is gone or params are junk", () => {
-    const orphanTab = createPluginPanelFixedPanelTab({
-      actionId: "file-opener:gone",
-      paramsJson: JSON.stringify({
-        path: "a.md",
-        source: { kind: "workspace" },
+  it("lets an opener delegate to the exact native preview node", () => {
+    function DelegatingEditor({
+      experimental_Original: Original,
+    }: PluginFileOpenerProps) {
+      return <Original />;
+    }
+    setPluginSlotRegistrations(
+      "notes",
+      registrationSet({
+        fileOpeners: [
+          {
+            id: "editor",
+            title: "Notes editor",
+            extensions: ["md"],
+            component: DelegatingEditor,
+          },
+        ],
       }),
-      pluginId: "ghost",
-      title: "a.md",
-    });
+    );
+    const tab = buildFileOpenerPanelTab(
+      { id: "editor", pluginId: "notes" },
+      {
+        path: "notes/todo.md",
+        source: {
+          kind: "workspace",
+          environmentId: "env_1",
+          projectId: null,
+          threadId: "thr_1",
+        },
+      },
+      {
+        kind: "workspace-file-preview",
+        environmentId: "env_1",
+        projectId: null,
+        tab: {
+          lineRange: { startLineNumber: 7, endLineNumber: 9 },
+          path: "notes/todo.md",
+          source: { kind: "working-tree" },
+          statusLabel: null,
+        },
+        threadId: "thr_1",
+      },
+    );
+
+    render(
+      <PluginPanelTabContent
+        tab={tab}
+        context={{ kind: "thread", threadId: "thr_1" }}
+        fileOpenerOriginal={
+          <button type="button">Native line 7 and editor actions</button>
+        }
+      />,
+    );
+
+    expect(screen.getByRole("button").textContent).toBe(
+      "Native line 7 and editor actions",
+    );
+  });
+
+  it("uses the owner when the opener is gone and a placeholder for junk params", () => {
+    const orphanTab = {
+      ...createPluginPanelFixedPanelTab({
+        actionId: "file-opener:gone",
+        paramsJson: JSON.stringify({
+          path: "a.md",
+          source: {
+            kind: "workspace",
+            threadId: null,
+            environmentId: "env_1",
+            projectId: null,
+          },
+        }),
+        pluginId: "ghost",
+        title: "a.md",
+      }),
+      fileOpenerOwner: {
+        kind: "workspace-file-preview" as const,
+        environmentId: "env_1",
+        projectId: null,
+        tab: {
+          lineRange: { startLineNumber: 3, endLineNumber: 4 },
+          path: "a.md",
+          source: { kind: "working-tree" as const },
+          statusLabel: null,
+        },
+        threadId: null,
+      },
+    };
     const { unmount } = render(
       <PluginPanelTabContent
         tab={orphanTab}
         context={{ kind: "new-thread", projectId: null }}
+        fileOpenerOriginal={
+          <button type="button">Native preview actions for a.md</button>
+        }
       />,
     );
-    expect(screen.getByText(/file opener is not available/)).toBeDefined();
+    expect(screen.getByRole("button").textContent).toBe(
+      "Native preview actions for a.md",
+    );
     unmount();
 
     setPluginSlotRegistrations(
@@ -1850,8 +2021,72 @@ describe("plugin file opener tabs", () => {
       <PluginPanelTabContent
         tab={junkParamsTab}
         context={{ kind: "new-thread", projectId: null }}
+        fileOpenerOriginal={<div>must not render</div>}
       />,
     );
     expect(screen.getByText(/file opener is not available/)).toBeDefined();
+  });
+
+  it("restores the exact native preview node when the opener crashes", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    function CrashingEditor(): never {
+      throw new Error("editor crashed");
+    }
+    setPluginSlotRegistrations(
+      "notes",
+      registrationSet({
+        fileOpeners: [
+          {
+            id: "editor",
+            title: "Notes editor",
+            extensions: ["md"],
+            component: CrashingEditor,
+          },
+        ],
+      }),
+    );
+    const tab = {
+      ...createPluginPanelFixedPanelTab({
+        actionId: "file-opener:editor",
+        paramsJson: JSON.stringify({
+          path: "notes/todo.md",
+          source: {
+            kind: "workspace",
+            threadId: "thr_1",
+            environmentId: "env_1",
+            projectId: null,
+          },
+        }),
+        pluginId: "notes",
+        title: "todo.md",
+      }),
+      fileOpenerOwner: {
+        kind: "workspace-file-preview" as const,
+        environmentId: "env_1",
+        projectId: null,
+        tab: {
+          lineRange: { startLineNumber: 7, endLineNumber: 9 },
+          path: "notes/todo.md",
+          source: { kind: "working-tree" as const },
+          statusLabel: null,
+        },
+        threadId: "thr_1",
+      },
+    };
+
+    render(
+      <PluginPanelTabContent
+        tab={tab}
+        context={{ kind: "thread", threadId: "thr_1" }}
+        fileOpenerOriginal={
+          <button type="button">Native selection and editor actions</button>
+        }
+      />,
+    );
+
+    expect(screen.getByRole("button").textContent).toBe(
+      "Native selection and editor actions",
+    );
   });
 });

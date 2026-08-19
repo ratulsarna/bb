@@ -33,6 +33,8 @@ run-name: ${{ github.event_name == 'schedule' && 'Publish bb-app + desktop night
 
 # Only the npm publish job gets id-token: write, for npm trusted publishing.
 # The desktop build jobs must not inherit an OIDC token they never use.
+# The npm publish jobs run on GitHub-hosted runners. npm rejects provenance
+# bundles from self-hosted runners such as Blacksmith (E422).
 permissions:
   contents: read
 
@@ -56,6 +58,13 @@ jobs:
       id-token: write
     outputs:
       version: ${{ steps.release.outputs.version }}
+    # Every publish that moves the `nightly` dist-tag shares one group, so the
+    # cron and a release run's publish-nightly job cannot move that tag at the
+    # same time. A stable release publishes `latest` here instead, so it takes a
+    # per-run group and never waits on the cron.
+    concurrency:
+      group: ${{ (github.event_name == 'schedule' || inputs.npm_tag == 'nightly') && 'publish-nightly-npm' || format('publish-bb-app-npm-{0}', github.run_id) }}
+      cancel-in-progress: false
 
     steps:
       - name: Require main branch
@@ -224,6 +233,125 @@ jobs:
             echo "- commit: \`${GITHUB_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # A stable release moves `latest` past the newest nightly, because a nightly
+  # version is the next patch of whatever main held the night before. The
+  # nightly channel would then sit behind `latest` until the next 3am cron. This
+  # job republishes the nightly channel from the same release commit, at
+  # <next patch>-nightly.<run id>.<attempt>, so nightly stays ahead of the
+  # release it was cut from. It runs only for a real `latest` publish, and a
+  # failure here cannot roll back the stable release that already shipped.
+  publish-nightly:
+    name: Publish bb-app nightly after the release
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_tag == 'latest' && inputs.dry_run == false }}
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      version: ${{ steps.nightly_version.outputs.version }}
+    # Shares the publish job's nightly group. See that job for why.
+    concurrency:
+      group: publish-nightly-npm
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 9.15.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm_version="$(npm --version)"
+          node - "$npm_version" <<'NODE' || npm install --global npm@latest
+          const version = process.argv[2];
+          const [major, minor, patch] = version.split(".").map(Number);
+          const supported =
+            major > 11 ||
+            (major === 11 && (minor > 5 || (minor === 5 && patch >= 1)));
+          process.exit(supported ? 0 : 1);
+          NODE
+          npm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare nightly version
+        id: nightly_version
+        run: |
+          set -euo pipefail
+
+          # Runs after the release commit is checked out, so the derived
+          # version is the next patch above the version just published.
+          nightly_version="$(node scripts/prepare-nightly-version.mjs)"
+          echo "PACKAGE_VERSION=${nightly_version}" >> "$GITHUB_ENV"
+          echo "version=${nightly_version}" >> "$GITHUB_OUTPUT"
+          echo "Prepared bb-app and desktop version ${nightly_version}."
+
+      # bb-app has no prepack hook and its `files` list ships built output, so
+      # `npm publish` packs whatever is on disk. This job runs on a fresh
+      # runner, so it must build before it packs. smoke:tarball depends on
+      # build and also proves the packed tarball runs at the nightly version.
+      - name: Smoke bb-app tarball
+        run: pnpm exec turbo run smoke:tarball --filter=bb-app --force --output-logs=new-only
+
+      - name: Preview npm package
+        working-directory: packages/bb-app
+        run: npm pack --dry-run
+
+      # No typecheck or unit tests here: the publish job ran them on this same
+      # commit and only the version string differs.
+      - name: Publish to npm
+        working-directory: packages/bb-app
+        run: npm publish --tag nightly
+
+      - name: Verify npm release
+        run: |
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            package_version="$(npm view "bb-app@$PACKAGE_VERSION" version --json 2>/tmp/bb-app-version.err || true)"
+            tag_version="$(npm view "bb-app@nightly" version --json 2>/tmp/bb-app-tag.err || true)"
+
+            if [ "$package_version" = "\"$PACKAGE_VERSION\"" ] && [ "$tag_version" = "\"$PACKAGE_VERSION\"" ]; then
+              echo "$package_version"
+              npm view bb-app version dist-tags --json
+              exit 0
+            fi
+
+            echo "Registry has not exposed bb-app@$PACKAGE_VERSION on tag nightly yet; retrying ($attempt/12)."
+            cat /tmp/bb-app-version.err || true
+            cat /tmp/bb-app-tag.err || true
+            sleep 10
+          done
+
+          echo "::error::Timed out waiting for bb-app@$PACKAGE_VERSION to appear on npm tag nightly."
+          exit 1
+
+      - name: Summarize the nightly release
+        env:
+          RELEASE_VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          {
+            echo "## bb-app nightly after the release"
+            echo
+            echo "- released version: \`$RELEASE_VERSION\`"
+            echo "- nightly version: \`$PACKAGE_VERSION\`"
+            echo "- npm tag: \`nightly\`"
+            echo "- commit: \`${GITHUB_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Rides the same release train as bb-app but stays independent of it: the SDK
   # version is settled in the repo (packages/domain/src/plugin-sdk-version.ts,
   # mirrored in packages/plugin-sdk/package.json), never computed here. Every
@@ -362,9 +490,19 @@ jobs:
 
   nightly-desktop-macos:
     name: Build bb Nightly desktop (macOS)
-    if: ${{ github.event_name == 'schedule' || (inputs.npm_tag == 'nightly' && inputs.dry_run == false) }}
-    needs: publish
-    runs-on: macos-15
+    # `!cancelled()` is required because publish-nightly is skipped on the
+    # scheduled and manual nightly paths, and a skipped need would otherwise
+    # skip this job too.
+    if: >-
+      ${{ !cancelled()
+      && needs.publish.result == 'success'
+      && (github.event_name == 'schedule'
+      || (inputs.npm_tag == 'nightly' && inputs.dry_run == false)
+      || needs.publish-nightly.result == 'success') }}
+    needs:
+      - publish
+      - publish-nightly
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 45
     outputs:
       version: ${{ steps.nightly_version.outputs.version }}
@@ -397,7 +535,10 @@ jobs:
       - name: Apply the nightly version
         id: nightly_version
         env:
-          NIGHTLY_VERSION: ${{ needs.publish.outputs.version }}
+          # publish-nightly holds the version on a release run; publish holds it
+          # on the scheduled and manual nightly paths, where publish-nightly is
+          # skipped and reports an empty version.
+          NIGHTLY_VERSION: ${{ needs.publish-nightly.outputs.version || needs.publish.outputs.version }}
         run: |
           set -euo pipefail
 
@@ -484,12 +625,20 @@ jobs:
 
   nightly-desktop-linux:
     name: Build bb Nightly desktop (Linux)
-    if: ${{ github.event_name == 'schedule' || (inputs.npm_tag == 'nightly' && inputs.dry_run == false) }}
-    needs: publish
+    # See the macOS job for why this condition uses `!cancelled()`.
+    if: >-
+      ${{ !cancelled()
+      && needs.publish.result == 'success'
+      && (github.event_name == 'schedule'
+      || (inputs.npm_tag == 'nightly' && inputs.dry_run == false)
+      || needs.publish-nightly.result == 'success') }}
+    needs:
+      - publish
+      - publish-nightly
     # Pinned rather than ubuntu-latest so the glibc the AppImage links against
     # changes only when we choose it: the build machine's glibc sets the
     # minimum distro version users need.
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 45
     outputs:
       version: ${{ steps.nightly_version.outputs.version }}
@@ -518,7 +667,8 @@ jobs:
       - name: Apply the nightly version
         id: nightly_version
         env:
-          NIGHTLY_VERSION: ${{ needs.publish.outputs.version }}
+          # See the macOS job for why the version comes from either npm job.
+          NIGHTLY_VERSION: ${{ needs.publish-nightly.outputs.version || needs.publish.outputs.version }}
         run: |
           set -euo pipefail
 
@@ -572,10 +722,17 @@ jobs:
     needs:
       - nightly-desktop-macos
       - nightly-desktop-linux
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     permissions:
       contents: write
+    # The workflow-level group splits nightly from ref, so a release run and the
+    # cron can reach this job at the same time. Both delete every asset on the
+    # moving release and upload their own, so a race can leave one platform's
+    # binaries missing. Serialize the reset instead.
+    concurrency:
+      group: publish-nightly-desktop
+      cancel-in-progress: false
 
     steps:
       - name: Checkout repository

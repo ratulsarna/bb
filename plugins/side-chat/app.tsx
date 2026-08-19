@@ -112,7 +112,18 @@ interface OpenSideChatArgs {
   sourceThreadId: string;
   anchorText: string;
   sourceSeqEnd: number | null;
-  openPanel(options: { title: string; params: SideChatPanelParams }): unknown;
+  /**
+   * Both call sites' `openPanel` narrowed to what this helper needs. Every
+   * SDK `openPanel` reports whether the host accepted the open, so the two
+   * action kinds share one signature here — this was `unknown` only to
+   * bridge them before they agreed.
+   *
+   * Nothing reads the result: no surface renders a plugin `messageAction`
+   * without a panel to open into, so there is no reachable decline to
+   * handle. `PluginThreadChat` sets `includePluginMessageActions={false}`,
+   * which is what keeps this action out of a side chat's own transcript.
+   */
+  openPanel(options: { title: string; params: SideChatPanelParams }): boolean;
 }
 
 /**

@@ -311,6 +311,58 @@ function isRootThread(
   );
 }
 
+/**
+ * Resolve the project group that shows a thread in "By project" mode. A child
+ * follows its root ancestor, so a child from another project stays nested under
+ * its parent instead of appearing as a root in its own project. When the parent
+ * chain is not in the list (archived, hidden, or a cycle), the thread falls
+ * back to its own project.
+ *
+ * The returned resolver memoizes per thread, so a sidebar pass over every
+ * thread walks each ancestor chain once instead of once per descendant.
+ */
+export function createSidebarProjectIdResolver(
+  threadById: ReadonlyMap<string, ThreadListEntry>,
+): (thread: ThreadListEntry) => string {
+  const sidebarProjectIdByThreadId = new Map<string, string>();
+  return (thread) => {
+    const cached = sidebarProjectIdByThreadId.get(thread.id);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const chain: ThreadListEntry[] = [thread];
+    const visitedThreadIds = new Set<string>([thread.id]);
+    let current = thread;
+    let resolved: string | undefined;
+    while (current.parentThreadId !== null) {
+      const parent = threadById.get(current.parentThreadId);
+      if (parent === undefined || visitedThreadIds.has(parent.id)) {
+        break;
+      }
+      const parentResolved = sidebarProjectIdByThreadId.get(parent.id);
+      if (parentResolved !== undefined) {
+        resolved = parentResolved;
+        break;
+      }
+      visitedThreadIds.add(parent.id);
+      chain.push(parent);
+      current = parent;
+    }
+    const sidebarProjectId = resolved ?? current.projectId;
+    for (const member of chain) {
+      sidebarProjectIdByThreadId.set(member.id, sidebarProjectId);
+    }
+    return sidebarProjectId;
+  };
+}
+
+export function resolveSidebarProjectId(
+  thread: ThreadListEntry,
+  threadById: ReadonlyMap<string, ThreadListEntry>,
+): string {
+  return createSidebarProjectIdResolver(threadById)(thread);
+}
+
 export function buildProjectThreadGroups(
   allProjectThreads: readonly ThreadListEntry[],
   compareThreads: ThreadComparator = compareStandardThreads,

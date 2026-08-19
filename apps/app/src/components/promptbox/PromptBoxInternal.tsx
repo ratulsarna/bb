@@ -7,7 +7,7 @@ import type {
 import type { ComposerView } from "@get-bb/plugin-sdk";
 import type { Node as ProseMirrorNode, Slice } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
-import { EditorContent, useEditor, type Editor } from "@tiptap/react";
+import { useEditor, type Editor } from "@tiptap/react";
 import {
   useCallback,
   useEffect,
@@ -44,23 +44,19 @@ import { findActiveTrigger } from "@/components/promptbox/mentions/find-active-t
 import { canLoadMoreCommandResults } from "@/components/promptbox/mentions/mention-menu-scroll";
 import { Button } from "@bb/shared-ui/button";
 import { Icon } from "@bb/shared-ui/icon";
+import { ComposerActionsSlot } from "@/components/plugin/PluginComposerActions";
+import { useResolvedComposerEditor } from "@/components/plugin/composer-slot-hooks";
 import {
-  PluginComposerActions,
-  usePluginComposerPlusMenuContributions,
-} from "@/components/plugin/PluginComposerActions";
-import {
+  composerScopeIdentity,
   PluginComposerViewProvider,
   useOptionalPluginComposerView,
   usePluginComposerHost,
   usePluginComposerViewModel,
 } from "@/components/plugin/plugin-composer-host";
-import { composerCustomizationsForScope } from "@/components/plugin/composer-customizations";
 import { useComposerInputLock } from "@/lib/plugin-sdk-hooks";
-import { usePluginSlots } from "@/lib/plugin-slots";
 import {
   COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS,
   COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS,
-  COARSE_POINTER_TEXT_BASE_CLASS,
 } from "@bb/shared-ui/coarse-pointer-sizing";
 import { usePointerCoarse } from "@bb/shared-ui/hooks/use-pointer-coarse";
 import {
@@ -84,13 +80,10 @@ import { cn } from "@bb/shared-ui/lib/utils";
 import { AttachmentPreview } from "./AttachmentPreview";
 import { VoiceRecordingBar } from "./VoiceRecordingBar";
 import {
-  PromptBoxActionsMenu,
+  ComposerPlusMenuSlot,
   type PromptBoxAction,
 } from "./PromptBoxActionsMenu";
-import {
-  PromptMentionLinkContext,
-  type PromptMentionLinkResolver,
-} from "./editor/prompt-mention-link";
+import type { PromptMentionLinkResolver } from "./editor/prompt-mention-link";
 import {
   refreshPromptDecorations,
   type PromptDecorationSource,
@@ -119,6 +112,8 @@ import { applyPromptListNewline } from "./editor/prompt-editor-list";
 import { applyPromptParagraphNewline } from "./editor/prompt-editor-paragraph";
 import { MentionMenu, type TypeaheadSuggestion } from "./mentions/MentionMenu";
 import { parsePromptMentionClipboardElement } from "./mentions/prompt-mention-clipboard";
+import { ComposerEditorSlot } from "./ComposerEditorSlot";
+import { useQueuedEditorTypeaheadLayoutReporter } from "./queued-editor-typeahead-layout";
 
 const PROMPTBOX_MIN_HEIGHT = 68;
 const PROMPTBOX_SELECTION_REVEAL_MARGIN = 12;
@@ -191,11 +186,6 @@ const ZEN_MODE_STORAGE_KEY: Record<ZenModeLayout, string> = {
 const ZEN_MODE_HEIGHT_CLASS: Record<ZenModeLayout, string> = {
   thread: "h-[50dvh]",
   "root-compose": "h-[70dvh]",
-};
-
-const PROMPTBOX_MAX_HEIGHT_BY_LAYOUT: Record<ZenModeLayout, string> = {
-  thread: "50dvh",
-  "root-compose": "70dvh",
 };
 
 const COLLAPSING_GRID_CLASS =
@@ -429,7 +419,7 @@ interface DismissedTriggerRange {
   hasLeftRange: boolean;
 }
 
-interface PromptEditorValueKey {
+export interface PromptEditorValueKey {
   text: string;
   mentions: readonly PromptTextMention[];
 }
@@ -495,8 +485,41 @@ function createTransientZenModeAtom() {
   );
 }
 
-function promptEditorValueKey(value: PromptEditorValueKey): string {
-  return JSON.stringify(value);
+/**
+ * Structural equality between the last value synced into the editor and the
+ * incoming controlled value. This used to be a JSON.stringify key compare,
+ * which re-serialized the full text twice per keystroke — several ms per
+ * character once a large paste (e.g. a 1 MB minified bundle) sits in the box.
+ * In the controlled round-trip the text and mention references are identical,
+ * so this normally settles on pointer equality alone.
+ */
+export function arePromptEditorValuesEqual(
+  left: PromptEditorValueKey | null,
+  right: PromptEditorValueKey,
+): boolean {
+  if (left === null) return false;
+  if (left.text !== right.text) return false;
+  if (left.mentions === right.mentions) return true;
+  if (left.mentions.length !== right.mentions.length) return false;
+  for (let index = 0; index < left.mentions.length; index += 1) {
+    const leftMention = left.mentions[index]!;
+    const rightMention = right.mentions[index]!;
+    if (leftMention === rightMention) continue;
+    if (
+      leftMention.start !== rightMention.start ||
+      leftMention.end !== rightMention.end
+    ) {
+      return false;
+    }
+    if (
+      leftMention.resource !== rightMention.resource &&
+      JSON.stringify(leftMention.resource) !==
+        JSON.stringify(rightMention.resource)
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function normalizePastedPlainText(text: string): string {
@@ -1191,6 +1214,9 @@ export function PromptBoxInternal({
   // Passive text autofocus opens the soft keyboard on coarse-pointer devices.
   const shouldAvoidSoftKeyboardAutofocus = isPointerCoarse;
   const formRef = useRef<HTMLFormElement>(null);
+  const typeaheadMenuRef = useRef<HTMLDivElement>(null);
+  const reportQueuedEditorTypeaheadLayout =
+    useQueuedEditorTypeaheadLayoutReporter();
   const blurAfterPointerSubmitRef = useRef(false);
   const heightAnimationFromRef = useRef<number | null>(null);
   const capturePromptBoxHeight = useCallback(() => {
@@ -1222,7 +1248,7 @@ export function PromptBoxInternal({
   const mentionRangesRef = useRef<readonly PromptTextMention[]>(mentionRanges);
   const placeholderRef = useRef(placeholder);
   const skipEditorChangeRef = useRef(false);
-  const editorValueKeyRef = useRef("");
+  const lastSyncedEditorValueRef = useRef<PromptEditorValueKey | null>(null);
   const triggerKeyRef = useRef("");
   const handleEditorKeyDownRef = useRef<
     (event: KeyboardEvent, isOriginalIPadHardwareEnter?: boolean) => boolean
@@ -1253,6 +1279,9 @@ export function PromptBoxInternal({
     useState<PromptDraftState | null>(null);
   const [recalledHistoryDraft, setRecalledHistoryDraft] =
     useState<PromptDraftState | null>(null);
+  // Mark session transitions before dispatching state so overlapping React
+  // priorities cannot enqueue the same multi-state reset more than once.
+  const hasActiveHistorySessionRef = useRef(false);
   const resolvedZenModeStorageKey =
     zenModeStorageKey ?? ZEN_MODE_STORAGE_KEY[zenModeLayout];
   const zenModeAtom = useMemo(
@@ -1400,7 +1429,6 @@ export function PromptBoxInternal({
     ? (compact.placeholder ?? placeholder)
     : placeholder;
   const pluginComposerHost = usePluginComposerHost();
-  const { composerCustomizations } = usePluginSlots();
   const composerInputLocked = useComposerInputLock(
     pluginComposerHost?.textEffectKey ?? null,
   );
@@ -1423,41 +1451,30 @@ export function PromptBoxInternal({
   const composerView = useOptionalPluginComposerView() ?? localComposerView;
   const composerViewRef = useRef(composerView);
   composerViewRef.current = composerView;
+  const composerScopeKey = composerScopeIdentity(composerView.scope);
+  const resolvedComposerEditor = useResolvedComposerEditor(
+    suppressPluginComposerCustomizations ? null : composerView.scope.kind,
+  );
   useEffect(() => {
     onComposerLayoutChange?.(composerLayout);
   }, [composerLayout, onComposerLayoutChange]);
   const pluginRichTextContributions = useMemo(() => {
-    if (suppressPluginComposerCustomizations) {
-      return {
-        sources: [] as readonly PromptDecorationSource[],
-        observers: [] as readonly PromptDraftObserver[],
-      };
-    }
-
     const sources: PromptDecorationSource[] = [];
     const observers: PromptDraftObserver[] = [];
-    for (const customization of composerCustomizationsForScope(
-      composerCustomizations,
-      composerView.scope.kind,
-    )) {
-      const richText = customization.richText;
-      if (richText === undefined) continue;
-      const sourceId = `${customization.pluginId}/${customization.id}`;
-      if (richText.effects !== undefined && richText.effects.length > 0) {
-        sources.push({
-          id: sourceId,
-          generation: customization.generation,
-          pluginId: customization.pluginId,
-          effects: richText.effects,
-        });
-      }
-      if (richText.onDraftChange !== undefined) {
-        observers.push({
-          id: sourceId,
-          getView: () => composerViewRef.current,
-          onDraftChange: richText.onDraftChange,
-        });
-      }
+    for (const contribution of resolvedComposerEditor.effects) {
+      sources.push({
+        id: `${contribution.pluginId}/${contribution.customizationId}`,
+        generation: contribution.generation,
+        pluginId: contribution.pluginId,
+        effects: contribution.effects,
+      });
+    }
+    for (const contribution of resolvedComposerEditor.observers) {
+      observers.push({
+        id: `${contribution.pluginId}/${contribution.customizationId}`,
+        getView: () => composerViewRef.current,
+        onDraftChange: contribution.onDraftChange,
+      });
     }
     for (const effectSource of textEffects ?? []) {
       const className = effectSource.effect.className;
@@ -1477,20 +1494,13 @@ export function PromptBoxInternal({
       });
     }
     return { sources, observers };
-  }, [
-    composerCustomizations,
-    composerView.scope,
-    suppressPluginComposerCustomizations,
-    textEffects,
-  ]);
+  }, [resolvedComposerEditor, textEffects]);
   const pluginDecorationSourcesRef = useRef(
     pluginRichTextContributions.sources,
   );
   pluginDecorationSourcesRef.current = pluginRichTextContributions.sources;
   const pluginDraftObserversRef = useRef(pluginRichTextContributions.observers);
   pluginDraftObserversRef.current = pluginRichTextContributions.observers;
-  const pluginPlusMenuItems =
-    usePluginComposerPlusMenuContributions(composerView);
   const focusScopeKey = history?.resetKey;
   const onChangeRef = useRef(onChange);
 
@@ -1643,16 +1653,30 @@ export function PromptBoxInternal({
     [richTextEditing],
   );
 
+  // TipTap reads `content` only when it (re)creates the editor, which happens
+  // on the `[richTextEditing]` deps below. Building it on every render parsed
+  // the whole prompt each keystroke (~7 ms for a 1 MB rich-text draft). The
+  // value the content was built from travels with it so onCreate records the
+  // matching "last synced" value; the controlled-value effect then applies any
+  // newer props through setContent.
+  const initialEditorContent = useMemo(() => {
+    const initialValue: PromptEditorValueKey = {
+      text: value,
+      mentions: mentionRanges,
+    };
+    return {
+      value: initialValue,
+      content: promptEditorContentFromValue(initialValue, {
+        richTextMarkdown: richTextEditing,
+      }),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- value/mentionRanges are read once per editor instance on purpose (see above).
+  }, [richTextEditing]);
+
   const editor = useEditor(
     {
       extensions: editorExtensions,
-      content: promptEditorContentFromValue(
-        {
-          text: value,
-          mentions: mentionRanges,
-        },
-        { richTextMarkdown: richTextEditing },
-      ),
+      content: initialEditorContent.content,
       immediatelyRender: false,
       editorProps: {
         attributes: {
@@ -1788,12 +1812,17 @@ export function PromptBoxInternal({
               promptEditorContentFromValue(pastedValue, {
                 richTextMarkdown: richTextEditing,
               }).content ?? [];
-            currentEditor?.chain().focus().insertContent(pastedContent).run();
+            currentEditor
+              ?.chain()
+              .focus()
+              .insertContent(pastedContent)
+              .setMeta("uiEvent", "paste")
+              .run();
             if (currentEditor && !currentEditor.isDestroyed) {
               const nextValue = trimTrailingPromptNewlines(
                 promptEditorValueFromDoc(currentEditor.state.doc),
               );
-              editorValueKeyRef.current = promptEditorValueKey(nextValue);
+              lastSyncedEditorValueRef.current = nextValue;
               onChangeRef.current(nextValue.text, nextValue.mentions);
             }
             return true;
@@ -1812,28 +1841,37 @@ export function PromptBoxInternal({
             ?.chain()
             .focus()
             .insertContent(promptEditorInlineContentFromValue(pastedValue))
+            .setMeta("uiEvent", "paste")
             .run();
           return true;
         },
       },
       onCreate({ editor: createdEditor }) {
         editorRef.current = createdEditor;
-        editorValueKeyRef.current = promptEditorValueKey({
-          text: value,
-          mentions: mentionRanges,
-        });
+        lastSyncedEditorValueRef.current = initialEditorContent.value;
       },
-      onSelectionUpdate({ editor: updatedEditor }) {
+      onSelectionUpdate({ editor: updatedEditor, transaction }) {
+        // A typing transaction changes both the document and the selection, so
+        // TipTap emits selectionUpdate immediately before update. Let onUpdate
+        // handle that transaction once. The browser already reveals the caret
+        // for native contenteditable edits; measuring it here with coordsAtPos
+        // forces layout on every keystroke.
+        if (transaction.docChanged) return;
         syncTriggerStateRef.current(updatedEditor);
         scheduleRevealEditorSelection();
       },
-      onUpdate({ editor: updatedEditor }) {
+      onUpdate({ editor: updatedEditor, transaction }) {
         if (skipEditorChangeRef.current) return;
         const nextValue = promptEditorValueFromDoc(updatedEditor.state.doc);
-        editorValueKeyRef.current = promptEditorValueKey(nextValue);
+        lastSyncedEditorValueRef.current = nextValue;
         onChangeRef.current(nextValue.text, nextValue.mentions);
         syncTriggerStateRef.current(updatedEditor);
-        scheduleRevealEditorSelection();
+        // Native typing already asks ProseMirror to scroll the selection into
+        // view. Clipboard and drop transactions still need the prompt's custom
+        // scroll-container reveal that originally fixed multiline paste.
+        if (transaction.getMeta("uiEvent") !== undefined) {
+          scheduleRevealEditorSelection();
+        }
       },
       // Rebuild the editor when the rich-text preference toggles so the schema
       // and input rules switch. The editor is otherwise created once; its
@@ -1861,7 +1899,7 @@ export function PromptBoxInternal({
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
     refreshPromptDecorations(editor);
-  }, [editor, pluginRichTextContributions]);
+  }, [composerScopeKey, editor, pluginRichTextContributions]);
 
   useLayoutEffect(() => {
     if (!pendingFocusEndRef.current) return;
@@ -1931,8 +1969,9 @@ export function PromptBoxInternal({
       text: value,
       mentions: mentionRanges,
     };
-    const nextKey = promptEditorValueKey(nextValue);
-    if (nextKey === editorValueKeyRef.current) {
+    if (
+      arePromptEditorValuesEqual(lastSyncedEditorValueRef.current, nextValue)
+    ) {
       return;
     }
 
@@ -1943,7 +1982,7 @@ export function PromptBoxInternal({
           richTextMarkdown: richTextEditing,
         }),
       );
-      editorValueKeyRef.current = nextKey;
+      lastSyncedEditorValueRef.current = nextValue;
     } finally {
       skipEditorChangeRef.current = false;
     }
@@ -1993,6 +2032,8 @@ export function PromptBoxInternal({
   }, [isZenMode, minHeight, scheduleRevealEditorSelection]);
 
   const resetHistorySession = useCallback(() => {
+    if (!hasActiveHistorySessionRef.current) return;
+    hasActiveHistorySessionRef.current = false;
     setActiveHistoryIndex(null);
     setTemporaryHistoryDraft(null);
     setRecalledHistoryDraft(null);
@@ -2163,6 +2204,32 @@ export function PromptBoxInternal({
       ? { trigger: "command", state: commandMenuState }
       : { trigger: "mention", state: mentionMenuState };
 
+  useLayoutEffect(() => {
+    if (reportQueuedEditorTypeaheadLayout === null) return;
+    const menu = typeaheadMenuRef.current;
+    if (!showTypeaheadMenu || menu === null) {
+      reportQueuedEditorTypeaheadLayout({ height: 0, isOpen: false });
+      return;
+    }
+
+    const reportOpenLayout = () => {
+      reportQueuedEditorTypeaheadLayout({
+        height: menu.getBoundingClientRect().height,
+        isOpen: true,
+      });
+    };
+    reportOpenLayout();
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(reportOpenLayout);
+    resizeObserver?.observe(menu);
+    return () => {
+      resizeObserver?.disconnect();
+      reportQueuedEditorTypeaheadLayout({ height: 0, isOpen: false });
+    };
+  }, [reportQueuedEditorTypeaheadLayout, showTypeaheadMenu]);
+
   useEffect(() => {
     if (activeSuggestions.length === 0) {
       setSelectedIndex(0);
@@ -2200,7 +2267,7 @@ export function PromptBoxInternal({
   const finishApply = useCallback(
     (appliedEditor: Editor) => {
       const nextValue = promptEditorValueFromDoc(appliedEditor.state.doc);
-      editorValueKeyRef.current = promptEditorValueKey(nextValue);
+      lastSyncedEditorValueRef.current = nextValue;
       onChangeRef.current(nextValue.text, nextValue.mentions);
 
       requestAnimationFrame(() => {
@@ -2646,18 +2713,22 @@ export function PromptBoxInternal({
     (event: ReactPointerEvent<HTMLButtonElement>) => {
       if (event.button !== 0) return;
       const currentEditor = editorRef.current;
+      const editorElement = currentEditor?.view.dom;
+      const activeElement = editorElement?.ownerDocument.activeElement;
       if (
         !currentEditor ||
         currentEditor.isDestroyed ||
-        !currentEditor.isFocused
+        !editorElement?.contains(activeElement ?? null)
       ) {
         return;
       }
 
       // Focus transfer happens before click. On iOS, moving focus from the
       // editor to this button begins keyboard dismissal and resizes the app
-      // shell before the form can submit. Keep the editor focused; the click
-      // still owns the commit, while genuine outside focus dismisses normally.
+      // shell before the form can submit. Use the DOM's focus state here rather
+      // than TipTap's event-derived isFocused flag, which can briefly lag the
+      // browser. Keep the editor focused; the click still owns the commit,
+      // while genuine outside focus dismisses normally.
       event.preventDefault();
     },
     [],
@@ -2917,6 +2988,7 @@ export function PromptBoxInternal({
             activeHistoryIndex === null
               ? 0
               : Math.min(activeHistoryIndex + 1, history.entries.length - 1);
+          hasActiveHistorySessionRef.current = true;
           if (activeHistoryIndex === null) {
             setTemporaryHistoryDraft(history.currentDraft);
           }
@@ -3190,91 +3262,23 @@ export function PromptBoxInternal({
                 </div>
               </>
             ) : null}
-            <div
-              ref={editorScrollContainerRef}
-              data-promptbox-editor-scroll=""
-              aria-busy={composerInputLocked || undefined}
-              className={cn(
-                "w-full overflow-y-auto bg-transparent px-4 pb-1 pr-14 pt-3 outline-none",
-                COARSE_POINTER_TEXT_BASE_CLASS,
-                // Keep line-height after the text-size class. tailwind-merge treats
-                // text size utilities as owning line-height and would otherwise
-                // drop this, making composer rows tighter than timeline messages.
-                "leading-relaxed",
-                // Zen mode only adds the flex-fill behavior so the editor
-                // stretches to the dvh-sized form. Inset padding (px / pt / pb)
-                // is identical between modes — toggling shouldn't shift the
-                // placeholder position.
-                isZenMode && "min-h-0 flex-1",
-                compact && !isZenMode && "pr-14",
-                showCompactLayout && "h-12 overflow-hidden pb-0 pr-14 pt-0",
-              )}
-              style={{
-                minHeight: isZenMode
-                  ? "0px"
-                  : showCompactLayout
-                    ? "48px"
-                    : `${minHeight}px`,
-                height: isZenMode
-                  ? "100%"
-                  : showCompactLayout
-                    ? "48px"
-                    : undefined,
-                maxHeight: isZenMode
-                  ? "none"
-                  : showCompactLayout
-                    ? "48px"
-                    : PROMPTBOX_MAX_HEIGHT_BY_LAYOUT[zenModeLayout],
-              }}
-            >
-              <PromptMentionLinkContext.Provider
-                value={mentionResolveLink ?? null}
-              >
-                <EditorContent
-                  editor={editor}
-                  // A plugin lock makes the editor non-editable, and
-                  // ProseMirror then skips its own key handlers — including the
-                  // Escape blur above. A lock applied to a focused composer
-                  // would otherwise strand focus there, so release it here.
-                  onKeyDown={(event) => {
-                    if (event.key !== "Escape") return;
-                    if (editor === null || editor.isEditable) return;
-                    event.preventDefault();
-                    blurPromptEditor(editor);
-                  }}
-                  data-promptbox-editor-content=""
-                  data-promptbox-compact-content={
-                    showCompactLayout ? "" : undefined
-                  }
-                  className={cn(
-                    "h-full min-h-full",
-                    showCompactLayout && "flex items-center",
-                    "[&_.ProseMirror]:min-h-full [&_.ProseMirror]:leading-[1.7] [&_.ProseMirror]:outline-none",
-                    "[&_.ProseMirror_p]:m-0",
-                    "[&_.ProseMirror_blockquote]:my-1 [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-surface-selected-border [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_blockquote]:text-muted-foreground",
-                    // Markdown formatting styles (mirrors what the timeline renders).
-                    "[&_.ProseMirror_h1]:my-1 [&_.ProseMirror_h1]:text-lg [&_.ProseMirror_h1]:font-semibold",
-                    "[&_.ProseMirror_h2]:my-1 [&_.ProseMirror_h2]:text-base [&_.ProseMirror_h2]:font-semibold",
-                    "[&_.ProseMirror_h3]:my-1 [&_.ProseMirror_h3]:text-sm [&_.ProseMirror_h3]:font-semibold",
-                    "[&_.ProseMirror_h4]:my-1 [&_.ProseMirror_h4]:text-sm [&_.ProseMirror_h4]:font-semibold [&_.ProseMirror_h5]:font-semibold [&_.ProseMirror_h6]:font-semibold",
-                    "[&_.ProseMirror_ul]:my-1 [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ul]:pl-5",
-                    "[&_.ProseMirror_ol]:my-1 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-5",
-                    "[&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_li>p]:m-0",
-                    "[&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-surface-selected [&_.ProseMirror_code]:px-1 [&_.ProseMirror_code]:py-0.5 [&_.ProseMirror_code]:font-mono [&_.ProseMirror_code]:text-[0.9em]",
-                    "[&_.ProseMirror_p.is-editor-empty:first-child::before]:pointer-events-none",
-                    "[&_.ProseMirror_p.is-editor-empty:first-child::before]:float-left",
-                    "[&_.ProseMirror_p.is-editor-empty:first-child::before]:h-0",
-                    "[&_.ProseMirror_p.is-editor-empty:first-child::before]:text-subtle-foreground",
-                    "[&_.ProseMirror_p.is-editor-empty:first-child::before]:font-light",
-                    "[&_.ProseMirror_p.is-editor-empty:first-child::before]:opacity-70",
-                  )}
-                />
-              </PromptMentionLinkContext.Provider>
-            </div>
+            <ComposerEditorSlot
+              editor={editor}
+              scrollContainerRef={editorScrollContainerRef}
+              inputLocked={composerInputLocked}
+              isZenMode={isZenMode}
+              hasCompactControls={compact !== undefined}
+              isCompactLayout={showCompactLayout}
+              minHeight={minHeight}
+              layout={zenModeLayout}
+              resolveMentionLink={mentionResolveLink}
+            />
           </div>
 
           {showTypeaheadMenu ? (
             <div
+              ref={typeaheadMenuRef}
+              data-promptbox-typeahead-menu=""
               className={cn(
                 // Zen mode: menu floats inside the form, anchored just above
                 // the action footer so it stays visible. The form's pb-3 +
@@ -3368,7 +3372,7 @@ export function PromptBoxInternal({
                   inert={showVoiceActionGroup ? true : undefined}
                   aria-live="polite"
                 >
-                  <PromptBoxActionsMenu
+                  <ComposerPlusMenuSlot
                     actions={promptActions}
                     isAttaching={isAttaching}
                     onAttach={
@@ -3377,10 +3381,8 @@ export function PromptBoxInternal({
                         : undefined
                     }
                     onAction={applyPromptAction}
-                    pluginItems={
-                      suppressPluginComposerCustomizations
-                        ? []
-                        : pluginPlusMenuItems
+                    includePluginContributions={
+                      !suppressPluginComposerCustomizations
                     }
                   />
                   {footerStart}
@@ -3396,108 +3398,120 @@ export function PromptBoxInternal({
                 )}
                 inert={showVoiceActionGroup ? true : undefined}
               >
-                {!showCompactLayout ? (
-                  <>
-                    {!suppressPluginComposerCustomizations ? (
-                      <PluginComposerActions />
-                    ) : null}
-                    {voice &&
-                    !showVoiceActionGroup &&
-                    !showVoiceAsPrimaryAction ? (
+                <ComposerActionsSlot
+                  includePluginContributions={
+                    !showCompactLayout && !suppressPluginComposerCustomizations
+                  }
+                >
+                  {!showCompactLayout ? (
+                    <>
+                      {voice &&
+                      !showVoiceActionGroup &&
+                      (!showVoiceAsPrimaryAction || showStop) ? (
+                        <Button
+                          data-promptbox-expanded-only=""
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          aria-label={
+                            !voice.isSupported
+                              ? "Voice input is not supported in this browser"
+                              : "Start voice input"
+                          }
+                          disabled={!canStartVoiceInput}
+                          onPointerDown={handleVoicePointerDown}
+                          onClick={startVoiceInput}
+                          className={
+                            COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS
+                          }
+                        >
+                          <Icon name="Mic" className="size-4" />
+                        </Button>
+                      ) : null}
+                    </>
+                  ) : null}
+                  <div
+                    data-promptbox-submit-group=""
+                    className="flex shrink-0 flex-row items-center"
+                  >
+                    {showStop ? (
                       <Button
-                        data-promptbox-expanded-only=""
+                        data-promptbox-submit-action=""
                         type="button"
                         size="icon"
-                        variant="ghost"
-                        aria-label={
-                          !voice.isSupported
-                            ? "Voice input is not supported in this browser"
-                            : "Start voice input"
+                        variant="secondary"
+                        aria-label="Stop run"
+                        onClick={onStop}
+                        className={
+                          showCompactLayout
+                            ? COMPACT_PROMPT_ACTION_BUTTON_CLASS
+                            : COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS
                         }
-                        disabled={!canStartVoiceInput}
+                      >
+                        <Icon
+                          name="Square"
+                          className="size-3.5 fill-current [&_*]:stroke-0"
+                        />
+                      </Button>
+                    ) : showVoiceAsPrimaryAction ? (
+                      <Button
+                        data-promptbox-submit-action=""
+                        type="button"
+                        size={showCompactLayout ? "icon" : "sm"}
+                        variant="default"
+                        aria-label="Start voice input"
                         onPointerDown={handleVoicePointerDown}
                         onClick={startVoiceInput}
-                        className={
-                          COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS
-                        }
+                        className={cn(
+                          showCompactLayout
+                            ? COMPACT_PROMPT_ACTION_BUTTON_CLASS
+                            : [
+                                "ml-1",
+                                COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS,
+                              ],
+                          "transition-colors",
+                        )}
                       >
                         <Icon name="Mic" className="size-4" />
                       </Button>
-                    ) : null}
-                  </>
-                ) : null}
-                <div
-                  data-promptbox-submit-group=""
-                  className="flex shrink-0 flex-row items-center"
-                >
-                  {showStop ? (
-                    <Button
-                      data-promptbox-submit-action=""
-                      type="button"
-                      size="icon"
-                      variant="secondary"
-                      aria-label="Stop run"
-                      onClick={onStop}
-                      className={
-                        showCompactLayout
-                          ? COMPACT_PROMPT_ACTION_BUTTON_CLASS
-                          : COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS
-                      }
-                    >
-                      <Icon
-                        name="Square"
-                        className="size-3.5 fill-current [&_*]:stroke-0"
-                      />
-                    </Button>
-                  ) : showVoiceAsPrimaryAction ? (
-                    <Button
-                      data-promptbox-submit-action=""
-                      type="button"
-                      size={showCompactLayout ? "icon" : "sm"}
-                      variant="default"
-                      aria-label="Start voice input"
-                      onPointerDown={handleVoicePointerDown}
-                      onClick={startVoiceInput}
-                      className={cn(
-                        showCompactLayout
-                          ? COMPACT_PROMPT_ACTION_BUTTON_CLASS
-                          : ["ml-1", COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS],
-                        "transition-colors",
-                      )}
-                    >
-                      <Icon name="Mic" className="size-4" />
-                    </Button>
-                  ) : (
-                    <Button
-                      data-promptbox-submit-action=""
-                      type="submit"
-                      size={showCompactLayout ? "icon" : "sm"}
-                      variant="default"
-                      aria-label={effectiveSubmitTitle}
-                      disabled={!canSubmit}
-                      onPointerDown={handleSubmitPointerDown}
-                      onClick={handleSubmitClick}
-                      className={cn(
-                        showCompactLayout
-                          ? COMPACT_PROMPT_ACTION_BUTTON_CLASS
-                          : ["ml-1", COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS],
-                        // Container-driven compact layouts change the button's
-                        // width, padding, and margin at the breakpoint. Keep
-                        // those geometry changes instantaneous so the action
-                        // stays pinned while the prompt height animates.
-                        "transition-colors",
-                      )}
-                    >
-                      {isSubmitting ? (
-                        <Icon name="Spinner" className="size-4 animate-spin" />
-                      ) : isZenMode ? (
-                        <Icon name="ArrowUp" className="size-4" />
-                      ) : (
-                        <Icon name="CornerDownLeft" className="size-4" />
-                      )}
-                    </Button>
-                  )}
-                </div>
+                    ) : (
+                      <Button
+                        data-promptbox-submit-action=""
+                        type="submit"
+                        size={showCompactLayout ? "icon" : "sm"}
+                        variant="default"
+                        aria-label={effectiveSubmitTitle}
+                        disabled={!canSubmit}
+                        onPointerDown={handleSubmitPointerDown}
+                        onClick={handleSubmitClick}
+                        className={cn(
+                          showCompactLayout
+                            ? COMPACT_PROMPT_ACTION_BUTTON_CLASS
+                            : [
+                                "ml-1",
+                                COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS,
+                              ],
+                          // Container-driven compact layouts change the button's
+                          // width, padding, and margin at the breakpoint. Keep
+                          // those geometry changes instantaneous so the action
+                          // stays pinned while the prompt height animates.
+                          "transition-colors",
+                        )}
+                      >
+                        {isSubmitting ? (
+                          <Icon
+                            name="Spinner"
+                            className="size-4 animate-spin"
+                          />
+                        ) : isZenMode ? (
+                          <Icon name="ArrowUp" className="size-4" />
+                        ) : (
+                          <Icon name="CornerDownLeft" className="size-4" />
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                </ComposerActionsSlot>
               </div>
             </div>
           </PluginComposerViewProvider>

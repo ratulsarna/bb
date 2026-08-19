@@ -79,11 +79,8 @@ export function PluginNewThreadComposer({
         >
           {renderPromptBox({
             placeholder,
-            zenModeStorageKey: `bb.promptbox.zen-mode.plugin-new-thread.${composerKey}`,
-            // Fork: plugin composers offer "Don't work in a project"; the
-            // submitted request carries the personal-project id (see
-            // docs/api_to_audit.md, projectless contract).
             allowNoProject: true,
+            zenModeStorageKey: `bb.promptbox.zen-mode.plugin-new-thread.${composerKey}`,
           })}
         </div>
       )}

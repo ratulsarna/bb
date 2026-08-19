@@ -12,6 +12,7 @@
 import { useEffect, type ReactNode } from "react";
 import { Provider } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { PERSONAL_PROJECT_ID } from "@bb/domain";
 import {
   act,
   cleanup,
@@ -26,7 +27,6 @@ import {
   RouterProvider,
 } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PERSONAL_PROJECT_ID } from "@bb/domain";
 import type { NewThreadRequest } from "@get-bb/plugin-sdk";
 import {
   NewThreadComposer,
@@ -128,7 +128,7 @@ vi.mock("@/hooks/queries/system-queries", () => ({
           logoUrl: null,
           capabilities: {
             supportsServiceTier: false,
-            supportedPermissionModes: ["auto", "accept-edits", "full"],
+            permissionModes: ["auto", "accept-edits", "full"],
           },
           composerActions: [],
         },
@@ -138,7 +138,7 @@ vi.mock("@/hooks/queries/system-queries", () => ({
           logoUrl: null,
           capabilities: {
             supportsServiceTier: false,
-            supportedPermissionModes: ["auto", "accept-edits", "full"],
+            permissionModes: ["auto", "accept-edits", "full"],
           },
           composerActions: [],
         },
@@ -405,9 +405,30 @@ describe("PluginNewThreadComposer seeding", () => {
     });
   });
 
-  // Fork: the plugin composer must offer "Don't work in a project" and submit
-  // the personal-project id with a personal workspace (the projectless
-  // contract documented in docs/api_to_audit.md).
+  it("binds plugin draft actions to the hosted composer instance", async () => {
+    renderComposer(STORED_REQUEST, () => undefined, "host-binding");
+
+    await waitFor(() => {
+      expect(latestPromptBoxProps().disabled).toBe(false);
+    });
+    const host = latestPromptBoxProps().pluginComposerHost;
+    expect(host.scope).toEqual({ kind: "new-thread", projectId: "proj_1" });
+    expect(host.getCurrent().text).toBe("review every PR for slop");
+
+    act(() => {
+      host.setDraft({
+        ...host.getCurrent(),
+        text: "updated through the Composer API",
+      });
+    });
+
+    await waitFor(() => {
+      expect(latestPromptBoxProps().value).toBe(
+        "updated through the Composer API",
+      );
+    });
+  });
+
   it("allows submitting a projectless thread", async () => {
     const submitted: NewThreadRequest[] = [];
     renderComposer(
@@ -427,13 +448,6 @@ describe("PluginNewThreadComposer seeding", () => {
     });
     await waitFor(() => {
       expect(latestPromptBoxProps().project.value).toBeNull();
-    });
-    await act(async () => {
-      latestPromptBoxProps().modeConfig.environment.onChange(
-        "host:host_1:local",
-      );
-    });
-    await waitFor(() => {
       expect(latestPromptBoxProps().disabled).toBe(false);
     });
     await submit();
@@ -752,6 +766,66 @@ describe("PluginNewThreadComposer seeding", () => {
       ),
     ).toBe(false);
     expect(latestPromptBoxProps().attachments.items).toEqual([]);
+  });
+
+  // Installed → New plugin → an example lands on the root composer with a
+  // `replaceInitialPrompt` seed. Applying it writes the draft store, which
+  // re-renders the view synchronously before the router's transition clears
+  // the location state; the effect must not re-apply the seed on that render
+  // or the two updates starve each other until React aborts the loop.
+  it("applies a replacing initial prompt from location state exactly once", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    window.localStorage.setItem("bb.root-compose.project-id", "proj_1");
+    const rootDraft = getPromptDraftAccessor({ kind: "new-thread" });
+    rootDraft.setDraft({
+      text: "leftover draft",
+      mentions: [],
+      attachments: [],
+    });
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const router = createMemoryRouter(
+      [{ path: "/", element: <RootComposeView /> }],
+      {
+        initialEntries: [
+          {
+            pathname: "/",
+            state: {
+              focusPrompt: true,
+              initialPrompt: "Create a kanban plugin",
+              replaceInitialPrompt: true,
+            },
+          },
+        ],
+      },
+    );
+    render(
+      <Provider>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </Provider>,
+    );
+
+    await waitFor(() => {
+      expect(latestPromptBoxProps().value).toBe("Create a kanban plugin");
+    });
+    await waitFor(() => {
+      expect(router.state.location.state).toBeNull();
+    });
+    expect(rootDraft.getCurrent().text).toBe("Create a kanban plugin");
+    const updateDepthErrors = consoleError.mock.calls.filter((call) =>
+      call.some(
+        (argument) =>
+          typeof argument === "string" &&
+          argument.includes("Maximum update depth exceeded"),
+      ),
+    );
+    consoleError.mockRestore();
+    expect(updateDepthErrors).toEqual([]);
   });
 
   it("ignores a repeated submit while the first submission is pending", async () => {
