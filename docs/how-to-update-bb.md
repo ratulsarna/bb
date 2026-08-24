@@ -90,7 +90,7 @@ node .github/workflows/check-version-lockstep.mjs
 # --concurrency=2 is deliberate. At the default, the app, server, and
 # host-daemon suites run at once and starve the VPS, and tests that pass in
 # isolation fail on their own timeouts.
-pnpm exec turbo run typecheck test \
+pnpm exec turbo run typecheck \
   --filter=@bb/app \
   --filter=@bb/config \
   --filter=@bb/server \
@@ -98,6 +98,22 @@ pnpm exec turbo run typecheck test \
   --filter=bb-app \
   --concurrency=2 \
   --output-logs=new-only
+
+# Tests run separately so --testTimeout only reaches vitest, never tsc.
+# Vitest's default 5s per-test timeout is budgeted for fast machines; even at
+# --concurrency=2 this VPS starves one heavy test past 5s most builds, while
+# the same test passes in isolation. 30s absorbs the load spikes and still
+# fails real hangs. If a test fails here for any reason other than a timeout,
+# treat it as real.
+pnpm exec turbo run test \
+  --filter=@bb/app \
+  --filter=@bb/config \
+  --filter=@bb/server \
+  --filter=@bb/host-daemon \
+  --filter=bb-app \
+  --concurrency=2 \
+  --output-logs=new-only \
+  -- --testTimeout=30000
 
 pnpm exec turbo run smoke:tarball --filter=bb-app --force --output-logs=new-only
 npm pack ./packages/bb-app --pack-destination "$ARTIFACT_DIR" --json \
