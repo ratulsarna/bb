@@ -69,7 +69,7 @@ export interface NewTabFileSearchProps {
 export type OpenBrowserHandler = () => void;
 export type StartTerminalHandler = () => void;
 
-export interface NewTabActionsProps {
+interface NewTabActionsProps {
   /** Open a session-based side chat of the current thread in its own tab. */
   /** Desktop-only: open a new in-panel browser tab. Absent ⇒ no Browser entry. */
   onOpenBrowser?: OpenBrowserHandler;
@@ -120,7 +120,6 @@ interface FileSearchSectionItem {
 
 interface FileSearchSection {
   kind: FileSearchSectionKind;
-  label: string;
   items: FileSearchSectionItem[];
 }
 
@@ -167,7 +166,6 @@ const FILE_SEARCH_LIMIT = 20;
 const FILE_SEARCH_SECTION_ORDER: readonly FileSearchSectionKind[] = [
   "files",
   "recent",
-  "actions",
 ];
 
 const FILE_SEARCH_SECTION_LABELS = {
@@ -205,12 +203,6 @@ function getFileSearchResultTitle(suggestion: FileSearchSuggestion): string {
   return `${FILE_SEARCH_SOURCE_LABELS[suggestion.source]}: ${suggestion.path}`;
 }
 
-function getFileSearchSectionKind(
-  suggestion: FileSearchSuggestion,
-): FileSearchSectionKind {
-  return "files";
-}
-
 function groupFileSearchSections({
   recentEntries,
   suggestions,
@@ -226,7 +218,6 @@ function groupFileSearchSections({
     }
     const created: FileSearchSection = {
       kind: sectionKind,
-      label: FILE_SEARCH_SECTION_LABELS[sectionKind],
       items: [],
     };
     sectionsByKind.set(sectionKind, created);
@@ -234,7 +225,7 @@ function groupFileSearchSections({
   };
 
   for (const suggestion of suggestions) {
-    ensureSection(getFileSearchSectionKind(suggestion)).items.push({
+    ensureSection("files").items.push({
       entry: { kind: "suggestion", suggestion },
       index: 0,
     });

@@ -65,9 +65,9 @@ import { selectPrimaryHost, useHosts } from "@/hooks/queries/host-queries";
 import { useSystemConfig } from "@/hooks/queries/system-queries";
 import { useHostDaemon } from "@/hooks/useHostDaemon";
 import {
+  isPlanModePrompt,
   permissionDisplayForPromptMode,
-  shouldDisablePermissionPickerForPromptMode,
-} from "./effective-prompt-mode";
+} from "@bb/client-core";
 
 const NEW_THREAD_PROMPT_BOX_MIN_HEIGHT = 80;
 const DEFAULT_NEW_THREAD_COMPOSER_SCOPE = {
@@ -99,7 +99,6 @@ export interface NewThreadBranchConfig {
   hidden?: boolean;
   options: readonly string[];
   remoteOptions?: readonly string[];
-  priorityOptions?: readonly string[];
   loading?: boolean;
   placeholder?: string;
   triggerLabel?: string;
@@ -145,6 +144,8 @@ export interface NewThreadProjectConfig {
   allowNoProject?: boolean;
   createProject?: ProjectSelectorCreateProjectConfig;
   disabled?: boolean;
+  /** The project list is still loading; the picker shows a loading label. */
+  isLoading?: boolean;
   /** Keep the chevron while `disabled`, for transient locks (submitting,
    * uploading) that must not change the trigger's width. */
   showChevronWhenDisabled?: boolean;
@@ -162,7 +163,7 @@ export interface NewThreadModeConfig {
   header?: ReactNode;
 }
 
-export interface NewThreadPromptBoxUIProps {
+interface NewThreadPromptBoxUIProps {
   /** id forwarded to the underlying PromptBoxInternal (used for autofocus targeting). */
   id?: string;
 
@@ -174,13 +175,13 @@ export interface NewThreadPromptBoxUIProps {
   promptBoxRef?: Ref<PromptBoxHandle>;
   isSubmitting: boolean;
   disabled: boolean;
+  /** Explains a disabled submit action on hover and to assistive technology. */
+  disabledReason?: string;
   /** Whether the editor should take passive focus when it mounts. */
   autoFocus?: boolean;
   /** Active root-composer binding for plugin composer hooks and customizations. */
   pluginComposerHost?: PluginComposerHost | null;
   textEffects?: readonly ComposerTextEffectSource[];
-  /** zenMode storage key used for the root-compose zen-mode atom. */
-  zenModeStorageKey: string;
   /** Overrides the default new-thread placeholder copy. */
   placeholder?: string;
 
@@ -229,10 +230,10 @@ export const NewThreadPromptBoxUI = memo(function NewThreadPromptBoxUI({
   promptBoxRef: externalPromptBoxRef,
   isSubmitting,
   disabled,
+  disabledReason,
   autoFocus,
   pluginComposerHost,
   textEffects,
-  zenModeStorageKey,
   placeholder: placeholderOverride,
   history,
   typeahead,
@@ -300,9 +301,9 @@ export const NewThreadPromptBoxUI = memo(function NewThreadPromptBoxUI({
           promptBoxRef={promptBoxRef}
           isSubmitting={isSubmitting}
           disabled={disabled}
+          disabledReason={disabledReason}
           autoFocus={autoFocus}
           textEffects={textEffects}
-          zenModeStorageKey={zenModeStorageKey}
           placeholder={placeholderOverride}
           history={history}
           typeahead={typeahead}
@@ -329,7 +330,7 @@ interface DefaultNewThreadComposerProps extends Omit<
 }
 
 /** BB's presentation for a host-owned new-thread Composer controller. */
-export const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
+const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
   id,
   value,
   mentionRanges,
@@ -338,9 +339,9 @@ export const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
   promptBoxRef,
   isSubmitting,
   disabled,
+  disabledReason,
   autoFocus,
   textEffects,
-  zenModeStorageKey,
   placeholder: placeholderOverride,
   history,
   typeahead,
@@ -355,20 +356,22 @@ export const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
   const isProjectlessPrompt = project?.value === null;
   const placeholder =
     placeholderOverride ?? getNewThreadPromptPlaceholder(isProjectlessPrompt);
+  const selectedProviderPlanModeCopy = execution.provider.options?.find(
+    (option) => option.value === execution.provider.selectedId,
+  )?.planModeCopy;
   const promptModeInput = useMemo(
     () => ({
-      providerId: execution.provider.selectedId,
+      planModeCopy: selectedProviderPlanModeCopy,
       value,
       mentionRanges,
     }),
-    [execution.provider.selectedId, mentionRanges, value],
+    [selectedProviderPlanModeCopy, mentionRanges, value],
   );
   const permissionDisplayOverride = useMemo(
     () => permissionDisplayForPromptMode(promptModeInput),
     [promptModeInput],
   );
-  const permissionPickerDisabledByPlanMode =
-    shouldDisablePermissionPickerForPromptMode(promptModeInput);
+  const permissionPickerDisabledByPlanMode = isPlanModePrompt(promptModeInput);
   const submitTitle = isSubmitting
     ? "Submitting..."
     : execution.model.isLoading
@@ -405,13 +408,11 @@ export const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
         submission={{
           isSubmitting,
           disabled,
+          disabledReason,
           title: submitTitle,
         }}
         autoFocus={autoFocus}
-        zenMode={{
-          layout: "root-compose",
-          storageKey: zenModeStorageKey,
-        }}
+        editorLayout="root-compose"
         minHeight={NEW_THREAD_PROMPT_BOX_MIN_HEIGHT}
         placeholder={placeholder}
         header={modeConfig.header}
@@ -422,7 +423,7 @@ export const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
           reproduces the 4px gap main got from a
           `space-y-1` wrapper in RootComposeView (now gone since the
           standalone project row was removed). */}
-      <div className="mt-1 flex items-center justify-between gap-2 px-3.5">
+      <div className="mt-1 flex select-none items-center justify-between gap-2 px-3.5">
         <div className="flex min-w-0 flex-1 items-center gap-1">
           {project ? (
             <ProjectSelector
@@ -432,6 +433,7 @@ export const DefaultNewThreadComposer = memo(function DefaultNewThreadComposer({
               allowNoProject={project.allowNoProject ?? false}
               createProject={project.createProject}
               disabled={project.disabled}
+              isLoading={project.isLoading}
               showChevronWhenDisabled={project.showChevronWhenDisabled}
               className="shrink-0"
             />
@@ -502,11 +504,9 @@ export function ThreadEnvSlot({
           variant="option"
           muted
           value={branch.value}
-          currentBranch={branch.currentBranch}
           isCreatingNew={branch.isNew}
           options={branch.options}
           remoteOptions={branch.remoteOptions}
-          priorityOptions={branch.priorityOptions}
           loading={branch.loading}
           placeholder={branch.placeholder}
           triggerLabel={branch.triggerLabel}
@@ -585,47 +585,19 @@ export function ProjectlessMachineSlot({
   );
 }
 
-export interface NewThreadConnectedEnvironmentConfig {
-  value: string;
-  onChange: (value: string) => void;
-  sources: readonly ProjectSource[];
-  /** Opens the guided machine-setup flow for a machine without a project
-   * source (multi-machine menu only). */
-  onRequestMachineSetup?: (host: Host) => void;
-  /** When true, the "Reuse existing worktree" entry in the env picker is
-   * disabled — caller signals the project has no worktree envs available. */
-  reuseDisabled?: boolean;
-  worktreeDisabledReason?: string | null;
-  disabled?: boolean;
-}
+type NewThreadConnectedEnvironmentConfig = Omit<
+  NewThreadEnvironmentConfig,
+  "host" | "isLocal" | "machines"
+>;
 
-export interface NewThreadConnectedBranchConfig {
-  value: string | null;
-  currentBranch?: string | null;
-  isNew: boolean;
-  hidden?: boolean;
-  options: readonly string[];
-  remoteOptions?: readonly string[];
-  loading?: boolean;
-  placeholder?: string;
-  triggerLabel?: string;
-  triggerTitle?: string;
-  currentOptionLabel?: string | null;
-  currentOptionTitle?: string;
-  optionDisabledReason?: string | null;
-  optionDisabledTitle?: string;
-  createDisabledReason?: string | null;
-  createDisabledTitle?: string;
-  onChange: (value: string) => void;
-  onClear?: () => void;
-  onOpenChange?: (open: boolean) => void;
-  onSearchQueryChange?: (query: string) => void;
-  onCreateBaseChange?: (value: string) => void;
-  disabled?: boolean;
+type NewThreadConnectedBranchConfig = Omit<
+  NewThreadBranchConfig,
+  "onCreate"
+> & {
   onCreate: () => void;
-}
+};
 
-export interface NewThreadConnectedModeConfig {
+interface NewThreadConnectedModeConfig {
   environment: NewThreadConnectedEnvironmentConfig;
   branch: NewThreadConnectedBranchConfig;
   worktree: NewThreadWorktreeConfig;
@@ -641,29 +613,14 @@ export interface NewThreadPromptBoxProps extends Omit<
   modeConfig: NewThreadConnectedModeConfig;
 }
 
-type ConnectedThreadModeConfig = NewThreadConnectedModeConfig;
-
-type NewThreadPromptBoxRest = Omit<NewThreadPromptBoxProps, "modeConfig">;
-
 /**
  * The composed prompt area for creating a new thread in a project — used by
- * RootComposeView. It wires host queries through `ConnectedThreadModeBranch`.
+ * RootComposeView. It wires host queries into the UI mode config.
  */
 export function NewThreadPromptBox({
-  modeConfig,
+  modeConfig: threadConfig,
   ...rest
 }: NewThreadPromptBoxProps) {
-  return <ConnectedThreadModeBranch {...rest} threadConfig={modeConfig} />;
-}
-
-interface ConnectedThreadModeBranchProps extends NewThreadPromptBoxRest {
-  threadConfig: ConnectedThreadModeConfig;
-}
-
-function ConnectedThreadModeBranch({
-  threadConfig,
-  ...rest
-}: ConnectedThreadModeBranchProps) {
   const { data: hosts } = useHosts();
   const systemConfigQuery = useSystemConfig();
   const primaryHostId = systemConfigQuery.data?.primaryHostId ?? null;
@@ -706,29 +663,9 @@ function ConnectedThreadModeBranch({
   const uiBranch = useMemo<NewThreadBranchConfig>(() => {
     const branch = threadConfig.branch;
     return {
-      value: branch.value,
-      currentBranch: branch.currentBranch,
+      ...branch,
       isNew: allowCreate && branch.isNew,
-      hidden: branch.hidden,
-      options: branch.options,
-      remoteOptions: branch.remoteOptions,
-      loading: branch.loading,
-      placeholder: branch.placeholder,
-      triggerLabel: branch.triggerLabel,
-      triggerTitle: branch.triggerTitle,
-      currentOptionLabel: branch.currentOptionLabel,
-      currentOptionTitle: branch.currentOptionTitle,
-      optionDisabledReason: branch.optionDisabledReason,
-      optionDisabledTitle: branch.optionDisabledTitle,
-      createDisabledReason: branch.createDisabledReason,
-      createDisabledTitle: branch.createDisabledTitle,
-      onChange: branch.onChange,
-      onClear: branch.onClear,
-      onOpenChange: branch.onOpenChange,
-      onSearchQueryChange: branch.onSearchQueryChange,
-      onCreateBaseChange: branch.onCreateBaseChange,
-      disabled: branch.disabled,
-      ...(allowCreate ? { onCreate: branch.onCreate } : {}),
+      onCreate: allowCreate ? branch.onCreate : undefined,
     };
   }, [allowCreate, threadConfig.branch]);
 

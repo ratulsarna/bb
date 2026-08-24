@@ -31,8 +31,10 @@ const MEMORY_ENTRY: PluginCatalogSearchEntry = {
   description: "Provider-independent durable memory for agents.",
   icon: "Brain",
   iconUrl: null,
+  iconTinted: false,
   category: "Context & knowledge",
   source: "builtin:memory",
+  repositoryUrl: null,
   marketplaceDisplayName: "BB Community",
   publisherKey: "builtin",
   publisherLabel: "BB Official",
@@ -68,6 +70,7 @@ const GITHUB_ENTRY: PluginCatalogSearchEntry = {
   description: "Browse GitHub issues and pull requests in BB.",
   icon: "Github",
   iconUrl: null,
+  iconTinted: false,
   category: "Developer tools",
   source: "builtin:github",
 };
@@ -182,6 +185,7 @@ describe("BrowsePluginsTab", () => {
         publisherLabel: "Acme Plugins",
         official: false,
         author: { name: "Acme", url: "https://github.com/acme" },
+        repositoryUrl: "https://github.com/acme/notes",
       },
     ];
     vi.stubGlobal(
@@ -220,6 +224,16 @@ describe("BrowsePluginsTab", () => {
     expect(screen.getByText("third-party marketplace")).toBeTruthy();
     // Cards carry the author with the "By:" prefix.
     expect(screen.getByText("By: Acme")).toBeTruthy();
+    // The card links the repository; a bundled entry has none to link.
+    const repositoryLink = screen.getByRole("link", {
+      name: "Open Acme Notes repository",
+    });
+    expect(repositoryLink.getAttribute("href")).toBe(
+      "https://github.com/acme/notes",
+    );
+    expect(
+      screen.queryByRole("link", { name: "Open Memory repository" }),
+    ).toBeNull();
   });
 
   it("keeps a marketplace that copies a publisher label in its own group", async () => {
@@ -443,6 +457,7 @@ describe("BrowsePluginsTab", () => {
       displayName: "Memory",
       icon: "Brain",
       iconUrl: null,
+      iconTinted: false,
       source: "builtin:memory",
     });
     fireEvent.click(

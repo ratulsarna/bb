@@ -152,8 +152,11 @@ describe("plugin catalog queries", () => {
         description: "Personal task capture",
         icon: "CheckList",
         iconUrl: null,
+        iconTinted: false,
         category: "Project management",
         source: "npm:@bb-plugins/todoist",
+        // A server from before the field defaults to no link.
+        repositoryUrl: null,
         marketplace: "acme-plugins",
         marketplaceDisplayName: "Acme Plugins",
         publisherKey: "acme-plugins",

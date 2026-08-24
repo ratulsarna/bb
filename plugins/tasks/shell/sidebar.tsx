@@ -13,7 +13,7 @@ import {
   savePresetDraft,
 } from "../views/manage/preset-dialog.js";
 import { Icon } from "@bb/shared-ui/icon";
-import { DelayedLoading } from "../components/delayed-loading.js";
+import { DelayedLoading } from "@bb/shared-ui/delayed-loading";
 import { Skeleton } from "@bb/shared-ui/skeleton";
 import {
   Tooltip,
@@ -157,7 +157,7 @@ function SidebarSkeleton() {
   );
 }
 
-export interface TasksSidebarProps {
+interface TasksSidebarProps {
   route: TasksRoute;
   folders: Folder[] | undefined;
   projects: Project[] | undefined;
@@ -210,9 +210,15 @@ export function TasksSidebar({
       return next;
     });
 
-  const ungrouped = (projects ?? []).filter((p) => p.folderId === null);
   const rootFolders = (folders ?? []).filter((f) => f.parentFolderId === null);
   const childFolders = (folders ?? []).filter((f) => f.parentFolderId !== null);
+  // A project whose folder is not in hand (the folder list failed to load, or
+  // the lists briefly disagree) is listed ungrouped rather than dropped; it is
+  // still the user's project and must stay navigable.
+  const knownFolderIds = new Set((folders ?? []).map((f) => f.id));
+  const ungrouped = (projects ?? []).filter(
+    (p) => p.folderId === null || !knownFolderIds.has(p.folderId),
+  );
 
   const renderFolder = (folder: Folder, indent: boolean) => {
     const collapsed = collapsedFolders.has(folder.id);

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 
@@ -23,9 +23,11 @@ const app = await loadPluginApp(() => import("../app"));
 const { parseTasksRoute, tasksRouteToSubPath } = await import("./routes.js");
 const { pagerPosition } = await import("./topbar.js");
 const { loadViewMode } = await import("./view-preference.js");
+const { querySnapshotStorageKey, resetQuerySnapshotStateForTest } =
+  await import("./query-snapshot.js");
 
 const tasksRegistration = app.navPanels[0]!;
-const navigationView = tasksRegistration.experimental_fixedTabs?.[0]!;
+const navigationView = tasksRegistration.fixedTabs?.[0]!;
 const navigationRegistration = {
   ...tasksRegistration,
   component: navigationView.component,
@@ -261,7 +263,7 @@ describe("task pager", () => {
 
 describe("tasks app shell", () => {
   it("registers navigation as a BB-owned fixed panel tab", () => {
-    expect(tasksRegistration.experimental_fixedTabs).toMatchObject([
+    expect(tasksRegistration.fixedTabs).toMatchObject([
       {
         id: "navigation",
         title: "Navigation",
@@ -698,6 +700,226 @@ describe("tasks app shell", () => {
     );
   });
 
+  describe("last-known snapshot", () => {
+    const projectsKey = querySnapshotStorageKey("projects");
+    const foldersKey = querySnapshotStorageKey("folders");
+    const summaryKey = querySnapshotStorageKey("sidebar-summary");
+    const summary = {
+      projectId: PROJECT_ID,
+      taskCount: 3,
+      activeAgentCount: 1,
+    };
+    // An RPC the test settles by hand, so the pre-resolution render is observable.
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+
+    it("never paints the empty state while projects are unknown", async () => {
+      const projects = deferred<{ projects: never[] }>();
+      const slot = renderSlot(
+        app.navPanels[0]!,
+        { subPath: "" },
+        {
+          rpc: seededRpc({
+            listProjects: () => projects.promise,
+            sidebarSummary: () => ({ projects: [] }),
+          }),
+        },
+      );
+      // Cold profile: emptiness is not known yet, so the empty state must wait.
+      expect(slot.queryByText("No projects yet")).toBeNull();
+      projects.resolve({ projects: [] });
+      await slot.findByText("No projects yet");
+    });
+
+    it("paints the last-known empty state before listProjects resolves", () => {
+      window.localStorage.setItem(projectsKey, JSON.stringify([]));
+      window.localStorage.setItem(foldersKey, JSON.stringify([]));
+      window.localStorage.setItem(summaryKey, JSON.stringify([]));
+      const projects = deferred<{ projects: never[] }>();
+      const slot = renderSlot(
+        app.navPanels[0]!,
+        { subPath: "" },
+        {
+          rpc: seededRpc({
+            listProjects: () => projects.promise,
+            sidebarSummary: () => ({ projects: [] }),
+          }),
+        },
+      );
+      // First paint already matches the last truth this browser saw: no list chrome first.
+      expect(slot.getByText("No projects yet")).toBeTruthy();
+    });
+
+    it("paints last-known projects before listProjects resolves and never flashes empty", async () => {
+      window.localStorage.setItem(projectsKey, JSON.stringify([project]));
+      window.localStorage.setItem(foldersKey, JSON.stringify([folder]));
+      window.localStorage.setItem(summaryKey, JSON.stringify([summary]));
+      const projects = deferred<{ projects: (typeof project)[] }>();
+      const rpc = seededRpc({ listProjects: () => projects.promise });
+      // The sidebar lives in the right-panel navigation view; the page owns
+      // the empty state. Both must paint the last-known truth first.
+      const panel = renderSlot(
+        navigationRegistration,
+        { subPath: "" },
+        { rpc },
+      );
+      const page = renderSlot(app.navPanels[0]!, { subPath: "" }, { rpc });
+      expect(panel.getByText(project.name)).toBeTruthy();
+      expect(page.queryByText("No projects yet")).toBeNull();
+      projects.resolve({ projects: [project] });
+      await waitFor(() => expect(panel.getByText(project.name)).toBeTruthy());
+      expect(page.queryByText("No projects yet")).toBeNull();
+    });
+
+    it("ignores a malformed snapshot and loads normally", async () => {
+      window.localStorage.setItem(projectsKey, "{not json");
+      window.localStorage.setItem(
+        summaryKey,
+        JSON.stringify([{ projectId: 1 }]),
+      );
+      const slot = renderSlot(
+        app.navPanels[0]!,
+        { subPath: "" },
+        { rpc: emptyRpc },
+      );
+      expect(slot.queryByText("No projects yet")).toBeNull();
+      await slot.findByText("No projects yet");
+    });
+
+    it("prunes snapshots written under an older storage version", async () => {
+      // Pruning runs once per page load; this test owns a fresh load.
+      resetQuerySnapshotStateForTest();
+      window.localStorage.setItem(
+        "bb-tasks:query-snapshot:v0:projects",
+        JSON.stringify([]),
+      );
+      const slot = renderSlot(
+        navigationRegistration,
+        { subPath: "" },
+        { rpc: seededRpc() },
+      );
+      await slot.findByText(project.name);
+      expect(
+        window.localStorage.getItem("bb-tasks:query-snapshot:v0:projects"),
+      ).toBeNull();
+      expect(window.localStorage.getItem(projectsKey)).not.toBeNull();
+    });
+
+    it("records the fetched projects and counts for the next mount", async () => {
+      const slot = renderSlot(
+        navigationRegistration,
+        { subPath: "" },
+        { rpc: seededRpc() },
+      );
+      await slot.findByText(project.name);
+      await waitFor(() => {
+        expect(
+          JSON.parse(window.localStorage.getItem(projectsKey) ?? "null"),
+        ).toEqual([project]);
+        expect(
+          JSON.parse(window.localStorage.getItem(foldersKey) ?? "null"),
+        ).toEqual([folder]);
+        expect(
+          JSON.parse(window.localStorage.getItem(summaryKey) ?? "null"),
+        ).toEqual([summary]);
+      });
+    });
+
+    it("keeps the newer projects snapshot when an older request resolves later", async () => {
+      // Two hook instances (shell sidebar and list view; here two panels)
+      // fetch the same query and write the same storage key. The request that
+      // started first but finished last must not replace what the later
+      // request already recorded.
+      const olderProject = { ...project, name: "Older truth" };
+      const newerProject = { ...project, name: "Newer truth" };
+      const older = deferred<{ projects: (typeof project)[] }>();
+      let calls = 0;
+      const rpc = seededRpc({
+        listProjects: () => {
+          calls += 1;
+          return calls === 1 ? older.promise : { projects: [newerProject] };
+        },
+      });
+      renderSlot(navigationRegistration, { subPath: "" }, { rpc });
+      const second = renderSlot(
+        navigationRegistration,
+        { subPath: "" },
+        { rpc },
+      );
+      await second.findByText("Newer truth");
+      await waitFor(() =>
+        expect(
+          JSON.parse(window.localStorage.getItem(projectsKey) ?? "null"),
+        ).toEqual([newerProject]),
+      );
+      older.resolve({ projects: [olderProject] });
+      // Let the older response's continuation run before asserting.
+      await act(async () => {
+        await older.promise;
+      });
+      expect(
+        JSON.parse(window.localStorage.getItem(projectsKey) ?? "null"),
+      ).toEqual([newerProject]);
+    });
+
+    it.each(["listFolders", "sidebarSummary"])(
+      "keeps loaded projects navigable when %s fails",
+      async (method) => {
+        const slot = renderSlot(
+          navigationRegistration,
+          { subPath: "all" },
+          {
+            rpc: seededRpc({
+              [method]: () => Promise.reject(new Error("boom")),
+            }),
+          },
+        );
+        // The project loaded; a failed companion request must settle the
+        // skeleton rather than hide the rows behind it forever.
+        fireEvent.click(await slot.findByText(project.name));
+        expect(slot.navigateCalls).toContainEqual({
+          method: "toPluginPanel",
+          path: "tasks",
+          options: { subPath: PROJECT_ID },
+        });
+      },
+    );
+  });
+
+  it("shows the error, not the previous route's rows, when a route change fails", async () => {
+    // Switching All -> Active reuses the ListView instance. If Active's fetch
+    // rejects, the body must not settle onto All's rows: a user would then
+    // edit tasks under the wrong context.
+    const tasks = [
+      {
+        ...pagerTask("TSK-4", "todo", 1),
+        title: "Scope truth",
+        description: "",
+        labelIds: [],
+      },
+    ];
+    const rpc = seededRpc({
+      listLabels: () => ({ labels: [] }),
+      listTasks: (input: { activeOnly?: boolean }) =>
+        input.activeOnly === true
+          ? Promise.reject(new Error("active fetch failed"))
+          : { tasks },
+    });
+    const Panel = app.navPanels[0]!.component;
+    const slot = renderSlot(app.navPanels[0]!, { subPath: "all" }, { rpc });
+    await slot.findByText("Scope truth");
+
+    slot.lifecycle.rerender(<Panel subPath="active" />);
+    await slot.findByText("Couldn't load tasks");
+    expect(slot.queryByText("Scope truth")).toBeNull();
+    expect(slot.queryByText("No agents working right now")).toBeNull();
+  });
+
   it("shows the empty state and opens the New project dialog", async () => {
     const slot = renderSlot(
       app.navPanels[0]!,
@@ -709,6 +931,50 @@ describe("tasks app shell", () => {
     await slot.findByText("No projects yet");
     fireEvent.click(slot.getByRole("button", { name: /New project/ }));
     await slot.findByText("Projects group tasks under a shared key prefix.");
+  });
+
+  it("does not paint another scope's empty state while its own rows load", async () => {
+    // All tasks has rows; Active has none. Switching Active back to All keeps
+    // the same ListView instance, whose query still holds Active's empty
+    // result while All refetches; the body must read as loading, never as
+    // "No tasks yet", until All's own rows settle.
+    const tasks = [
+      {
+        ...pagerTask("TSK-4", "todo", 1),
+        title: "Scope truth",
+        description: "",
+        labelIds: [],
+      },
+    ];
+    let deferAll = false;
+    let releaseAll: (() => void) | null = null;
+    const rpc = seededRpc({
+      listLabels: () => ({ labels: [] }),
+      // The shell's own Active count also calls listTasks (activeOnly), so
+      // route by arguments rather than call order.
+      listTasks: (input: { activeOnly?: boolean }) => {
+        if (input.activeOnly === true) return { tasks: [] };
+        if (!deferAll) return { tasks };
+        return new Promise((resolve) => {
+          releaseAll = () => resolve({ tasks });
+        });
+      },
+    });
+    const Panel = app.navPanels[0]!.component;
+    const slot = renderSlot(app.navPanels[0]!, { subPath: "all" }, { rpc });
+    await slot.findByText("Scope truth");
+
+    slot.lifecycle.rerender(<Panel subPath="active" />);
+    await slot.findByText("No agents working right now");
+
+    deferAll = true;
+    slot.lifecycle.rerender(<Panel subPath="all" />);
+    await waitFor(() => expect(releaseAll).not.toBeNull());
+    // In flight: Active's emptiness must not masquerade as All's.
+    expect(slot.queryByText("No tasks yet")).toBeNull();
+    expect(slot.queryByText("Scope truth")).toBeNull();
+    act(() => releaseAll!());
+    await slot.findByText("Scope truth");
   });
 
   it("renders board and task subPaths without plugin-owned sidebar chrome", async () => {
@@ -835,6 +1101,7 @@ describe("tasks app shell", () => {
       providerId: "claude-code",
       modelId: "claude-sonnet-5",
       reasoningLevel: "medium",
+      serviceTier: null,
       permissionMode: "accept-edits",
       environmentKind: "project-default",
       baseBranch: null,

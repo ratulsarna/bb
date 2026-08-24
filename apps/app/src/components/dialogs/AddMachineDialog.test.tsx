@@ -77,6 +77,8 @@ function connectPlugin(
     app: { hasApp: false, bundle: null },
     logoUrl: null,
     logoDarkUrl: null,
+    providerIds: [],
+    icons: {},
     ...overrides,
   };
 }
@@ -145,10 +147,16 @@ describe("AddMachineDialog", () => {
     expect(command.textContent).toContain("--server https://example.getbb.app");
     expect(command.textContent).toContain("--machine-code mc_test456");
     expect(command.textContent).not.toContain(window.location.origin);
-    expect(screen.getByText(/Code expires in \d+:\d{2}/)).toBeDefined();
+    expect(command.closest("[data-add-machine-command]")).not.toBeNull();
     expect(
-      screen.getByText("Waiting for the machine to connect…"),
+      screen.getByText(
+        /It installs bb and keeps the machine connected to this server/u,
+      ),
     ).toBeDefined();
+    expect(screen.getByText(/Code expires in \d+:\d{2}/)).toBeDefined();
+    const waiting = screen.getByText("Waiting for the machine to connect…");
+    expect(waiting).toBeDefined();
+    expect(waiting.parentElement?.className).not.toContain("border-border");
 
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     await waitFor(() => {

@@ -25,7 +25,6 @@ import {
 import { useIsMutating } from "@tanstack/react-query";
 import { BbHttpError } from "@/lib/sdk";
 import { useThread } from "@/hooks/queries/thread-queries";
-import { useThreadSplitsEnabled } from "@/hooks/useThreadSplitsEnabled";
 import { useSplitWorkspaceActive } from "@/hooks/useSplitWorkspaceActive";
 import {
   dimInactiveSplitsAtom,
@@ -93,16 +92,13 @@ import { resourceRouteLabelAtom } from "@/components/layout/resourceRouteLabelAt
 import { resolveAutomationBreadcrumbs } from "@/components/tools/tools-navigation";
 import { Button } from "@bb/shared-ui/button";
 import { Icon } from "@bb/shared-ui/icon";
-import { CHROME_SUBTLE_ICON_BUTTON_FOREGROUND_CLASS } from "@/components/ui/chromeStyleTokens";
-import { usePluginSlots } from "@/lib/plugin-slots";
+import { CHROME_SUBTLE_ICON_BUTTON_FOREGROUND_CLASS } from "@bb/shared-ui/chrome-style-tokens";
+import { usePluginNavPanelChrome } from "@/lib/plugin-nav-panel-chrome";
 import {
   PluginPanelHeaderActions,
   PluginPanelHeaderCenter,
 } from "@/components/plugin/PluginPanelHeader";
-import {
-  getAdjacentPaneId,
-  getPaneIdAtReadingIndex,
-} from "./splitPaneCommands";
+import { getAdjacentPaneId } from "./splitPaneCommands";
 import {
   applyThreadPaneActionToLayout,
   createSinglePaneLayout,
@@ -265,7 +261,6 @@ export function SplitThreadArea(props: SplitThreadAreaProps = {}) {
 
 function SplitThreadAreaContent({ routeContent }: SplitThreadAreaProps) {
   const { projectId, threadId } = useRouteState();
-  const threadSplitsEnabled = useThreadSplitsEnabled();
   const splitWorkspaceActive = useSplitWorkspaceActive();
   const navigate = useNavigate();
   const store = useStore();
@@ -291,13 +286,13 @@ function SplitThreadAreaContent({ routeContent }: SplitThreadAreaProps) {
   // layout. The reconcile is idempotent, so a URL that already matches the
   // focused pane is a no-op — no history spam, no render loop.
   useEffect(() => {
-    if (!threadSplitsEnabled || currentContent === null) {
+    if (currentContent === null) {
       return;
     }
     setLayout((previous) =>
       reconcileLayoutForContent(previous, currentContent),
     );
-  }, [currentContent, setLayout, threadSplitsEnabled]);
+  }, [currentContent, setLayout]);
 
   // Effective layout for render/handlers before the effect seeds the atom.
   const layout: SplitLayout | null =
@@ -338,9 +333,6 @@ function SplitThreadAreaContent({ routeContent }: SplitThreadAreaProps) {
   useEffect(
     () =>
       wsManager.onThreadPaneAction((signal) => {
-        if (!threadSplitsEnabled) {
-          return;
-        }
         const current = store.get(splitLayoutAtom);
         if (current === null) {
           return;
@@ -366,7 +358,7 @@ function SplitThreadAreaContent({ routeContent }: SplitThreadAreaProps) {
           store.set(dimInactiveSplitsAtom, next.dimInactiveSplits);
         }
       }),
-    [navigate, setMaximizedPaneId, store, threadSplitsEnabled],
+    [navigate, setMaximizedPaneId, store],
   );
 
   // A maximized pane is always the focused/address-bar owner. External opens
@@ -562,7 +554,7 @@ function SplitThreadAreaContent({ routeContent }: SplitThreadAreaProps) {
           : null;
       const startX = event.clientX;
       const startY = event.clientY;
-      beginSplitDrag(startX, startY, {
+      beginSplitDrag({
         ghostLabel: label,
         sourceEl,
         shouldEngage: (x, y) =>
@@ -745,7 +737,7 @@ function SplitPaneCommandHandlers({
   });
   useIndexedAppCommandHandlers(PANE_FOCUS_APP_COMMAND_IDS, (index) => {
     if (!isSplitActive) return false;
-    const paneId = getPaneIdAtReadingIndex(panes, index);
+    const paneId = panes[index]?.paneId ?? null;
     if (paneId !== null) focusPane(paneId);
     return true;
   });
@@ -1038,18 +1030,20 @@ function StandalonePaneContent({
   content: PaneContent;
   paneId?: string;
 }) {
-  const { navPanels } = usePluginSlots();
+  const navPanelChrome = usePluginNavPanelChrome();
   if (content.kind === "thread") {
     return <ThreadDetailView surface="page" />;
   }
   if (content.kind === "new-thread") {
     return <RootComposeView />;
   }
-  const panel = navPanels.find(
+  const panelEntry = navPanelChrome.find(
     (candidate) =>
-      candidate.pluginId === content.pluginId &&
-      candidate.path === content.panelPath,
+      candidate.chrome.pluginId === content.pluginId &&
+      candidate.chrome.path === content.panelPath,
   );
+  const panel = panelEntry?.panel ?? undefined;
+  const panelChrome = panelEntry?.chrome;
   const body = (
     <PluginPanelView
       pluginId={content.pluginId}
@@ -1065,16 +1059,18 @@ function StandalonePaneContent({
       paneId={paneId}
       subPath={content.subPath}
     >
-      {panel ? (
+      {panelChrome ? (
         <div className="flex h-full min-h-0 flex-col">
           <AppPageHeader
-            center={<PluginPanelHeaderCenter panel={panel} />}
+            center={<PluginPanelHeaderCenter chrome={panelChrome} />}
             actions={
-              <PluginPanelHeaderActions
-                panel={panel}
-                paneId={paneId}
-                subPath={content.subPath}
-              />
+              panel ? (
+                <PluginPanelHeaderActions
+                  panel={panel}
+                  paneId={paneId}
+                  subPath={content.subPath}
+                />
+              ) : undefined
             }
           />
           <div className="flex min-h-0 flex-1 flex-col p-4 md:p-5">{body}</div>
@@ -1101,7 +1097,7 @@ function NonThreadPaneContent({
   isTopRow: boolean;
   ownsWindowTopLeft: boolean;
 }) {
-  const { navPanels } = usePluginSlots();
+  const navPanelChrome = usePluginNavPanelChrome();
   const resourceRouteLabel = useAtomValue(resourceRouteLabelAtom);
   const dimsInactiveSplits = useAtomValue(dimInactiveSplitsAtom);
   const { reservesWindowPanelToggle, isFocused } = useOptionalPaneContext() ?? {
@@ -1113,14 +1109,16 @@ function NonThreadPaneContent({
   const showsWindowPanelToggle = hostLayout?.pinsCornerToggle === true;
   const [desktopInfo] = useState(getBbDesktopInfo);
   const usesDesktopChrome = shouldUseMacosDesktopChrome(desktopInfo);
-  const panel =
+  const panelEntry =
     content.kind === "plugin-panel"
-      ? navPanels.find(
+      ? navPanelChrome.find(
           (candidate) =>
-            candidate.pluginId === content.pluginId &&
-            candidate.path === content.panelPath,
+            candidate.chrome.pluginId === content.pluginId &&
+            candidate.chrome.path === content.panelPath,
         )
       : undefined;
+  const panel = panelEntry?.panel ?? undefined;
+  const panelChrome = panelEntry?.chrome;
   const automationBreadcrumbs =
     content.kind === "plugin-panel"
       ? resolveAutomationBreadcrumbs(
@@ -1128,7 +1126,7 @@ function NonThreadPaneContent({
           isFocused ? resourceRouteLabel : null,
         )
       : null;
-  const label = panel?.title ?? "New thread";
+  const label = panelChrome?.title ?? "New thread";
   const handlePointerDown = (event: ReactPointerEvent) => {
     if (
       event.target instanceof Element &&
@@ -1221,8 +1219,8 @@ function NonThreadPaneContent({
                   breadcrumbs={automationBreadcrumbs}
                   usesDesktopChrome={usesDesktopChrome}
                 />
-              ) : panel ? (
-                <PluginPanelHeaderCenter panel={panel} />
+              ) : panelChrome ? (
+                <PluginPanelHeaderCenter chrome={panelChrome} />
               ) : (
                 <p
                   className={cn(

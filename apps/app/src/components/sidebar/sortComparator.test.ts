@@ -9,8 +9,8 @@ import {
   type ProjectThreadNode,
   type ProjectThreadItem,
   type ThreadComparator,
-} from "./projectThreadGroups";
-import { NO_COLLAPSED_CHILD_ACTIVITY } from "@/lib/thread-activity";
+} from "@bb/client-core";
+import { NO_COLLAPSED_CHILD_ACTIVITY } from "@bb/client-core";
 import type { ThreadTitleMentionResources } from "@/components/thread/ThreadTitleMentions";
 
 function thread(overrides: Partial<ThreadListEntry>): ThreadListEntry {

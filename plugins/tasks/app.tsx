@@ -12,8 +12,9 @@ export default definePluginApp((app) => {
     path: "tasks",
     component: TasksAppShell,
     experimental_sidebarAccessory: TasksSidebarAccessory,
-    experimental_fixedTabs: [
+    fixedTabs: [
       {
+        panelId: "tasks",
         id: "navigation",
         title: "Navigation",
         icon: "ListView",

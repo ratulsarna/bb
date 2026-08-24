@@ -54,6 +54,8 @@ import {
   BUILTIN_PUBLISHER_KEY,
   BUILTIN_PUBLISHER_LABEL,
   entryIconName,
+  entryIconTinted,
+  entryRepositoryUrl,
   entrySourceDisplay,
   CURATED_MARKETPLACE_NAME,
   parseMarketplaceManifestJson,
@@ -413,8 +415,13 @@ export function createPluginCatalogService(deps: {
         iconHash === null
           ? null
           : entryIconAssetUrl(CURATED_MARKETPLACE_NAME, entry.name, iconHash),
+      // A bundled icon is the plugin's own compact SVG, authored to take the
+      // surrounding text color.
+      iconTinted: iconHash !== null,
       category: entry.category,
       source: builtinPluginSource(entry.name),
+      // The build ships the code; there is no separate repository to open.
+      repositoryUrl: null,
       // Plugins bundled with the app are BB's own, so the store groups them
       // with the official marketplace rather than inventing a fourth origin.
       marketplace: CURATED_MARKETPLACE_NAME,
@@ -459,11 +466,18 @@ export function createPluginCatalogService(deps: {
     return `/api/v1/plugin-catalog/icons/${encodeURIComponent(marketplace)}/${encodeURIComponent(entryId)}?h=${contentHash}`;
   }
 
-  function entryIconUrl(marketplace: string, entryId: string): string | null {
+  /** The cached icon's same-origin URL and how the app paints it. */
+  function entryIconAsset(
+    marketplace: string,
+    entryId: string,
+  ): { iconUrl: string | null; iconTinted: boolean } {
     const icon = getPluginMarketplaceIcon(deps.db, marketplace, entryId);
     return icon === undefined
-      ? null
-      : entryIconAssetUrl(marketplace, entryId, icon.contentHash);
+      ? { iconUrl: null, iconTinted: false }
+      : {
+          iconUrl: entryIconAssetUrl(marketplace, entryId, icon.contentHash),
+          iconTinted: entryIconTinted(icon.contentType),
+        };
   }
 
   function catalogSearchResult(args: {
@@ -482,9 +496,10 @@ export function createPluginCatalogService(deps: {
       displayName: entry.displayName,
       description: entry.description,
       icon: entryIconName(entry),
-      iconUrl: entryIconUrl(row.name, entry.id),
+      ...entryIconAsset(row.name, entry.id),
       category: entryCategory(entry, official),
       source: entrySourceDisplay(entry),
+      repositoryUrl: entryRepositoryUrl(entry),
       marketplace: row.name,
       marketplaceDisplayName: catalog.displayName,
       publisherKey: row.name,

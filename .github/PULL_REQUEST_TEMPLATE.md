@@ -15,4 +15,4 @@
 Fixes #
 
 <!-- Agents: end with the line below. -->
-<!-- > AGENT GENERATED: by <model> -->
+<!-- > AGENT GENERATED -->

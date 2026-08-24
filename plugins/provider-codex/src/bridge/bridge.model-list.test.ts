@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createBridgeJsonRpcTestHarness } from "@bb/provider-bridge-protocol/testing";
+import { experimental_createBridgeJsonRpcTestHarness as createBridgeJsonRpcTestHarness } from "@get-bb/plugin-sdk/provider-bridge/testing";
 import { experimental_killAllChildrenForTests, handleLine } from "./bridge.js";
 
 const fakeAppServerPath = fileURLToPath(

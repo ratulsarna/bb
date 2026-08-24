@@ -66,8 +66,12 @@ import { cn } from "@bb/shared-ui/lib/utils";
 import {
   countQueuedMessageAttachments,
   formatQueuedMessagePreview,
-} from "@/views/thread-detail/threadQueuedMessages";
-import type { QueuedMessageReorderRequest } from "@/lib/queued-message-reorder";
+} from "@bb/client-core";
+import {
+  collectLeadQueuedMessageGroupIds,
+  preserveLeadQueuedMessageGroupAfterReorder,
+  type QueuedMessageReorderRequest,
+} from "@/lib/queued-message-reorder";
 import type { PromptMentionLinkResolver } from "@/components/promptbox/editor/prompt-mention-link";
 import { shiftMentionsToTextRange } from "@/components/thread/timeline/ConversationMessageMentions";
 import {
@@ -280,43 +284,6 @@ function CompactQueuedMarkdownPreview({
       </ReactMarkdown>
     </span>
   );
-}
-
-function collectLeadQueuedMessageGroupIds(
-  queuedMessages: readonly ThreadQueuedMessage[],
-): string[] {
-  const ids: string[] = [];
-  for (const queuedMessage of queuedMessages) {
-    ids.push(queuedMessage.id);
-    if (!queuedMessage.groupWithNext) break;
-  }
-  return ids;
-}
-
-function preserveLeadQueuedMessageGroupAfterReorder({
-  originalLeadGroupIds,
-  queuedMessages,
-}: {
-  originalLeadGroupIds: readonly string[];
-  queuedMessages: readonly ThreadQueuedMessage[];
-}): ThreadQueuedMessage[] {
-  if (originalLeadGroupIds.length <= 1) {
-    return queuedMessages.map((queuedMessage) => ({
-      ...queuedMessage,
-      groupWithNext: false,
-    }));
-  }
-
-  const originalLeadGroupIdSet = new Set(originalLeadGroupIds);
-  const preservesLeadGroup = queuedMessages
-    .slice(0, originalLeadGroupIds.length)
-    .every((queuedMessage) => originalLeadGroupIdSet.has(queuedMessage.id));
-
-  return queuedMessages.map((queuedMessage, index) => ({
-    ...queuedMessage,
-    groupWithNext:
-      preservesLeadGroup && index < originalLeadGroupIds.length - 1,
-  }));
 }
 
 export function resolveQueuedMessageDrag({

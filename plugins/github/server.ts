@@ -228,7 +228,18 @@ export const githubRpcContract = defineRpcContract({
   },
   pullForThread: {
     input: z.object({ threadId: z.string().min(1) }).strict(),
-    output: z.object({ pull: itemInputSchema.nullable() }).strict(),
+    output: z
+      .object({
+        pull: z
+          .object({
+            repo: repoNameSchema,
+            number: itemNumberSchema,
+            environmentId: z.string().nullable(),
+          })
+          .strict()
+          .nullable(),
+      })
+      .strict(),
   },
   commentIssue: {
     input: itemInputSchema.extend({ body: nonBlankStringSchema }).strict(),
@@ -262,24 +273,8 @@ export const githubRpcContract = defineRpcContract({
   },
 });
 
-interface RepoInfo {
-  repo: string; // "owner/name"
-  projectId: string | null;
-}
-
-interface CachedItem {
-  repo: string;
-  number: number;
-  kind: "issue" | "pr";
-  title: string;
-  state: string;
-  author: string;
-  labels: string[];
-  assignees: string[];
-  url: string;
-  body: string;
-  updatedAt: string;
-}
+type RepoInfo = z.infer<typeof repoInfoSchema>;
+type CachedItem = z.infer<typeof itemSchema>;
 
 interface GhListEntry {
   number?: unknown;
@@ -338,7 +333,7 @@ const GH_NO_CREDENTIALS = /no oauth token|not logged in/i;
 const GH_HOST = "github.com";
 
 /** owner/name from any GitHub remote URL (https, ssh, git@), else null. */
-export function parseGithubRemote(url: string): string | null {
+function parseGithubRemote(url: string): string | null {
   const match = url
     .trim()
     .match(/github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/);
@@ -1365,11 +1360,13 @@ export default async function plugin(bb: BbPluginApi) {
         environment PR (the branch the agent pushed) first, else a PR this
         thread was spawned to review. Null when neither exists. */
     async pullForThread({ threadId }) {
+      let environmentId: string | null = null;
       try {
         const thread = (await bb.sdk.threads.get({ threadId })) as unknown as {
           environmentId?: string | null;
         };
         if (thread?.environmentId) {
+          environmentId = thread.environmentId;
           const result = await bb.sdk.environments.pullRequest({
             environmentId: thread.environmentId,
           });
@@ -1380,7 +1377,13 @@ export default async function plugin(bb: BbPluginApi) {
               ? url.match(/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/)
               : null;
           if (match !== null) {
-            return { pull: { repo: match[1], number: Number(match[2]) } };
+            return {
+              pull: {
+                repo: match[1],
+                number: Number(match[2]),
+                environmentId,
+              },
+            };
           }
         }
       } catch {
@@ -1391,7 +1394,13 @@ export default async function plugin(bb: BbPluginApi) {
         const match = key.match(/^pr:([\w.-]+\/[\w.-]+)#(\d+)$/);
         if (match === null) continue;
         if (threadLinks.some((link) => link.threadId === threadId)) {
-          return { pull: { repo: match[1], number: Number(match[2]) } };
+          return {
+            pull: {
+              repo: match[1],
+              number: Number(match[2]),
+              environmentId,
+            },
+          };
         }
       }
       return { pull: null };

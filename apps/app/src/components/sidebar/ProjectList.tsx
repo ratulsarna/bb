@@ -40,7 +40,7 @@ import {
 import { useHosts, usePrimaryHost } from "@/hooks/queries/host-queries";
 import { useDialogState } from "@/hooks/useDialogState";
 import { usePromptDraftInputThreadIds } from "@/hooks/usePromptDraftStorage";
-import { getCollapsedChildActivity } from "@/lib/thread-activity";
+import { getCollapsedChildActivity } from "@bb/client-core";
 import { getRootComposeRoutePath } from "@/lib/route-paths";
 import { getThreadDisplayTitle } from "@/lib/thread-title";
 import { getMutationErrorMessage } from "@/lib/mutation-errors";
@@ -58,7 +58,7 @@ import {
   ConfirmDeleteDialog,
   ConfirmDeleteDialogContent,
 } from "@/components/dialogs/ConfirmDeleteDialog";
-import { CHROME_SECTION_LABEL_CLASS } from "@/components/ui/chromeStyleTokens";
+import { CHROME_SECTION_LABEL_CLASS } from "@bb/shared-ui/chrome-style-tokens";
 import { Icon, type IconName } from "@bb/shared-ui/icon";
 import { LIST_HOVER_TRANSITION } from "@bb/shared-ui/motion";
 import { Skeleton } from "@bb/shared-ui/skeleton";
@@ -80,15 +80,21 @@ import {
 import { SidebarThreadSearchPanel } from "./SidebarThreadSearchPanel";
 import type { ProjectThreadListState } from "./ProjectRow";
 import {
+  buildMachineThreadGroups,
+  buildPinnedSidebarState,
+  CHRONOLOGICAL_CONTAINER_ID,
   compareByCreatedAtDescending,
   compareStandardThreads,
   createSidebarProjectIdResolver,
   isSidebarProjectThread,
+  NO_MACHINE_GROUP_KEY,
   resolveSidebarProjectId,
+  sectionKeyForThreadSection,
+  buildSidebarEntitySectionId,
   type ProjectThreadItem,
   type SidebarSectionDefinition,
   type ThreadComparator,
-} from "./projectThreadGroups";
+} from "@bb/client-core";
 import {
   SortableProjectRow,
   type ProjectListRowModel,
@@ -97,8 +103,7 @@ import {
   PinnedThreadTree,
   type PinnedThreadTreeProps,
 } from "./PinnedThreadTree";
-import { SidebarThreadTitleMentionResourcesProvider } from "./SidebarThreadTitleMentions";
-import { buildPinnedSidebarState } from "./pinnedSidebarThreads";
+import { useThreadTitleMentionResources } from "@/components/thread/ThreadTitleMentions";
 import {
   collapsedEnvironmentIdsAtom,
   collapsedThreadIdsAtom,
@@ -113,12 +118,6 @@ import {
   type SidebarOrganizationMode,
   type SidebarSectionId,
 } from "./sidebarCollapsedAtoms";
-import { sectionKeyForThreadSection } from "./sectionKeys";
-import {
-  buildMachineThreadGroups,
-  NO_MACHINE_GROUP_KEY,
-} from "./machineThreadGroups";
-import { CHRONOLOGICAL_CONTAINER_ID } from "./projectThreadGroups";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -144,7 +143,6 @@ import {
 import { useAppCommandShortcut } from "@/components/commands/AppCommandProvider";
 import { usePaneContentSplitIndicator } from "./paneContentSplitIndicator";
 import { SplitPaneMiniMap } from "./SplitPaneMiniMap";
-import { buildSidebarEntitySectionId } from "./sidebarSectionOrder";
 import {
   renderBuiltInSidebarSection,
   SortableSidebarSection,
@@ -153,6 +151,7 @@ import {
 } from "./BuiltInSidebarSection";
 import { ReorderableSidebarSectionOrderList } from "./ReorderableSidebarSectionOrderList";
 import { useSidebarModeSectionOrder } from "./useSidebarModeSectionOrder";
+import { haveSameOrder } from "./usePersistedSidebarSectionOrder";
 import {
   resolveThreadTitleDisplayText,
   type ThreadTitleMentionResources,
@@ -177,11 +176,6 @@ interface ProjectListActionButtonsProps {
 
 interface ProjectListShellProps {
   children: ReactNode;
-  titleMentionResources?: {
-    sectionNamesById: ReadonlyMap<string, string>;
-    projectNamesById: ReadonlyMap<string, string>;
-    threadById: ReadonlyMap<string, ThreadListEntry>;
-  };
 }
 
 interface ProjectListSectionIconButtonProps {
@@ -289,16 +283,6 @@ type OpenSidebarMenu =
   | "threadsDisplayOptions"
   | `displayOptions:${string}`
   | null;
-
-function hasSameStringList(
-  left: readonly string[],
-  right: readonly string[],
-): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-  return left.every((sectionId, index) => sectionId === right[index]);
-}
 
 function removeCollapsedIds<T extends string>(
   current: T[],
@@ -937,22 +921,11 @@ export function ProjectListActionButtons({
   );
 }
 
-export function ProjectListShell({
-  children,
-  titleMentionResources,
-}: ProjectListShellProps) {
-  const content = (
+export function ProjectListShell({ children }: ProjectListShellProps) {
+  return (
     <SidebarStickyStack data-sidebar-sticky-density="compact-actions">
       <SidebarGroupContent>{children}</SidebarGroupContent>
     </SidebarStickyStack>
-  );
-  if (!titleMentionResources) {
-    return content;
-  }
-  return (
-    <SidebarThreadTitleMentionResourcesProvider {...titleMentionResources}>
-      {content}
-    </SidebarThreadTitleMentionResourcesProvider>
   );
 }
 
@@ -1523,24 +1496,11 @@ function ProjectListComponent({
     return sidebarThreads;
   }, [sidebarNavigation]);
   const draftThreadIds = usePromptDraftInputThreadIds(threads);
-  const projectNamesById = useMemo(() => {
-    const namesById = new Map<string, string>();
-    if (!sidebarNavigation) {
-      return namesById;
-    }
-    for (const project of sidebarNavigation.projects) {
-      namesById.set(project.id, project.name);
-    }
-    namesById.set(PERSONAL_PROJECT_ID, sidebarNavigation.personalProject.name);
-    return namesById;
-  }, [sidebarNavigation]);
-  const sectionNamesById = useMemo(() => {
-    const namesById = new Map<string, string>();
-    for (const section of sections) {
-      namesById.set(section.id, section.name);
-    }
-    return namesById;
-  }, [sections]);
+  // Provided once by AppLayout from the same sidebar payload (with value
+  // retention across refetches); building a second copy here re-rendered every
+  // row twice per sidebar update.
+  const titleMentionResources = useThreadTitleMentionResources();
+  const { sectionNamesById, projectNamesById } = titleMentionResources;
   const threadById = useMemo(() => {
     const map = new Map<string, ThreadListEntry>();
     for (const thread of threads) {
@@ -1548,10 +1508,6 @@ function ProjectListComponent({
     }
     return map;
   }, [threads]);
-  const titleMentionResources = useMemo(
-    () => ({ sectionNamesById, projectNamesById, threadById }),
-    [sectionNamesById, projectNamesById, threadById],
-  );
   const projectsState = useConnectionAwareQueryState({
     hasResolvedData: projects !== undefined,
     isFetching: sidebarNavigationQuery.isFetching,
@@ -1787,7 +1743,7 @@ function ProjectListComponent({
   );
   useEffect(() => {
     if (
-      hasSameStringList(
+      haveSameOrder(
         collapsedSidebarSectionIdList,
         normalizedCollapsedSidebarSectionIds,
       )
@@ -2014,7 +1970,7 @@ function ProjectListComponent({
 
   if (threadSearch?.isActive) {
     return (
-      <ProjectListShell titleMentionResources={titleMentionResources}>
+      <ProjectListShell>
         <SidebarThreadSearchPanel
           activeIndex={threadSearch.activeIndex}
           isRecentsLoading={projectsState.status === "loading"}
@@ -2033,14 +1989,14 @@ function ProjectListComponent({
 
   if (projectsState.status === "loading") {
     return (
-      <ProjectListShell titleMentionResources={titleMentionResources}>
+      <ProjectListShell>
         <ProjectListNavigationLoadingState />
       </ProjectListShell>
     );
   }
 
   return (
-    <ProjectListShell titleMentionResources={titleMentionResources}>
+    <ProjectListShell>
       <ActiveSidebarModeSections
         mode={organizationMode}
         renderMachine={() => (

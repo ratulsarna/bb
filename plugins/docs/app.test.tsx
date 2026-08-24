@@ -3,7 +3,6 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
   waitFor,
   within,
 } from "@testing-library/react";
@@ -13,7 +12,7 @@ import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 
 const app = await loadPluginApp(() => import("./app"));
 const docsRegistration = app.navPanels[0]!;
-const navigationView = docsRegistration.experimental_fixedTabs?.[0]!;
+const navigationView = docsRegistration.fixedTabs?.[0]!;
 const navigationRegistration = {
   ...docsRegistration,
   component: navigationView.component,
@@ -141,8 +140,9 @@ describe("Docs nav panel", () => {
       id: "docs",
       title: "Docs",
       path: "docs",
-      experimental_fixedTabs: [
+      fixedTabs: [
         {
+          panelId: "docs",
           id: "navigation",
           title: "Navigation",
           icon: "ListView",
@@ -174,7 +174,7 @@ describe("Docs nav panel", () => {
     const toolbar = await slot.findByRole("toolbar", {
       name: "Notes sidebar actions",
     });
-    const navigation = slot.getByRole("navigation", { name: "Notes" });
+    slot.getByRole("navigation", { name: "Notes" });
     expect(slot.container.querySelector("aside")).toBeNull();
     expect(slot.queryByRole("separator")).toBeNull();
     expect(
@@ -1272,31 +1272,72 @@ describe("Docs nav panel", () => {
     });
   });
 
-  it("opens arbitrary Markdown files without exposing composer actions", async () => {
+  it("preserves an explicit host for file opener reads and autosaves", async () => {
     const slot = renderSlot(
       app.fileOpeners[0]!,
       {
-        path: "notes/plan.mdx",
+        path: "/Users/shared/notes/plan.mdx",
         source: {
-          kind: "workspace",
+          kind: "host",
           threadId: "thr_1",
-          environmentId: "env_1",
+          environmentId: null,
           projectId: "project_1",
+          experimental_hostId: "host_remote",
         },
-        experimental_Original: () => null,
+        Original: () => null,
       },
       {
         rpc: {
           openFile: () => ({
-            file: { content: "# Workspace plan", sha256: "sha" },
+            file: { content: "# Remote plan", sha256: "sha" },
             preview,
             previewPath: "notes/plan.mdx",
+          }),
+          saveOpenedFile: () => ({
+            outcome: "written",
+            sha256: "updated-sha",
           }),
         },
       },
     );
 
-    await slot.findByText("Workspace plan");
+    const body = await slot.findByText("Remote plan");
+    expect(slot.rpcCalls).toContainEqual({
+      method: "openFile",
+      input: {
+        source: {
+          kind: "host",
+          threadId: "thr_1",
+          environmentId: null,
+          projectId: "project_1",
+          experimental_hostId: "host_remote",
+        },
+        path: "/Users/shared/notes/plan.mdx",
+      },
+    });
+
+    body.textContent = "Updated remote plan";
+    fireEvent.input(body);
+    await waitFor(
+      () => {
+        expect(slot.rpcCalls).toContainEqual({
+          method: "saveOpenedFile",
+          input: {
+            source: {
+              kind: "host",
+              threadId: "thr_1",
+              environmentId: null,
+              projectId: "project_1",
+              experimental_hostId: "host_remote",
+            },
+            path: "/Users/shared/notes/plan.mdx",
+            content: "# Updated remote plan",
+            expectedSha256: "sha",
+          },
+        });
+      },
+      { timeout: 2_000 },
+    );
     expect(slot.queryByRole("button", { name: "Add to chat" })).toBeNull();
     expect(slot.queryByRole("button", { name: "Mention in chat" })).toBeNull();
   });

@@ -69,6 +69,8 @@ function makeGitSection(
   };
 }
 
+afterEach(cleanup);
+
 describe("ThreadPromptContextBanner", () => {
   it("renders the archived read-only status without an action", () => {
     const markup = renderToStaticMarkup(
@@ -362,6 +364,41 @@ describe("ThreadPromptContextBanner", () => {
     expect(markup).toContain("+1 more");
   });
 
+  it("lets combined child and context cards shrink inside the composer stack", () => {
+    render(
+      <MemoryRouter>
+        <ThreadPromptContextBanner
+          gitSection={makeGitSection("uncommitted")}
+          gitSectionPending={false}
+          archivedSection={null}
+          environmentGoneSection={null}
+          parentThreadSection={null}
+          childThreadsSection={{
+            items: [
+              {
+                id: "thr_child",
+                title: "Host-owned SourceCode and Diff renderers",
+                href: "/threads/thr_child",
+                hasPendingInteraction: false,
+              },
+            ],
+          }}
+          pullRequestSection={null}
+          expandedSection={null}
+          onToggleSection={noop}
+        />
+      </MemoryRouter>,
+    );
+
+    const childCard = screen.getByRole("region", { name: "Child threads" });
+    const contextCard = screen.getByRole("region", {
+      name: "Thread context before sending",
+    });
+
+    expect(childCard.parentElement).toBe(contextCard.parentElement);
+    expect(childCard.parentElement?.classList.contains("min-w-0")).toBe(true);
+  });
+
   it("uses neutral active copy for a child waiting for a host", () => {
     expect(isThreadDisplayStatusBannerActive("waiting-for-host")).toBe(true);
 
@@ -530,11 +567,63 @@ describe("ThreadPromptContextBanner", () => {
     expect(markup).toContain("Committed");
     expect(markup).toContain("1 file");
   });
+
+  it.each([
+    {
+      label: "checked open",
+      pullRequest: pullRequestFixture,
+      expectedMinWidthClass: "min-w-13",
+    },
+    {
+      label: "merged",
+      pullRequest: {
+        ...pullRequestFixture,
+        state: "merged" as const,
+        attention: "merged" as const,
+      },
+      expectedMinWidthClass: "min-w-8",
+    },
+    {
+      label: "closed",
+      pullRequest: {
+        ...pullRequestFixture,
+        state: "closed" as const,
+        attention: "closed" as const,
+      },
+      expectedMinWidthClass: "min-w-8",
+    },
+  ])(
+    "reserves only the width needed by a $label pull request status pill",
+    ({ pullRequest, expectedMinWidthClass }) => {
+      render(
+        <MemoryRouter>
+          <ThreadPromptContextBanner
+            gitSection={makeGitSection("committed")}
+            gitSectionPending={false}
+            archivedSection={null}
+            environmentGoneSection={null}
+            parentThreadSection={null}
+            childThreadsSection={null}
+            pullRequestSection={{ pullRequest }}
+            expandedSection={null}
+            onToggleSection={noop}
+          />
+        </MemoryRouter>,
+      );
+
+      const pullRequestLink = screen.getByRole("link", {
+        name: /Pull request 128:/,
+      });
+      expect(
+        ["min-w-8", "min-w-13"].filter((className) =>
+          pullRequestLink.classList.contains(className),
+        ),
+      ).toEqual([expectedMinWidthClass]);
+    },
+  );
 });
 
 describe("ThreadPromptContextBanner git section body", () => {
-  afterEach(cleanup);
-
   function renderBanner(expandedSection: "git" | null) {
     return (
       <MemoryRouter>

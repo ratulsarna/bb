@@ -6,9 +6,9 @@
  * start with an alphanumeric. Becomes a DNS label in `<handle>.getbb.app`, so
  * it must stay within LDH label rules.
  */
-export const HANDLE_REGEX = /^[a-z0-9][a-z0-9-]{2,29}$/;
+const HANDLE_REGEX = /^[a-z0-9][a-z0-9-]{2,29}$/;
 
-export const HANDLE_MIN_LENGTH = 3;
+const HANDLE_MIN_LENGTH = 3;
 export const HANDLE_MAX_LENGTH = 30;
 
 /**
@@ -130,9 +130,6 @@ export const CONNECT_CODE_TTL_MS = 10 * 60 * 1000;
 /** A server is shown "offline" if no heartbeat within this window. */
 export const SERVER_OFFLINE_AFTER_MS = 90 * 1000;
 
-/** Token prefixes (mirrors bb's host-key convention; distinct namespaces). */
-export const CLOUD_PAT_PREFIX = "bbc_";
-
 export type HandleValidationError =
   | "too-short"
   | "too-long"
@@ -161,10 +158,6 @@ export function validateHandle(handle: string): HandleValidationError | null {
 export const validateLabel = validateHandle;
 export const validateSubdomain = validateHandle;
 
-/** Alias of {@link HandleValidationError}; the two namespaces share one grammar. */
-export type LabelValidationError = HandleValidationError;
-export type SubdomainValidationError = HandleValidationError;
-
 /** Decimal port 1–65535 with no leading zeros (v1 share target grammar). */
 const SHARE_PORT_TARGET = /^[1-9]\d{0,4}$/;
 
@@ -174,7 +167,7 @@ function isValidShareTarget(target: string): boolean {
   return port >= 1 && port <= 65535;
 }
 
-export interface VisitorHost {
+interface VisitorHost {
   handle: string;
   /** Null on a bare handle host; a decimal port string on a share host. */
   target: string | null;

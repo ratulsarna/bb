@@ -17,6 +17,7 @@ import {
 } from "./file-opener-tabs";
 import { PluginSlotMount } from "./PluginSlotMount";
 import { PluginReplacementSlot } from "./PluginReplacementSlot";
+import { deprecatedOriginalAlias } from "@/lib/plugin-sdk-deprecated-aliases";
 import { resolveReplacement } from "@/lib/plugin-slot-resolvers";
 
 /**
@@ -35,7 +36,7 @@ export interface OpenPluginPanelArgs {
   paramsJson: string | null;
 }
 
-export type OpenPluginPanelHandler = (args: OpenPluginPanelArgs) => void;
+type OpenPluginPanelHandler = (args: OpenPluginPanelArgs) => void;
 
 /** One launcher row for a plugin action, ready to render + invoke. */
 export interface PluginPanelActionEntry {
@@ -213,7 +214,7 @@ export function usePluginNewThreadPanelActions({
   );
 }
 
-export type PluginPanelSurfaceContext =
+type PluginPanelSurfaceContext =
   | { kind: "thread"; threadId: string }
   | { kind: "new-thread"; projectId: string | null };
 
@@ -383,13 +384,18 @@ function FileOpenerTabContent({
     >
       {(opener, BoundOriginal) => (
         <div
-          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          // `h-full` matters: the region this mounts into is a block box, so
+          // `flex-1` alone leaves the wrapper at content height and an opener
+          // that sizes itself with `flex-1` collapses to nothing. Same shape
+          // as the action-tab wrapper above.
+          className="flex h-full min-h-0 flex-1 flex-col overflow-hidden"
           data-testid="plugin-file-opener-tab-content"
         >
           <opener.component
             path={file.path}
             source={file.source}
-            experimental_Original={BoundOriginal}
+            Original={BoundOriginal}
+            experimental_Original={deprecatedOriginalAlias(BoundOriginal)}
           />
         </div>
       )}

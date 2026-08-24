@@ -34,7 +34,6 @@ interface RenderRootComposeArgs {
   isCompactViewport: boolean;
   isSecondaryPanelOpen: boolean;
   isTopRow?: boolean;
-  panelTogglePositionClassName?: string;
 }
 
 type TestDesktopWindow = {
@@ -156,17 +155,15 @@ function createSecondaryPanel(
   return {
     activeTab: null,
     canUseGitUi: false,
-    fileTabs: [],
+    tabs: [],
+    fixedTabs: [],
     isOpen,
     metadataContent: null,
     onCollapse: noop,
     onClose: noop,
-    onFileTabReorder: noop,
+    onTabReorder: noop,
     onOpenNewTab: noop,
-    onPanelChange: noop,
     onPanelFocus: noop,
-    showGitDiffTab: false,
-    showInfoTab: false,
   };
 }
 
@@ -201,10 +198,6 @@ function renderRootCompose(args: RenderRootComposeArgs) {
       <RootComposeSecondaryContent
         isSecondaryPanelOpen={renderArgs.isSecondaryPanelOpen}
         onToggleSecondaryPanel={() => undefined}
-        panelTogglePositionClassName={
-          renderArgs.panelTogglePositionClassName ??
-          ROOT_COMPOSE_PINNED_PANEL_TOGGLE_POSITION_CLASS
-        }
         secondaryPanel={createSecondaryPanel(renderArgs.isSecondaryPanelOpen)}
       >
         <div data-testid="root-compose-content" />
@@ -224,10 +217,6 @@ function renderRootCompose(args: RenderRootComposeArgs) {
           <RootComposeSecondaryContent
             isSecondaryPanelOpen={renderArgs.isSecondaryPanelOpen}
             onToggleSecondaryPanel={() => undefined}
-            panelTogglePositionClassName={
-              renderArgs.panelTogglePositionClassName ??
-              ROOT_COMPOSE_PINNED_PANEL_TOGGLE_POSITION_CLASS
-            }
             secondaryPanel={createSecondaryPanel(
               renderArgs.isSecondaryPanelOpen,
             )}
@@ -248,16 +237,17 @@ afterEach(() => {
 });
 
 describe("RootComposeSecondaryContent desktop layout", () => {
-  it("always offers a new tab from the new-thread right panel", () => {
+  it("always offers a new tab from the new-thread right panel", async () => {
     renderRootCompose({
       isCompactViewport: false,
       isSecondaryPanelOpen: true,
     });
 
+    // The panel chunk loads lazily; the panel appears one tick after mount.
     expect(
-      screen
-        .getByTestId("inline-secondary-panel")
-        .getAttribute("data-show-new-tab-button"),
+      (await screen.findByTestId("inline-secondary-panel")).getAttribute(
+        "data-show-new-tab-button",
+      ),
     ).toBe("true");
     expect(screen.getByTestId("root-compose-content")).not.toBeNull();
     expect(screen.getByTestId("plugin-homepage-sections")).not.toBeNull();

@@ -19,6 +19,7 @@ import { NavLink } from "react-router-dom";
 import {
   ThreadActionsContextMenu,
   ThreadActionsMenu,
+  ThreadArchiveQuickAction,
 } from "@/components/thread/ThreadActionsMenu";
 import { useThreadActions } from "@/components/thread/ThreadActionsProvider";
 import { useInlineThreadTitle } from "@/components/thread/InlineThreadTitle";
@@ -32,6 +33,7 @@ import {
 import {
   SIDEBAR_HOVER_ACTIONS_CLASS,
   SIDEBAR_HOVER_ACTIONS_FADE_CLASS,
+  SIDEBAR_HOVER_ACTIONS_INSET_CLASS,
   SIDEBAR_HOVER_ACTIONS_ROW_CLASS,
 } from "@/components/ui/sidebar-hover-actions.js";
 import {
@@ -48,7 +50,7 @@ import {
   resolveThreadListIndicator,
   type CollapsedChildActivity,
   type ThreadListIndicatorState,
-} from "@/lib/thread-activity";
+} from "@bb/client-core";
 import { getThreadDisplayTitle } from "@/lib/thread-title";
 import { getThreadRoutePath } from "@/lib/route-paths";
 import { cn } from "@bb/shared-ui/lib/utils";
@@ -59,6 +61,8 @@ import {
   SIDEBAR_ROW_INTERACTIVE_STATE_CLASS,
   SIDEBAR_ROW_SELECTED_STATE_CLASS,
   SIDEBAR_MORE_ACTION_TRIGGER_CLASS,
+  SIDEBAR_PAIRED_ACTION_LEADING_TARGET_CLASS,
+  SIDEBAR_PAIRED_ACTION_TRAILING_TARGET_CLASS,
   SIDEBAR_ROW_OPEN_IN_SPLIT_STATE_CLASS,
   SIDEBAR_SUCCESS_STATUS_COLOR_CLASS,
   SIDEBAR_SUCCESS_STATUS_DOT_CLASS,
@@ -69,13 +73,12 @@ import type { ConsumeDragClickSuppression } from "@/components/ui/use-drag-click
 import type { SidebarSortableDragBindings } from "./sortableMotion";
 import { SidebarChildToggleChevron } from "./SidebarChildToggleChevron";
 import { useSidebarThreadShortcut } from "./sidebarThreadShortcuts";
-import { SidebarThreadTitle } from "./SidebarThreadTitleMentions";
 import { SplitPaneMiniMap } from "./SplitPaneMiniMap";
 import { usePaneContentSplitIndicator } from "./paneContentSplitIndicator";
-import { useThreadSplitsEnabled } from "@/hooks/useThreadSplitsEnabled";
 import { useThreadRowSplitDrag } from "./useThreadRowSplitDrag";
 import { AppCommandShortcutPill } from "@/components/commands/AppCommandShortcutHint";
 import {
+  ThreadTitleMentions,
   useSidebarProjectName,
   useThreadTitleDisplayText,
 } from "@/components/thread/ThreadTitleMentions";
@@ -133,10 +136,6 @@ interface ThreadRowProps {
   hasComposerDraft: boolean;
   onProjectSelect?: () => void;
   options: ThreadRowOptions;
-  // Visible row text override. Defaults to the thread title.
-  displayTitle?: string;
-  // Accessible name + hover tooltip override. Defaults to the thread title.
-  accessibleTitle?: string;
 }
 
 type ThreadRowClickCaptureHandler = MouseEventHandler<HTMLDivElement>;
@@ -419,25 +418,35 @@ export function ThreadStatusGlyph({
 
 interface CollapsedThreadStatusGlyphProps {
   activity: CollapsedChildActivity;
+  pluginStatus?: PluginComposerThreadRowStatus | null;
 }
 
 export function CollapsedThreadStatusGlyph({
   activity,
+  pluginStatus = null,
 }: CollapsedThreadStatusGlyphProps) {
-  return (
-    <ThreadStatusGlyph
-      hasPendingInteraction={activity.pending}
-      hasUnsubmittedDraft={activity.hasUnsubmittedDraft}
-      hasUnreadError={activity.unreadError}
-      hasUnreadSuccess={activity.unread}
-      isBackgroundAgentActive={activity.backgroundAgent}
-      isBackgroundCommandActive={activity.backgroundCommand}
-      isGoalActive={activity.goal}
-      isPlanModeActive={activity.planMode}
-      isRuntimeActive={activity.runtimeWorking}
-      isWorkflowActive={activity.workflow}
-    />
+  const statusProps: ThreadListIndicatorState = {
+    hasPendingInteraction: activity.pending,
+    hasUnsubmittedDraft: activity.hasUnsubmittedDraft,
+    hasUnreadError: activity.unreadError,
+    hasUnreadSuccess: activity.unread,
+    isBackgroundAgentActive: activity.backgroundAgent,
+    isBackgroundCommandActive: activity.backgroundCommand,
+    isGoalActive: activity.goal,
+    isPlanModeActive: activity.planMode,
+    isRuntimeActive: activity.runtimeWorking,
+    isWorkflowActive: activity.workflow,
+  };
+  const { pluginStatusIsVisible } = resolveThreadTrailingIndicatorStatus(
+    statusProps,
+    pluginStatus,
   );
+
+  if (pluginStatusIsVisible && pluginStatus) {
+    return <PluginThreadRowStatusIndicator status={pluginStatus} />;
+  }
+
+  return <ThreadStatusGlyph {...statusProps} />;
 }
 type ThreadTrailingIndicatorProps = ThreadStatusGlyphProps & {
   pluginStatus: PluginComposerThreadRowStatus | null;
@@ -505,8 +514,6 @@ function ThreadRowComponent({
   hasComposerDraft,
   onProjectSelect,
   options,
-  displayTitle,
-  accessibleTitle,
 }: ThreadRowProps) {
   const [isDropdownActionsOpen, setIsDropdownActionsOpen] = useState(false);
   const [isContextActionsOpen, setIsContextActionsOpen] = useState(false);
@@ -529,9 +536,7 @@ function ThreadRowComponent({
   const threadUnreadError = threadUnreadDone && thread.status === "error";
   const threadUnreadSuccess = threadUnreadDone && !threadUnreadError;
   const threadTitle = getThreadDisplayTitle(thread);
-  // Inside a section the row shows the leaf but keeps the full path for a11y.
-  const visibleTitle = displayTitle ?? threadTitle;
-  const labelTitle = useThreadTitleDisplayText(accessibleTitle ?? threadTitle);
+  const labelTitle = useThreadTitleDisplayText(threadTitle);
   const crossProjectName = useSidebarProjectName(crossProjectId);
   const crossProjectLabel =
     crossProjectId === null
@@ -558,10 +563,9 @@ function ThreadRowComponent({
     },
     [startEditing],
   );
-  const threadSplitsEnabled = useThreadSplitsEnabled();
   const splitIndicator = usePaneContentSplitIndicator(
     { kind: "thread", projectId, threadId: thread.id },
-    threadSplitsEnabled,
+    true,
   );
   const { onPointerDown: onSplitDragPointerDown, openInSplit } =
     useThreadRowSplitDrag({
@@ -716,7 +720,14 @@ function ThreadRowComponent({
         aria-keyshortcuts={shortcut?.ariaKeyshortcuts}
         className="absolute inset-0 rounded-md outline-none ring-sidebar-ring focus-visible:ring-2"
       />
-      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+      <span
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-1.5",
+          // The hover actions overlay grows leftward past the trailing slot;
+          // this reserves room so the title never runs under the extra button.
+          !shortcut && SIDEBAR_HOVER_ACTIONS_INSET_CLASS,
+        )}
+      >
         {isEditing ? (
           <span className="relative z-10 min-w-0 flex-1 overflow-visible">
             {editor}
@@ -727,7 +738,7 @@ function ThreadRowComponent({
             title={labelTitle}
             onDoubleClick={startTitleEditing}
           >
-            <SidebarThreadTitle title={visibleTitle} />
+            <ThreadTitleMentions title={threadTitle} />
           </span>
         )}
         {crossProjectLabel !== null ? (
@@ -818,14 +829,28 @@ function ThreadRowComponent({
                 }
                 className={cn(
                   SIDEBAR_HOVER_ACTIONS_CLASS,
-                  "absolute inset-0 z-10 flex items-center justify-end max-md:pointer-coarse:hidden",
+                  // Anchored to the right edge only, so a second action can sit
+                  // left of the menu without widening the rest slot.
+                  "absolute inset-y-0 right-0 z-10 flex items-center justify-end max-md:pointer-coarse:hidden",
                 )}
               >
+                <ThreadArchiveQuickAction
+                  thread={thread}
+                  className={cn(
+                    "text-subtle-foreground hover:bg-transparent hover:text-foreground",
+                    SIDEBAR_MORE_ACTION_TRIGGER_CLASS,
+                    // Tighter than two full margins: a half step between the
+                    // two glyphs reads as one control group.
+                    "-mr-0.5",
+                    SIDEBAR_PAIRED_ACTION_LEADING_TARGET_CLASS,
+                  )}
+                />
                 <ThreadActionsMenu
                   thread={thread}
                   triggerClassName={cn(
                     "text-subtle-foreground hover:bg-transparent hover:text-foreground",
                     SIDEBAR_MORE_ACTION_TRIGGER_CLASS,
+                    SIDEBAR_PAIRED_ACTION_TRAILING_TARGET_CLASS,
                   )}
                   onOpenInSplit={splitAvailable ? openInSplit : undefined}
                   onOpenChange={setIsDropdownActionsOpen}

@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   definePluginApp,
+  experimental_FileLink as FileLink,
   useBbNavigate,
   useRpc,
   useRealtime,
@@ -15,6 +16,7 @@ import {
   type PluginMessageDirectiveProps,
   type PluginNavPanelProps,
   type PluginThreadPanelProps,
+  type ExperimentalLiveFileTarget,
 } from "@get-bb/plugin-sdk/app";
 import type { docsRpcContract } from "./server.js";
 import { parseMarkdownDocument } from "./markdown-document.js";
@@ -56,7 +58,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Button } from "@bb/shared-ui/button";
-import { DelayedLoading } from "./delayed-loading.js";
+import { DelayedLoading } from "@bb/shared-ui/delayed-loading";
 import {
   Dialog,
   DialogContent,
@@ -113,93 +115,13 @@ interface NotesData {
   error: string | null;
 }
 
-interface NoteContent {
-  content: string;
-  sha256: string;
-}
-
 interface PreviewLease {
   baseUrl: string;
   expiresAtMs: number;
 }
 
-type SaveResult =
-  | { outcome: "written"; sha256: string }
-  | { outcome: "conflict"; currentSha256: string | null };
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseNotesData(value: unknown): NotesData {
-  if (
-    !isRecord(value) ||
-    !Array.isArray(value.vaults) ||
-    !isRecord(value.vault) ||
-    !Array.isArray(value.entryOrder) ||
-    value.entryOrder.some((entry) => typeof entry !== "string")
-  ) {
-    throw new Error("Docs returned an invalid notebook response");
-  }
-  // RPC is the untyped boundary. The backend owns and validates this exact
-  // JSON contract; keep the cast here rather than spreading unknown values.
-  return value as unknown as NotesData;
-}
-
-function parseNoteContent(value: unknown): NoteContent {
-  if (
-    !isRecord(value) ||
-    typeof value.content !== "string" ||
-    typeof value.sha256 !== "string"
-  ) {
-    throw new Error("Docs returned invalid file content");
-  }
-  return { content: value.content, sha256: value.sha256 };
-}
-
-function parsePreviewLease(value: unknown): PreviewLease {
-  if (
-    !isRecord(value) ||
-    typeof value.baseUrl !== "string" ||
-    typeof value.expiresAtMs !== "number"
-  ) {
-    throw new Error("Docs returned an invalid preview lease");
-  }
-  return { baseUrl: value.baseUrl, expiresAtMs: value.expiresAtMs };
-}
-
-function parseSaveResult(value: unknown): SaveResult {
-  if (
-    !isRecord(value) ||
-    (value.outcome !== "written" && value.outcome !== "conflict")
-  ) {
-    throw new Error("Docs returned an invalid save response");
-  }
-  if (value.outcome === "written" && typeof value.sha256 === "string") {
-    return { outcome: "written", sha256: value.sha256 };
-  }
-  if (
-    value.outcome === "conflict" &&
-    (typeof value.currentSha256 === "string" || value.currentSha256 === null)
-  ) {
-    return { outcome: "conflict", currentSha256: value.currentSha256 };
-  }
-  throw new Error("Docs returned an invalid save response");
-}
-
-function parseOpenedFile(value: unknown): {
-  file: NoteContent;
-  preview: PreviewLease;
-  previewPath: string;
-} {
-  if (!isRecord(value) || typeof value.previewPath !== "string") {
-    throw new Error("Docs returned an invalid opened file");
-  }
-  return {
-    file: parseNoteContent(value.file),
-    preview: parsePreviewLease(value.preview),
-    previewPath: value.previewPath,
-  };
 }
 
 function encodePath(value: string): string {
@@ -650,7 +572,7 @@ function refreshNotebookStore(
         notebookStores.get(store.vaultId) !== store
       )
         return;
-      store.data = parseNotesData(value);
+      store.data = value;
       store.error = null;
       notifyNotebookStore(store);
     })
@@ -889,7 +811,6 @@ function HtmlDocumentPanelBody({ document }: { document: DocumentRef }) {
         vaultId: document.vaultId,
         path: document.path,
       })
-      .then(parsePreviewLease)
       .then((lease) => {
         if (active) setState(lease);
       })
@@ -994,10 +915,8 @@ function NotePane({
     let active = true;
     setState(null);
     Promise.all([
-      rpc.call("readNote", { vaultId, path: notePath }).then(parseNoteContent),
-      rpc
-        .call("preparePreview", { vaultId, path: notePath })
-        .then(parsePreviewLease),
+      rpc.call("readNote", { vaultId, path: notePath }),
+      rpc.call("preparePreview", { vaultId, path: notePath }),
     ])
       .then(([file, lease]) => {
         if (!active) return;
@@ -1037,7 +956,7 @@ function NotePane({
             ? { expectedSha256: shaRef.current }
             : {}),
         });
-        const result = parseSaveResult(value);
+        const result = value;
         if (result.outcome === "conflict") {
           setConflict(true);
           return;
@@ -1051,11 +970,7 @@ function NotePane({
             vaultId,
             path: pathRef.current,
           });
-          if (
-            isRecord(renamed) &&
-            typeof renamed.path === "string" &&
-            renamed.path !== pathRef.current
-          ) {
+          if (renamed.path !== pathRef.current) {
             pathRef.current = renamed.path;
             renamedRef.current(renamed.path);
           }
@@ -1120,8 +1035,6 @@ function NotePane({
             name: file.name,
             content,
           });
-          if (!isRecord(value) || typeof value.markdownPath !== "string")
-            throw new Error("Upload returned an invalid path");
           return { markdownPath: value.markdownPath };
         }}
         onFirstRender={(markdown) => {
@@ -1139,14 +1052,48 @@ function NotePane({
 
 function DocsFileOpener({ path: filePath, source }: PluginFileOpenerProps) {
   const rpc = useRpc<typeof docsRpcContract>();
+  const navigate = useBbNavigate();
+  const liveFileTarget = useMemo<ExperimentalLiveFileTarget | null>(() => {
+    switch (source.kind) {
+      case "workspace":
+        return source.environmentId === null
+          ? null
+          : {
+              kind: source.kind,
+              environmentId: source.environmentId,
+              path: filePath,
+            };
+      case "host":
+        return source.experimental_hostId === undefined
+          ? null
+          : {
+              kind: source.kind,
+              hostId: source.experimental_hostId,
+              path: filePath,
+            };
+      case "thread-storage":
+        return source.threadId === null
+          ? null
+          : { kind: source.kind, threadId: source.threadId, path: filePath };
+    }
+  }, [filePath, source]);
   const openerSource = useMemo(
     () => ({
       kind: source.kind,
       threadId: source.threadId,
       environmentId: source.environmentId,
       projectId: source.projectId,
+      ...(source.experimental_hostId === undefined
+        ? {}
+        : { experimental_hostId: source.experimental_hostId }),
     }),
-    [source.environmentId, source.kind, source.projectId, source.threadId],
+    [
+      source.environmentId,
+      source.experimental_hostId,
+      source.kind,
+      source.projectId,
+      source.threadId,
+    ],
   );
   const [state, setState] = useState<
     | { content: string; lease: PreviewLease; previewPath: string }
@@ -1169,7 +1116,6 @@ function DocsFileOpener({ path: filePath, source }: PluginFileOpenerProps) {
     setSaveError(null);
     void rpc
       .call("openFile", { source: openerSource, path: filePath })
-      .then(parseOpenedFile)
       .then(({ file, preview, previewPath }) => {
         if (!active) return;
         markdownRef.current = file.content;
@@ -1200,16 +1146,14 @@ function DocsFileOpener({ path: filePath, source }: PluginFileOpenerProps) {
       setSaveError(null);
       const content = markdownRef.current;
       try {
-        const result = parseSaveResult(
-          await rpc.call("saveOpenedFile", {
-            source: openerSource,
-            path: filePath,
-            content,
-            ...(!force && shaRef.current
-              ? { expectedSha256: shaRef.current }
-              : {}),
-          }),
-        );
+        const result = await rpc.call("saveOpenedFile", {
+          source: openerSource,
+          path: filePath,
+          content,
+          ...(!force && shaRef.current
+            ? { expectedSha256: shaRef.current }
+            : {}),
+        });
         if (result.outcome === "conflict") {
           setConflict(true);
           return;
@@ -1250,6 +1194,28 @@ function DocsFileOpener({ path: filePath, source }: PluginFileOpenerProps) {
   }
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {liveFileTarget === null ? null : (
+        <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs">
+          <FileLink className="min-w-0 flex-1 truncate" target={liveFileTarget}>
+            {filePath}
+          </FileLink>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="size-7 shrink-0"
+            aria-label="Open file externally"
+            onClick={() =>
+              navigate.experimental_openFileExternally({
+                target: liveFileTarget,
+                location: null,
+              })
+            }
+          >
+            <HugeiconsIcon icon={ArrowUpRight01Icon} className="size-4" />
+          </Button>
+        </div>
+      )}
       {conflict ? (
         <div className="flex items-center gap-2 border-b border-border bg-muted px-4 py-2 text-xs">
           Changed on disk.
@@ -1307,7 +1273,7 @@ function HtmlPane({
     setError(null);
     void rpc
       .call("preparePreview", { vaultId, path: filePath })
-      .then((value) => setLease(parsePreviewLease(value)))
+      .then((value) => setLease(value))
       .catch((reason: unknown) =>
         setError(reason instanceof Error ? reason.message : String(reason)),
       );
@@ -1903,11 +1869,7 @@ function NotesWorkspace({
         name: "Untitled",
       })
       .then((value) => {
-        if (
-          isCurrentVault(activeVaultId) &&
-          isRecord(value) &&
-          typeof value.path === "string"
-        ) {
+        if (isCurrentVault(activeVaultId)) {
           refresh();
           open(value.path);
         }
@@ -1939,8 +1901,6 @@ function NotesWorkspace({
         rootPath,
         ...(vaultHostId === "primary" ? {} : { hostId: vaultHostId }),
       });
-      if (!isRecord(value) || typeof value.id !== "string")
-        throw new Error("Create vault returned an invalid response");
       if (!isCurrentVault(activeVaultId)) return;
       setVaultName("");
       setVaultRootPath("");
@@ -2225,8 +2185,9 @@ export default definePluginApp((app) => {
     icon: "FileText",
     path: "docs",
     component: NotesPanel,
-    experimental_fixedTabs: [
+    fixedTabs: [
       {
+        panelId: "docs",
         id: "navigation",
         title: "Navigation",
         icon: "ListView",

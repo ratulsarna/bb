@@ -80,6 +80,8 @@ const INSTALLED_PLUGIN_RESPONSE = {
     app: { hasApp: false, bundle: null },
     logoUrl: null,
     logoDarkUrl: null,
+    providerIds: [],
+    icons: {},
   },
 };
 
@@ -222,6 +224,7 @@ describe("AddPluginDialog", () => {
       displayName: "Linear",
       icon: "Github",
       iconUrl: null,
+      iconTinted: false,
       source: "builtin:linear",
     });
     expect(
@@ -238,6 +241,7 @@ describe("AddPluginDialog", () => {
       displayName: "Thread Hover Cards",
       icon: "Github",
       iconUrl: null,
+      iconTinted: false,
       source: "git:https://github.com/brsbl/bb-plugins@b173b67",
     });
     expect(
@@ -255,6 +259,7 @@ describe("AddPluginDialog", () => {
       displayName: "Widgets",
       icon: "Zap",
       iconUrl: null,
+      iconTinted: false,
       source: "npm:bb-plugin-widgets@^1.0.0",
     });
     expect(
@@ -273,6 +278,7 @@ describe("AddPluginDialog", () => {
       displayName: "Widgets",
       icon: "Zap",
       iconUrl: null,
+      iconTinted: false,
       marketplace: "bb-community",
       publisherLabel: "BB Community",
       source: "npm:bb-plugin-widgets@^1.0.0 (registry https://npm.acme.test)",
@@ -294,6 +300,7 @@ describe("AddPluginDialog", () => {
       displayName: "Linear",
       icon: "Github",
       iconUrl: null,
+      iconTinted: false,
       source: "builtin:linear",
     });
 
@@ -325,6 +332,7 @@ describe("AddPluginDialog", () => {
       displayName: "Widgets",
       icon: null,
       iconUrl,
+      iconTinted: false,
       source: "npm:bb-plugin-widgets@1.0.0",
     });
 
@@ -349,6 +357,7 @@ describe("AddPluginDialog", () => {
           displayName: "Linear",
           icon: "Github",
           iconUrl: null,
+          iconTinted: false,
           source: "builtin:linear",
         }}
         onInstalled={(plugin) => {
@@ -404,6 +413,7 @@ describe("AddPluginDialog", () => {
       displayName: "Acme Notes",
       icon: "Zap",
       iconUrl: null,
+      iconTinted: false,
       source: "git:https://github.com/acme/plugins.git@semver:^1.0.0",
     });
 
@@ -413,7 +423,12 @@ describe("AddPluginDialog", () => {
       expect(screen.getByText("v1.2.3")).toBeTruthy();
     });
     expect(screen.getByText("a".repeat(40))).toBeTruthy();
-    expect(screen.getByText("https://github.com/acme/plugins.git")).toBeTruthy();
+    // The repository row opens the code the confirmation describes.
+    expect(
+      screen
+        .getByRole("link", { name: "https://github.com/acme/plugins.git" })
+        .getAttribute("href"),
+    ).toBe("https://github.com/acme/plugins.git");
     expect(screen.getByText("^1.0.0")).toBeTruthy();
     expect(screen.getByText(/third-party marketplace/)).toBeTruthy();
     expect(screen.getByText("Acme Plugins")).toBeTruthy();
@@ -423,7 +438,9 @@ describe("AddPluginDialog", () => {
       ),
     ).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: /install acme notes/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /install acme notes/i }),
+    );
     await vi.waitFor(() => {
       const post = requests.find(
         (request) => request.url === "/api/v1/plugin-catalog/install",
@@ -451,6 +468,7 @@ describe("AddPluginDialog", () => {
       displayName: "Linear",
       icon: "Github",
       iconUrl: null,
+      iconTinted: false,
       source: "builtin:linear",
     });
 

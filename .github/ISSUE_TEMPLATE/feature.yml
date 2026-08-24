@@ -39,4 +39,4 @@ body:
       options:
         - label: I searched open and closed issues for the same request.
           required: true
-        - label: If an agent wrote this, the body ends with `> AGENT GENERATED: by <model>`.
+        - label: If an agent wrote this, the body ends with `> AGENT GENERATED`.

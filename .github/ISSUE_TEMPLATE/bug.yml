@@ -68,4 +68,4 @@ body:
           required: true
         - label: I searched open and closed issues for the same problem.
           required: true
-        - label: If an agent wrote this, the body ends with `> AGENT GENERATED: by <model>` and links the thread or report.
+        - label: If an agent wrote this, the body ends with `> AGENT GENERATED` and links the thread or report.
