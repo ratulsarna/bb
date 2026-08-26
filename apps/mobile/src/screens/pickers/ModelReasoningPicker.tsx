@@ -6,6 +6,7 @@ import {
   type ModelPickerOption,
   type ReasoningPickerOption,
 } from "@/data/compose";
+import { haptic } from "@/lib/haptics";
 import { useTheme } from "@/theme";
 import {
   cn,
@@ -18,8 +19,10 @@ import {
   Text,
   useSheet,
 } from "@/ui";
+import { filterModelOptions, showModelSearch } from "./model-picker-model";
 import { usePickerSheetMaxHeight } from "./OptionSheet";
 import { PickerTrigger } from "./PickerTrigger";
+import { SheetInput } from "./SheetInput";
 
 export interface ModelReasoningPickerProps {
   /** Fresh picker choices (a retired-but-selected model already promoted). */
@@ -44,10 +47,12 @@ export interface ModelReasoningPickerProps {
 }
 
 /**
- * Model + reasoning effort (+ Fast) in one sheet, mirroring the web
- * ModelReasoningPicker's essentials: model rows with a check mark, a
- * "More models" disclosure for retired ids, reasoning chips per model, and
- * the service-tier switch.
+ * Model + reasoning effort (+ Fast) in one sheet on both platforms,
+ * mirroring the web ModelReasoningPicker's essentials: model rows with a
+ * check mark (search, "More models"), reasoning chips per model, and the
+ * service-tier switch. The pill shows the model with the reasoning level as
+ * its detail; it is text, so it is a plain pressable rather than a
+ * native-menu trigger (see `NativeMenu`).
  */
 export function ModelReasoningPicker({
   modelOptions,
@@ -66,6 +71,7 @@ export function ModelReasoningPicker({
   const { tokens } = useTheme();
   const maxHeight = usePickerSheetMaxHeight();
   const [showMore, setShowMore] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const selectedModel =
     modelOptions.find((option) => option.value === modelValue) ??
     moreModelOptions.find((option) => option.value === modelValue);
@@ -82,6 +88,31 @@ export function ModelReasoningPicker({
   const showReasoning = reasoningOptions.length > 0;
   const hasModels = modelOptions.length > 0 || moreModelOptions.length > 0;
   const triggerLabel = fastMode?.enabled ? `${modelLabel} · Fast` : modelLabel;
+  // Long catalogs (Pi routing to OpenRouter, local providers, …) get a search
+  // field; short ones stay a plain list. Filtering flattens the retired models
+  // inline so every match stays reachable.
+  const showSearch =
+    hasModels &&
+    !loadErrorMessage &&
+    showModelSearch(modelOptions, moreModelOptions);
+  const filtered = filterModelOptions(
+    modelOptions,
+    moreModelOptions,
+    showSearch ? searchQuery : "",
+  );
+  const visibleMoreOptions = filtered.isSearching
+    ? filtered.moreModelOptions
+    : showMore
+      ? moreModelOptions
+      : [];
+  const noMatches =
+    filtered.isSearching &&
+    filtered.modelOptions.length === 0 &&
+    filtered.moreModelOptions.length === 0;
+  const pickModel = (model: string) => {
+    haptic("selection");
+    onModelChange(model);
+  };
 
   return (
     <>
@@ -100,11 +131,20 @@ export function ModelReasoningPicker({
         controller={sheet}
         title="Model"
         layout="scroll"
-        maxDynamicContentSize={maxHeight}
-        onDismiss={() => setShowMore(false)}
+        // A searchable sheet keeps a fixed height so the list does not jump
+        // as matches come and go; short lists size to their content.
+        snapPoints={showSearch ? [maxHeight] : undefined}
+        maxDynamicContentSize={showSearch ? undefined : maxHeight}
+        onDismiss={() => {
+          setShowMore(false);
+          setSearchQuery("");
+        }}
       >
         {loadErrorMessage ? (
-          <View className="mx-4 my-3 flex-row items-start gap-2 rounded-md border border-border bg-surface-attention px-3 py-2">
+          <View
+            className="mx-4 my-3 flex-row items-start gap-2 rounded-md border border-border bg-surface-attention px-3 py-2"
+            style={{ borderCurve: "continuous" }}
+          >
             <Icon name="AlertTriangle" size={16} color={tokens.warningText} />
             <Text variant="caption" tone="warning" className="flex-1">
               {loadErrorMessage}
@@ -124,41 +164,58 @@ export function ModelReasoningPicker({
             </Text>
           </View>
         ) : null}
-        {modelOptions.map((option) => (
+        {showSearch ? (
+          <View className="px-4 pb-2 pt-3">
+            <SheetInput
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search models"
+              autoCapitalize="none"
+              returnKeyType="search"
+              clearButtonMode="while-editing"
+              testID="model-picker-search"
+              accessibilityLabel="Search models"
+            />
+          </View>
+        ) : null}
+        {noMatches ? (
+          <View className="px-4 py-6">
+            <Text variant="caption" className="text-center">
+              No models match your search
+            </Text>
+          </View>
+        ) : null}
+        {filtered.modelOptions.map((option) => (
           <ModelRow
             key={option.value}
             option={option}
             selected={option.value === modelValue}
-            onSelect={onModelChange}
+            onSelect={pickModel}
             testID={`model-picker-option-${option.value}`}
           />
         ))}
-        {moreModelOptions.length > 0 ? (
-          <>
-            <ListRow
-              title={showMore ? "Fewer models" : "More models"}
-              subtitle={
-                showMore
-                  ? undefined
-                  : `${moreModelOptions.length} retired or hidden`
-              }
-              leading={showMore ? "ChevronUp" : "ChevronDown"}
-              onPress={() => setShowMore((current) => !current)}
-              testID="model-picker-more"
-            />
-            {showMore
-              ? moreModelOptions.map((option) => (
-                  <ModelRow
-                    key={option.value}
-                    option={option}
-                    selected={option.value === modelValue}
-                    onSelect={onModelChange}
-                    testID={`model-picker-option-${option.value}`}
-                  />
-                ))
-              : null}
-          </>
+        {moreModelOptions.length > 0 && !filtered.isSearching ? (
+          <ListRow
+            title={showMore ? "Fewer models" : "More models"}
+            subtitle={
+              showMore
+                ? undefined
+                : `${moreModelOptions.length} retired or hidden`
+            }
+            leading={showMore ? "ChevronUp" : "ChevronDown"}
+            onPress={() => setShowMore((current) => !current)}
+            testID="model-picker-more"
+          />
         ) : null}
+        {visibleMoreOptions.map((option) => (
+          <ModelRow
+            key={option.value}
+            option={option}
+            selected={option.value === modelValue}
+            onSelect={pickModel}
+            testID={`model-picker-option-${option.value}`}
+          />
+        ))}
         {showReasoning ? (
           <>
             <Separator />
@@ -172,7 +229,10 @@ export function ModelReasoningPicker({
                       key={option.value}
                       accessibilityRole="button"
                       accessibilityState={{ selected: active }}
-                      onPress={() => onReasoningChange(option.value)}
+                      onPress={() => {
+                        haptic("selection");
+                        onReasoningChange(option.value);
+                      }}
                       testID={`model-picker-reasoning-${option.value}`}
                       className={cn(
                         "h-9 flex-row items-center rounded-md border px-3",
@@ -208,7 +268,10 @@ export function ModelReasoningPicker({
               </View>
               <Switch
                 checked={fastMode.enabled}
-                onCheckedChange={fastMode.onChange}
+                onCheckedChange={(enabled) => {
+                  haptic("selection");
+                  fastMode.onChange(enabled);
+                }}
                 testID="model-picker-fast"
               />
             </View>
@@ -227,17 +290,11 @@ interface ModelRowProps {
 }
 
 function ModelRow({ option, selected, onSelect, testID }: ModelRowProps) {
-  const { tokens } = useTheme();
   return (
     <ListRow
       title={option.label}
       subtitle={option.description || undefined}
       selected={selected}
-      trailing={
-        selected ? (
-          <Icon name="Check" size={18} color={tokens.foreground} />
-        ) : null
-      }
       onPress={() => onSelect(option.value)}
       testID={testID}
     />

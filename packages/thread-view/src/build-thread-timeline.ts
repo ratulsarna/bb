@@ -1281,6 +1281,15 @@ function hasTurnSummaryRows(rows: TimelineRow[]): boolean {
   return rows.some((row) => row.kind === "turn");
 }
 
+function isRootOwnedHumanSteerRow(row: TimelineRow): boolean {
+  return (
+    row.kind === "conversation" &&
+    row.role === "user" &&
+    row.initiator === "user" &&
+    row.turnRequest?.kind === "steer"
+  );
+}
+
 function collectExternalUserBoundarySeqs(
   projection: EventProjection,
 ): number[] {
@@ -1476,6 +1485,13 @@ export function buildThreadTimelineTurnDetailsFromEvents(
 
   return {
     kind: "ungrouped",
-    rows: nestedRows,
+    // A work item can begin before a steer and complete after it, so the
+    // summary's source range necessarily overlaps the steer. Lazy details do
+    // not include the later turn/completed event and therefore project that
+    // slice as ungrouped rows. External human steers belong to the root
+    // timeline regardless of outcome, just as they do when children are built
+    // eagerly; returning one here would render the same row both inside and
+    // outside the summary.
+    rows: nestedRows.filter((row) => !isRootOwnedHumanSteerRow(row)),
   };
 }

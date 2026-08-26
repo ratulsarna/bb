@@ -17,7 +17,7 @@ their own product gates. `bb plugin list` shows each plugin's status.
 ## Quickstart
 
 ```
-bb plugin new hello            # scaffolds ./bb-plugin-hello (add --app for a frontend entry)
+bb plugin new hello            # scaffolds ./bb-plugin-hello: a todo list with a sidebar page, `bb hello` CLI, and a skill
 cd bb-plugin-hello
 bb plugin install .            # registers the directory in place (--yes to skip the prompt)
 bb plugin dev                  # rebuild app/host bundles + reload on every save
@@ -58,7 +58,13 @@ The manifest is `package.json`:
   `devDependencies` makes the plugin uninstallable from git, and unbuildable
   after any install that omits dev deps — including the packaged CLI's own,
   which runs npm under `NODE_ENV=production`. `devDependencies` is for types
-  and tooling only.
+  and tooling only — including every package bb shims at runtime (sonner,
+  vaul, the portal radix families, @pierre/diffs, clsx, tailwind-merge,
+  class-variance-authority): the build never bundles them, but `tsc` still
+  resolves their declarations through node_modules, so each one you import
+  needs a `devDependencies` entry at the host's version (`bb plugin new`
+  writes all of them; `bb plugin types` repins them). Never put one in
+  `dependencies` — that bundles a second copy beside the host's.
 - `bb.host` (optional, singular) — full-trust Node 22 ESM entry bundled into
   `dist/host.js` + source map + `host.meta.json`. Its owning server entry calls
   it through typed host RPC. The daemon downloads it lazily, verifies its
@@ -198,7 +204,10 @@ does not cover:
 1. **`bb plugin types`**, run in the plugin directory (or given its path),
    syncs that plugin's SDK surface to the running bb — no server needed. For a
    plugin that depends on the npm package it repins the exact
-   `@get-bb/plugin-sdk` devDependency to this bb's SDK version (run
+   `@get-bb/plugin-sdk` devDependency to this bb's SDK version and brings the
+   runtime-shimmed packages' type-only devDependencies (sonner, vaul, the
+   portal radix families, ...) to the versions this bb ships — adding any an
+   app plugin is missing and moving one out of `dependencies` (run
    `npm install` after); for an older plugin that still vendors `types/*.d.ts`
    it rewrites those declarations. Either way a cloned or older plugin can be
    thousands of lines behind. `--check` reports a mismatch without writing;
@@ -394,7 +403,12 @@ const settings = bb.settings.define({
   teamKey: { type: "string", label: "Team", default: "" },
   // Multi-line editor (JSON, lists); the value is still a string the plugin
   // parses itself. Cannot be combined with `secret`.
-  agents: { type: "string", label: "Agents", experimental_multiline: true, default: "[]" },
+  agents: {
+    type: "string",
+    label: "Agents",
+    experimental_multiline: true,
+    default: "[]",
+  },
   mode: {
     type: "select",
     label: "Mode",
@@ -948,11 +962,12 @@ if (!initial.apiKey)
 One top-level command per plugin; a second `register` in one factory
 execution is rejected.
 Users and agents run `bb <name> …` like any core command; the bb CLI
-proxies it to the server, where `run` executes.
+proxies it to the server, where `run` executes. Core collisions log an
+activation warning and appear in `bb plugin list` as `bb plugin run <id>`.
 
 ```ts
 bb.cli.register({
-  name: "weather", // lowercase [a-z0-9-]+; core names (thread, plugin, …) are reserved
+  name: "weather", // lowercase [a-z0-9-]+; core collisions use bb plugin run <id>
   summary: "Weather lookups",
   commands: [
     // help/skill metadata only; parsing argv is yours
@@ -1022,7 +1037,10 @@ bb.agents.registerTool({
   // tool name and the plugin's branding glyph. Errors/interruptions keep
   // that standard rendering so the failing tool remains identifiable.
   presentation: {
-    label: { pending: "Searching bundled docs", completed: "Searched bundled docs" },
+    label: {
+      pending: "Searching bundled docs",
+      completed: "Searched bundled docs",
+    },
   },
   parameters: z.object({ query: z.string().min(1) }),
   async execute({ query }, { threadId, projectId, signal }) {
@@ -1268,13 +1286,12 @@ export default definePluginApp((app) => {
 (The four first-party provider plugins ship no `app.tsx`: bb vendors their
 marks itself, so an icon-only bundle would only add fetches at boot.)
 
-A provider plugin's `app.tsx` is deferred as a whole, never loaded at boot:
-everything it registers — this icon, a settings section, a nav panel, a
-palette action, a pending-interaction form — arrives on the first thread of
-one of its providers, when one of its forms is asked for, or when its own
-panel route is opened. Until then the served logo stands in for the icon and
-the other slots are absent. UI that must be there at boot belongs in a
-separate, non-provider plugin.
+A provider plugin's `app.tsx` loads in the same deferred boot pass as every
+other plugin's, whether or not one of its providers is selected: everything
+it registers — this icon, a settings section, a nav panel, a palette action,
+a pending-interaction form, composer chrome — is present from that pass on,
+including on the New Thread page. Until the pass runs the served logo stands
+in for the icon. Keep the bundle small; it ships to every window.
 
 Ids are flat and collision-rejected: the first live registration of an id
 wins and a later one from another plugin fails that plugin's load; no id is
@@ -2054,10 +2071,10 @@ openWorkspaceFile }` — register a leaf
   through the bridge's presentation. The component receives `row` (id,
   threadId, turnId, kind, toolName, status, startedAt, completedAt),
   `payload` (the extension item's validated payload, or `{ arguments,
-  output }` for a tool call), `presentation` (the bridge's label, icon,
+output }` for a tool call), `presentation` (the bridge's label, icon,
   title, detail, suppress and tint for the row; null only for a tool row
   persisted before bridges attached one), `thread` (`{ id,
-  providerId }`) and `Original`, the host's declarative base for the body —
+providerId }`) and `Original`, the host's declarative base for the body —
   render `<Original />` to keep it beside your own content. The row header
   (label, glyph, tint, headline) stays host-rendered; a glyph of the form
   `"<pluginId>/<name>"` draws the plugin's declared icon
@@ -2384,6 +2401,21 @@ openThreadPanel({ actionId, title?, params? }), openUrl(url) }`.
   `"expanded" | "compact" | "zen"`; `draft` is
   `{ text, isEmpty, attachmentCount }`; `run` is
   `{ isRunning, isSubmitting }`.
+- `experimental_useCodeTheme()` → `{ mode, name, theme }` — the code theme bb
+  is currently rendering with. `mode` is `"light" | "dark"`, `name` is the
+  registered theme name for that mode, and `theme` is the resolved **VS Code
+  theme document** behind it: `{ name, type, fg, bg, colors, tokenColors }`,
+  the same document bb's own highlighter paints from. Reach for it ONLY when
+  your plugin renders code with an engine of its own (Monaco, CodeMirror) and
+  has to build that engine's theme; for ordinary code and diffs use
+  `experimental_SourceCode` / `experimental_Diff`, which are already themed.
+  `theme` is null only before the first document resolves, and keeps the
+  previous document while a palette switch is in flight — compare `theme.name`
+  with `name` to tell a settled state from one still resolving — so a consumer
+  that repaints on every change never paints an unthemed frame. Do NOT
+  approximate the palette by reading bb's CSS variables: `--canvas` / `--ink`
+  carry the app chrome, not the syntax colors, and a custom palette that
+  declares its own code theme would not follow.
 
 ```tsx
 const composer = useComposer();
@@ -2419,9 +2451,9 @@ only `definePluginApp` + the hooks):
 - Builtin plugins in this repo import shared UI from `@bb/shared-ui` (the
   single source of truth the app also consumes and the registry generates
   from); external and example plugins still vendor source through the registry.
-- `bb plugin new --app` pre-vendors button, card, input, dialog (plus their
-  support files: `lib/utils`, `lib/portal-scope`, icon, responsive-overlay,
-  drawer, hooks) into `components/ui/` etc., and writes a `components.json`
+- `bb plugin new` pre-vendors button, card, input, checkbox, dialog (plus
+  their support files: `lib/utils`, `lib/portal-scope`, icon,
+  responsive-overlay, drawer, hooks) into `components/ui/` etc., and writes a `components.json`
   whose `@bb` registry is pinned to the release tag matching the running
   BB. Import via the `@/*` alias: `import { Button } from
 "@/components/ui/button"` (tsconfig maps it; `bb plugin build` reads it).
@@ -2441,7 +2473,13 @@ only `definePluginApp` + the hooks):
   `-tooltip`, `-navigation-menu`), `sonner`, `vaul`, `@pierre/diffs` (+
   `/react`). Your vendored overlays therefore share the host's
   dismissable-layer/focus/scroll-lock world — stacking against host
-  overlays behaves correctly.
+  overlays behaves correctly. "Import freely" is about the bundle: `tsc`
+  still needs each one's declarations in `node_modules`, so every shimmed
+  package is a **type-only `devDependencies` entry at the host's version**
+  (the scaffold declares all of them; `bb plugin types` repins them; `bb
+plugin types --check` reports drift). Never list one in `dependencies` —
+  the build would not read it, and a git install would bundle a second
+  copy of a singleton.
 - Also never bundled, for size rather than singleton reasons: `clsx`,
   `tailwind-merge`, and `class-variance-authority`. Your app bundle uses the
   host's installed copies (tailwind-merge ^3, clsx ^2, cva ^0.7), so keep

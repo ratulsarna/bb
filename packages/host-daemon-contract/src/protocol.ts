@@ -298,9 +298,42 @@
 // per-provider scan table is gone; an old daemon rejects the new field and an
 // old server's `nativeSkillRoots` fails the new daemon's strict schema.
 //
+// Version 165 adds a server-to-daemon acknowledgement for every daemon
+// heartbeat. The daemon uses the acknowledgement to detect a one-way-stale
+// websocket and reconnect instead of remaining registered but unable to
+// receive host RPC commands.
+//
+// Version 166 makes turn admission single-owner across the shared runtime and
+// lets turn submission recover a stale target by re-steering the live turn.
+// An old daemon can still start a competing provider turn in that race.
+//
+// Version 167 lets the server retry an explicitly retryable online RPC after
+// its first response timeout. This can send the same command twice when the
+// daemon executed the first request but its response was lost, so enrolled
+// daemons must update with the server even though the message schema is
+// unchanged.
+//
+// Version 168 carries deferred agent-only thread-start context in the first
+// provider-bound turn.submit input for an idle seeded fork. The wire shape is
+// unchanged, but the server-to-daemon payload semantics differ.
+//
+// Version 169 changes Cursor's provider bridge options and session behavior.
+// Server → daemon: `bridgeLaunch.providerOptions` removes Cursor's CLI
+// `modelCli` variant catalog and adds `parameterizedModelPicker`, bare
+// `primaryModels`, and `reasoningProbePriorityModelIds`. The bridge advertises
+// that capability to Cursor for discovery and live sessions, then sends bare
+// model ids with explicit effort and Fast config options. Those provider
+// options are opaque but their bytes and meaning changed and mixed-version
+// compatibility was not deliberately preserved and tested.
+//
+// Version 170 binds deferred agent-only context to its accepted server turn.
+// Rapid later turn.submit input omits that context, while a thread.start that
+// replaces the owning turn retains it. The wire shape is unchanged, but the
+// server-to-daemon payload semantics differ.
+//
 // The version mismatch is what triggers the enrolled daemon's automatic update
 // instead of an `invalid-message` reconnect loop.
-export const HOST_DAEMON_PROTOCOL_VERSION = 164 as const;
+export const HOST_DAEMON_PROTOCOL_VERSION = 170 as const;
 
 /**
  * Absolute ceiling for any executable artifact delivered to a host daemon —

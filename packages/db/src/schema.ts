@@ -340,6 +340,13 @@ export const pluginMarketplaces = sqliteTable("plugin_marketplaces", {
   /** Commit the last successful "git" refresh read the manifest from. */
   sourceGitCommit: text("source_git_commit"),
   manifestJson: text("manifest_json").notNull(),
+  /**
+   * Last-known-good install-count sidecar (`stats.json`) of the curated
+   * marketplace, verbatim; null when it was never fetched or never parsed.
+   * It refreshes on its own cadence: the counts move while the manifest sits
+   * unchanged behind a 304, so it cannot live inside `manifest_json`.
+   */
+  statsJson: text("stats_json"),
   etag: text("etag"),
   lastModified: text("last_modified"),
   lastSuccessfulRefreshAt: integer("last_successful_refresh_at"),
@@ -877,6 +884,32 @@ export const promptHistoryEntries = sqliteTable(
       table.scope,
       table.createdAt,
       table.requestSequence,
+      table.id,
+    ),
+  ],
+);
+
+// Messages addressed to a thread while it awaited user interaction (an
+// AskUserQuestion, a command approval, a plugin input request). A blocked thread
+// cannot take a prompt, and refusing the message dropped it with no trace on the
+// recipient side (#1650). The row holds the message until the thread's pending
+// interactions settle, then the server delivers it in the mode the sender asked
+// for. `payload` is the JSON-encoded deferred message, discriminated by `kind`.
+export const deferredThreadMessages = sqliteTable(
+  "deferred_thread_messages",
+  {
+    id: text("id").primaryKey(),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    payload: text("payload").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    index("deferred_thread_messages_thread_created_idx").on(
+      table.threadId,
+      table.createdAt,
       table.id,
     ),
   ],

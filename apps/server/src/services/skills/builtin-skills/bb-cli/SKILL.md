@@ -237,13 +237,13 @@ message agents, or inspect projects, providers, and environments.
   that pairs the bb mobile app with this bb (it needs the `mobileApp`
   experiment: `bb settings experiment mobileApp true`): it prints the code, server URL,
   connect apex, and expiry; `--json` returns `{code, serverUrl, apex,
-  expiresAt}`. The phone enrolls as a connect machine with its own revocable
+expiresAt}`. The phone enrolls as a connect machine with its own revocable
   credential (visible in the getbb.app dashboard). Settings → Remote access →
   Add mobile device shows the same code as a QR. A machine-limit failure names
   the dashboard so the user can revoke an unused device. Remote
   access is owned by the builtin `connect` plugin: `bb plugin disable connect`
   cuts it off entirely; with bb connect still enabled, `bb plugin enable
-  connect` restores the command. Plugins → Connect shows the current URL, QR
+connect` restores the command. Plugins → Connect shows the current URL, QR
   code, mobile pairing, shared ports, re-pair form, and disconnect control.
 - Add remote execution machines from Settings → Machines. Its one-line
   installer stores the bb connect machine credential locally and configures
@@ -345,7 +345,7 @@ environment pull-request show <id>`. Diff commands require an explicit target
   `cursor-project` and keeps them read-only.
 - Custom ACP agents live in the ACP providers plugin's `customAgents` setting,
   a JSON array: `bb plugin config provider-acp set customAgents '[{"id":"amp",
-  "displayName":"Amp","command":"amp","args":["acp"]}]'`. The user supplies a
+"displayName":"Amp","command":"amp","args":["acp"]}]'`. The user supplies a
   slug `id`; bb exposes it as provider id `acp-<id>`, which is permanent.
   `cursor` is reserved; `opencode`, `omp`, `grok` and `hermes-agent` are not,
   so an entry with one of those ids replaces the shipped agent. The plugin
@@ -353,9 +353,9 @@ environment pull-request show <id>`. Diff commands require an explicit target
   co-located daemon. Optional per-agent fields: `args`, `env`, `cwd`,
   `modelCli`, `reasoningCli`, `nativeReasoning`, `nativeSkillRoots`
   (`{"user": [...], "project": [...]}` relative paths), `permissionCli`,
-  `supportsManualCompaction`, and `dialect` (`cursor` or `grok`). The old
-  `customAcpAgents` array in `config.json` is deprecated; bb reads it and warns
-  until 0.41.
+  `supportsManualCompaction`, and `dialect` (`cursor`, `opencode`, `omp`, or
+  `grok`). The old `customAcpAgents` array in `config.json` is deprecated; bb
+  reads it and warns until 0.41.
 - Top-level `customModels` in the same `config.json` registers extra picker
   models. `providerId` accepts a built-in provider id or any `acp-*` provider
   id. The provider must still accept the id: `claude-code` and `codex` accept
@@ -406,6 +406,13 @@ or artifacts, validation performed, and blockers.
   agent can finish its current work first. Steer is especially important for a
   wrong direction, hard stop, or critical clarification.
   Example: `bb thread tell <thread-id> "Stop and use approach B" --mode steer`.
+- If the target thread is awaiting user interaction (an open question or
+  approval), `bb thread tell` cannot interrupt it. The message is held and
+  delivers in the requested mode once the interaction settles; the CLI prints
+  "message held". That outcome is not a failure, so do not resend. For a hard
+  stop use `bb thread stop <thread-id>`. `--json` reports `delivery` as `sent`,
+  `queued`, or `deferred`. If the thread fails while the message is held (its
+  provider exited), the message waits until somebody retries the thread.
 
 ## Inspecting Results
 
@@ -791,7 +798,10 @@ them by mixing ink into canvas), the `--primary` accent, the secondary text tier
     plugin code, and a failed refresh keeps the last catalog bb validated.
   - `bb plugin search <query> [--json]` — search the official plugins by id,
     name, description, category, or tag; status shows installed / compatible /
-    requires newer bb.
+    requires newer bb. An **Installs** column appears once the curated
+    marketplace's `stats.json` sidecar has been read (`installs` in `--json`,
+    null when unknown): anonymous-telemetry install counts, published only for
+    bundled plugins and `bb-community` entries, never for third-party ones.
 - **Third-party marketplaces** (routes under `/api/v1/marketplaces`):
   - `bb marketplace add <source>` — add a marketplace from an https manifest
     URL, `git:<url>[@<ref>]` (bb reads `marketplace.json` from the checkout),
@@ -887,10 +897,12 @@ them by mixing ink into canvas), the `--primary` accent, the secondary text tier
   - `bb plugin config <id> [set <key> <value> | unset <key>]` — declared
     settings. Reload the plugin after configuring (`bb plugin reload <id>`).
   - `bb plugin logs <id> [-n N] [-f]` — the plugin's `bb.log` output.
-  - `bb plugin run <id> [args...]` — explicit form of a plugin's CLI command.
-  - `bb plugin new <name> [--app]` — scaffold a plugin and install its npm
-    dependencies (`--app` adds a frontend entry plus a typecheck-only
-    `tsconfig.json`; scaffold sets `engines.bbPluginSdk` to `>=0.4.3`). The
+  - `bb plugin run <id> [args...]` — explicit form; collisions log an activation
+    warning and are annotated by `bb plugin list`.
+  - `bb plugin new <name>` — scaffold a todo-list plugin (`server.ts`,
+    `app.tsx` with a sidebar page, a `bb <name>` CLI command, a skill, and
+    vendored UI components) and install its npm dependencies (scaffold sets
+    `engines.bbPluginSdk` to `>=0.4.3`). The
     scaffold depends on `@get-bb/plugin-sdk`, pinned to this bb's exact SDK
     version in `devDependencies`, so the API declarations arrive with
     `npm install` at `node_modules/@get-bb/plugin-sdk/bundled-types/*.d.ts`
@@ -910,7 +922,11 @@ them by mixing ink into canvas), the `--primary` accent, the secondary text tier
   - `bb plugin types [path]` — sync the plugin's `@get-bb/plugin-sdk` surface
     to the running bb (default: cwd). For a plugin that depends on the npm
     package it rewrites the exact `devDependencies` pin to this bb's SDK
-    version (reporting old → new, and reminding you to `npm install`); for a
+    version and brings the type-only devDependencies of the packages bb shims
+    at runtime (sonner, vaul, the portal radix families, @pierre/diffs, clsx,
+    tailwind-merge, class-variance-authority) to this bb's versions — adding
+    any an app plugin is missing and moving one out of `dependencies`
+    (reporting old → new, and reminding you to `npm install`); for a
     plugin that still vendors declarations it rewrites `types/*.d.ts`, creating
     `types/` when absent. Run it in a cloned or older plugin: the SDK surface
     grows every release. `--check` writes nothing and exits non-zero on a

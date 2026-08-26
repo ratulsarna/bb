@@ -636,8 +636,15 @@ const SidebarProvider = React.forwardRef<
       }
 
       // Mount the subtree now if boot has not realized it yet, so it commits
-      // during the slide instead of after the settle.
-      realizeMobileSidebar();
+      // during the slide instead of after the settle. Transition priority:
+      // the realize commit (ProjectList/ThreadRow, thousands of lines on a
+      // cold route) must not block this tap's frame — the drag-style write
+      // below composites the slide first and the subtree mounts
+      // interruptibly during the settle window. If the settle commit beats
+      // the transition, the render-phase latch below realizes it there.
+      React.startTransition(() => {
+        realizeMobileSidebar();
+      });
       applySidebarMobileDragStyles({ progress: 1, settling: true });
       mobileSettleTimeoutRef.current = window.setTimeout(() => {
         mobileSettleTimeoutRef.current = null;
@@ -2128,6 +2135,14 @@ const SidebarFooter = React.forwardRef<
 });
 SidebarFooter.displayName = "SidebarFooter";
 
+// Selects the scrolling `SidebarContent` div below. `SidebarWindowedItems`
+// walks up to it from its own wrapper rows when it commits in the same pass
+// as `SidebarContent`, because React attaches an ancestor's ref after its
+// descendants' layout effects have run and `useSidebarContentElementRef` is
+// still empty at that point. Keep it paired with the `data-sidebar` attribute
+// on that div.
+const SIDEBAR_CONTENT_SELECTOR = '[data-sidebar="content"]';
+
 const SidebarContent = React.forwardRef<
   HTMLDivElement,
   React.ComponentProps<"div">
@@ -2368,6 +2383,7 @@ const SidebarMenuSkeleton = React.forwardRef<
 SidebarMenuSkeleton.displayName = "SidebarMenuSkeleton";
 
 export {
+  SIDEBAR_CONTENT_SELECTOR,
   Sidebar,
   SidebarContent,
   SidebarFooter,

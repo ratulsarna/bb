@@ -41,6 +41,7 @@ const MEMORY_ENTRY: PluginCatalogSearchEntry = {
   official: true,
   author: null,
   installed: false,
+  installs: null,
   compatible: true,
   incompatibleReason: null,
 };
@@ -234,6 +235,217 @@ describe("BrowsePluginsTab", () => {
     expect(
       screen.queryByRole("link", { name: "Open Memory repository" }),
     ).toBeNull();
+  });
+
+  it("shows a compact install count beside the other card footer facts", async () => {
+    const entries = [
+      { ...MEMORY_ENTRY, displayName: "Memory", installs: 4_210 },
+      {
+        ...MEMORY_ENTRY,
+        entryId: "notes",
+        pluginId: "notes",
+        displayName: "Acme Notes",
+        marketplace: "acme-plugins",
+        marketplaceDisplayName: "Acme Plugins",
+        publisherKey: "acme-plugins",
+        publisherLabel: "Acme Plugins",
+        official: false,
+        // Third-party listings publish no counts; the card says nothing
+        // rather than implying zero.
+        installs: null,
+      },
+      {
+        ...MEMORY_ENTRY,
+        entryId: "solo",
+        pluginId: "solo",
+        displayName: "Solo",
+        installs: 1,
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/v1/plugin-catalog") {
+          return jsonResponse({ catalog: CATALOG_STATUS });
+        }
+        if (url === "/api/v1/plugin-catalog/search?q=") {
+          return jsonResponse({ results: entries });
+        }
+        if (url === "/api/v1/plugins") {
+          return jsonResponse({ enabled: true, plugins: [] });
+        }
+        return jsonResponse({ error: "not found" }, 404);
+      }),
+    );
+
+    const { wrapper } = createQueryClientTestHarness();
+    render(
+      <MemoryRouter>
+        <BrowsePluginsTab
+          onInstall={() => {}}
+          onOpenPlugin={() => {}}
+          onInstallFromSource={() => {}}
+        />
+      </MemoryRouter>,
+      { wrapper },
+    );
+
+    await screen.findByText("Acme Notes");
+    const count = screen.getByText("4.2K installs");
+    expect(count.getAttribute("title")).toBe("4,210 installs");
+    expect(screen.getByText("1 install")).toBeTruthy();
+    // The uncounted card still shows its publisher, so the footer did not
+    // collapse into a stray separator.
+    expect(screen.getAllByText("Acme Plugins").length).toBeGreaterThan(0);
+    expect(screen.queryByText("0 installs")).toBeNull();
+  });
+
+  it("sorts by install count, sinking uncounted entries in both directions", async () => {
+    const entries = [
+      {
+        ...MEMORY_ENTRY,
+        entryId: "mid",
+        pluginId: "mid",
+        displayName: "Mid",
+        installs: 50,
+      },
+      {
+        ...MEMORY_ENTRY,
+        entryId: "top",
+        pluginId: "top",
+        displayName: "Top",
+        installs: 900,
+      },
+      {
+        ...MEMORY_ENTRY,
+        entryId: "unknown",
+        pluginId: "unknown",
+        displayName: "Unknown",
+        installs: null,
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/v1/plugin-catalog") {
+          return jsonResponse({ catalog: CATALOG_STATUS });
+        }
+        if (url === "/api/v1/plugin-catalog/search?q=") {
+          return jsonResponse({ results: entries });
+        }
+        if (url === "/api/v1/plugins") {
+          return jsonResponse({ enabled: true, plugins: [] });
+        }
+        return jsonResponse({ error: "not found" }, 404);
+      }),
+    );
+
+    const { wrapper } = createQueryClientTestHarness();
+    render(
+      <MemoryRouter>
+        <BrowsePluginsTab
+          onInstall={() => {}}
+          onOpenPlugin={() => {}}
+          onInstallFromSource={() => {}}
+        />
+      </MemoryRouter>,
+      { wrapper },
+    );
+
+    await screen.findByText("Top");
+    const cardOrder = () =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          'button[aria-label^="Open "][aria-label$=" details"]',
+        ),
+      ].map((button) => button.getAttribute("aria-label"));
+
+    // Open the sort menu once and keep it open: selecting an option preserves
+    // the menu, and Radix hides the rest of the tree from the accessibility
+    // API while it is, so the trigger is captured before the first click.
+    const sortTrigger = screen.getByRole("button", { name: /^Sort: / });
+    // Browse lands on popularity, most installed first; the uncounted entry is
+    // unknown, not zero, so it sits last rather than at the bottom of the
+    // count order.
+    expect(sortTrigger.getAttribute("aria-label")).toBe(
+      "Sort: Installs, descending",
+    );
+    expect(cardOrder()).toEqual([
+      "Open Top details",
+      "Open Mid details",
+      "Open Unknown details",
+    ]);
+
+    fireEvent.pointerDown(sortTrigger);
+    const selectSort = (name: string) => {
+      fireEvent.click(screen.getByRole("menuitemradio", { name }));
+    };
+
+    // Re-picking the mode already showing flips direction: fewest first.
+    selectSort("Installs");
+    expect(cardOrder()).toEqual([
+      "Open Mid details",
+      "Open Top details",
+      "Open Unknown details",
+    ]);
+
+    // Switching back to names restores A→Z, not the reversed direction the
+    // install sort was left in.
+    selectSort("Plugin name");
+    expect(cardOrder()).toEqual([
+      "Open Mid details",
+      "Open Top details",
+      "Open Unknown details",
+    ]);
+    expect(sortTrigger.getAttribute("aria-label")).toBe(
+      "Sort: Plugin name, ascending",
+    );
+  });
+
+  it("disables the install sort when no listing publishes a count", async () => {
+    const entries = [
+      { ...MEMORY_ENTRY, displayName: "Memory" },
+      { ...GITHUB_ENTRY, displayName: "GitHub" },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/v1/plugin-catalog") {
+          return jsonResponse({ catalog: CATALOG_STATUS });
+        }
+        if (url === "/api/v1/plugin-catalog/search?q=") {
+          return jsonResponse({ results: entries });
+        }
+        if (url === "/api/v1/plugins") {
+          return jsonResponse({ enabled: true, plugins: [] });
+        }
+        return jsonResponse({ error: "not found" }, 404);
+      }),
+    );
+
+    const { wrapper } = createQueryClientTestHarness();
+    render(
+      <MemoryRouter>
+        <BrowsePluginsTab
+          onInstall={() => {}}
+          onOpenPlugin={() => {}}
+          onInstallFromSource={() => {}}
+        />
+      </MemoryRouter>,
+      { wrapper },
+    );
+
+    await screen.findByText("Memory");
+    const sortTrigger = screen.getByRole("button", { name: /^Sort: / });
+    fireEvent.pointerDown(sortTrigger);
+    const installsItem = screen.getByRole("menuitemradio", {
+      name: "Installs",
+    });
+    expect(installsItem.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(installsItem);
+    expect(sortTrigger.getAttribute("aria-label")).toBe(
+      "Sort: Plugin name, ascending",
+    );
   });
 
   it("keeps a marketplace that copies a publisher label in its own group", async () => {

@@ -293,7 +293,7 @@
       ],
       "outputs": ["src/generated/templates.generated.ts"]
     },
-    // The `bb plugin new --app` starter files from the (committed) component
+    // The `bb plugin new` starter files from the (committed) component
     // registry.
     "@bb/templates#generate:plugin-scaffold": {
       "dependsOn": [],
@@ -301,6 +301,7 @@
         "scripts/generate-plugin-scaffold.mjs",
         "scripts/write-generated.mjs",
         "$TURBO_ROOT$/apps/app/package.json",
+        "$TURBO_ROOT$/packages/plugin-build/src/runtime-shims.mjs",
         "$TURBO_ROOT$/packages/plugin-registry/r/**"
       ],
       "outputs": ["src/generated/plugin-starter-files.generated.ts"]
@@ -312,6 +313,7 @@
       "inputs": [
         "scripts/generate-plugin-theme.mjs",
         "scripts/generate-runtime-export-manifest.mjs",
+        "src/runtime-shims.mjs",
         "$TURBO_ROOT$/apps/app/package.json",
         "$TURBO_ROOT$/apps/app/src/components/ui/theme.css",
         "$TURBO_ROOT$/packages/plugin-sdk/src/**",
@@ -445,10 +447,7 @@
     // uncacheable and must see those two variables (strict env mode strips
     // everything undeclared). Without the variable the suites skip.
     "@bb/server#test:provider-corpus": {
-      "dependsOn": [
-        "//#ensure-native-modules",
-        "topo"
-      ],
+      "dependsOn": ["//#ensure-native-modules", "topo"],
       "cache": false,
       "passThroughEnv": [
         "BB_PROVIDER_CORPUS_DIR",
@@ -473,6 +472,45 @@
         "$TURBO_ROOT$/vitest.shared.ts",
         "$TURBO_ROOT$/plugins/*/icons/**",
         "$TURBO_ROOT$/examples/plugins/*/icons/**"
+      ]
+    },
+    // Runtime unit suites restart the scripted echo provider repeatedly. Build
+    // the real bridge worker and bridge artifact once so each child launch
+    // executes JavaScript instead of re-transforming the TypeScript sources.
+    "@bb/agent-runtime#generate:test-bridges": {
+      "dependsOn": ["topo"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/domain/src/**",
+        "$TURBO_ROOT$/packages/plugin-sdk/src/**",
+        "$TURBO_ROOT$/packages/provider-bridge-protocol/src/**",
+        "$TURBO_ROOT$/scripts/build-utils.mjs",
+        "$TURBO_ROOT$/tests/scripted-echo-provider/src/**"
+      ],
+      "outputs": ["dist/test-bridges/**"]
+    },
+    "@bb/agent-runtime#test": {
+      "dependsOn": [
+        "//#ensure-native-modules",
+        "@bb/agent-runtime#generate:test-bridges",
+        "topo"
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/tests/scripted-echo-provider/src/**",
+        "$TURBO_ROOT$/vitest.shared.ts"
+      ]
+    },
+    "@bb/agent-runtime#test:unit": {
+      "dependsOn": [
+        "//#ensure-native-modules",
+        "@bb/agent-runtime#generate:test-bridges",
+        "topo"
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/tests/scripted-echo-provider/src/**",
+        "$TURBO_ROOT$/vitest.shared.ts"
       ]
     },
     // The live-CLI suite's global setup rebuilds every first-party provider
@@ -670,6 +708,12 @@
     },
     "bb-plugin-memory#typecheck": {
       "dependsOn": ["@get-bb/plugin-sdk#build:types", "topo"]
+    },
+    "bb-plugin-monaco-editor#typecheck": {
+      "dependsOn": [
+        "@get-bb/plugin-sdk#build:types",
+        "topo"
+      ]
     },
     "bb-plugin-pdf-preview#typecheck": {
       "dependsOn": ["@get-bb/plugin-sdk#build:types", "topo"]

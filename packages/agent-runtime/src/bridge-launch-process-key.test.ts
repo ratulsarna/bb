@@ -28,7 +28,6 @@ describe("bridgeLaunchProcessKey", () => {
       bridgeLaunchProcessKey({
         ...base,
         providerOptions: { launch: { command: "example" } },
-    envPassthrough: [],
       }),
     );
     expect(bridgeLaunchProcessKey(base)).not.toBe(
@@ -37,5 +36,27 @@ describe("bridgeLaunchProcessKey", () => {
         providerOptions: { launch: { command: "other" } },
       }),
     );
+  });
+
+  it("changes with each capability declaration at the same artifact hash", () => {
+    const renamed: AgentRuntimeBridgeLaunch = {
+      ...base,
+      capabilities: {
+        ...base.capabilities,
+        supportsThreadRename: true,
+      },
+    };
+    const rewound: AgentRuntimeBridgeLaunch = {
+      ...renamed,
+      capabilities: { ...renamed.capabilities, fork: "tip" },
+    };
+
+    expect(
+      new Set(
+        [base, renamed, rewound].map((launch) =>
+          bridgeLaunchProcessKey(launch),
+        ),
+      ),
+    ).toHaveLength(3);
   });
 });

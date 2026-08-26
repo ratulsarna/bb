@@ -132,11 +132,26 @@ export class PiRpcChild {
   private stderrTail = "";
   private sawResponse = false;
   private exitInfo: PiRpcChildExitInfo | null = null;
+  private readonly settledExit: Promise<PiRpcChildExitInfo>;
   private readonly channelWriter: Writable | null;
   private readonly channelRecorder: ChannelRecorder | null;
   private killEscalation: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Pi's stdout lines, handled one per event-loop turn. One read can carry a
+   * response and the events pi wrote after it; handled in one synchronous
+   * loop, the next event's delivery would run before the request's
+   * continuation (a steer's ack after `await request("prompt")`), so the
+   * bridge's order would depend on pipe chunking. Yielding between lines
+   * lets the continuation finish first, the order a line-at-a-time read has.
+   */
+  private readonly stdoutLines: string[] = [];
+  private stdoutDraining = false;
 
   constructor(private readonly args: SpawnPiRpcChildArgs) {
+    let resolveSettledExit: (info: PiRpcChildExitInfo) => void = () => undefined;
+    this.settledExit = new Promise((resolve) => {
+      resolveSettledExit = resolve;
+    });
     const launch = resolvePiLaunch(process.env);
     this.child = spawn(launch.command, [...launch.args, ...args.args], {
       cwd: args.cwd,
@@ -159,7 +174,7 @@ export class PiRpcChild {
     if (stdout) {
       experimental_readBoundedLines({
         input: stdout,
-        onLine: (line) => this.handleStdoutLine(line),
+        onLine: (line) => this.queueStdoutLine(line),
         onOverflow: (bytes) => {
           process.stderr.write(`pi bridge: dropped a ${bytes}-byte stdout line\n`);
         },
@@ -198,6 +213,7 @@ export class PiRpcChild {
         beforeFirstResponse: !this.sawResponse,
       };
       this.exitInfo = info;
+      resolveSettledExit(info);
       for (const [, pending] of this.pending) {
         if (pending.timer !== null) clearTimeout(pending.timer);
         pending.reject(new PiRpcChildExitedError(info));
@@ -221,6 +237,11 @@ export class PiRpcChild {
 
   get pid(): number | undefined {
     return this.child.pid;
+  }
+
+  /** Resolve after the operating system reports this child exited. */
+  waitForExit(): Promise<PiRpcChildExitInfo> {
+    return this.settledExit;
   }
 
   /** Send one RPC command and wait for its response (success or error). */
@@ -326,6 +347,27 @@ export class PiRpcChild {
       return;
     }
     stdin.write(line);
+  }
+
+  private queueStdoutLine(line: string): void {
+    this.stdoutLines.push(line);
+    if (!this.stdoutDraining) {
+      this.stdoutDraining = true;
+      this.drainStdoutLine();
+    }
+  }
+
+  private drainStdoutLine(): void {
+    const line = this.stdoutLines.shift();
+    if (line === undefined) {
+      this.stdoutDraining = false;
+      return;
+    }
+    try {
+      this.handleStdoutLine(line);
+    } finally {
+      setImmediate(() => this.drainStdoutLine());
+    }
   }
 
   private handleStdoutLine(line: string): void {

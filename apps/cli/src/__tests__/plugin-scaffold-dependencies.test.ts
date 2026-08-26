@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 import {
   PLUGIN_SERVER_EXTERNALS,
   RUNTIME_SLOT_BY_SPECIFIER,
+  SHIMMED_TYPE_PACKAGES,
 } from "@bb/plugin-build";
 import { scaffoldPlugin } from "@bb/templates/plugin-scaffold";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -76,22 +77,27 @@ function packageNameOf(specifier: string): string {
     : (segments[0] ?? specifier);
 }
 
-async function scaffoldWithDependencies(args: {
-  workDir: string;
-  app: boolean;
-}): Promise<{ targetDir: string; dependencies: string[] }> {
-  const packageName = `bb-plugin-${args.app ? "app" : "headless"}`;
-  const targetDir = join(args.workDir, packageName);
+async function scaffoldWithDependencies(workDir: string): Promise<{
+  targetDir: string;
+  dependencies: string[];
+  devDependencies: string[];
+}> {
+  const packageName = "bb-plugin-deps";
+  const targetDir = join(workDir, packageName);
   await scaffoldPlugin({
     targetDir,
     packageName,
     bbVersion: "0.9.0",
-    app: args.app,
   });
-  const manifest: { dependencies?: Record<string, string> } = JSON.parse(
-    await readFile(join(targetDir, "package.json"), "utf8"),
-  );
-  return { targetDir, dependencies: Object.keys(manifest.dependencies ?? {}) };
+  const manifest: {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  } = JSON.parse(await readFile(join(targetDir, "package.json"), "utf8"));
+  return {
+    targetDir,
+    dependencies: Object.keys(manifest.dependencies ?? {}),
+    devDependencies: Object.keys(manifest.devDependencies ?? {}),
+  };
 }
 
 describe("scaffold dependency classification", () => {
@@ -105,40 +111,49 @@ describe("scaffold dependency classification", () => {
     await rm(workDir, { recursive: true, force: true });
   });
 
-  it.each([{ app: false }, { app: true }])(
-    "declares every bundled import as a dependency (app: $app)",
-    async ({ app }) => {
-      const { targetDir, dependencies } = await scaffoldWithDependencies({
-        workDir,
-        app,
-      });
+  it("declares every bundled import as a dependency", async () => {
+    const { targetDir, dependencies } = await scaffoldWithDependencies(workDir);
 
-      const misdeclared: string[] = [];
-      for (const file of await generatedSourceFiles(targetDir)) {
-        for (const specifier of importedSpecifiers(
-          await readFile(file, "utf8"),
-        )) {
-          // Swapped for a host runtime shim, or left unresolved for the
-          // loader — either way it is never read from node_modules.
-          if (specifier in RUNTIME_SLOT_BY_SPECIFIER) continue;
-          const packageName = packageNameOf(specifier);
-          if (PLUGIN_SERVER_EXTERNALS.includes(packageName)) continue;
-          if (dependencies.includes(packageName)) continue;
-          misdeclared.push(
-            `${relative(targetDir, file)} imports "${specifier}"`,
-          );
-        }
+    const misdeclared: string[] = [];
+    for (const file of await generatedSourceFiles(targetDir)) {
+      for (const specifier of importedSpecifiers(
+        await readFile(file, "utf8"),
+      )) {
+        // Swapped for a host runtime shim, or left unresolved for the
+        // loader — either way it is never read from node_modules.
+        if (specifier in RUNTIME_SLOT_BY_SPECIFIER) continue;
+        const packageName = packageNameOf(specifier);
+        if (PLUGIN_SERVER_EXTERNALS.includes(packageName)) continue;
+        if (dependencies.includes(packageName)) continue;
+        misdeclared.push(`${relative(targetDir, file)} imports "${specifier}"`);
       }
+    }
 
-      expect(misdeclared).toEqual([]);
-    },
-  );
+    expect(misdeclared).toEqual([]);
+  });
+
+  /**
+   * The flip side of the shim (#2072): esbuild never reads a shimmed package
+   * from node_modules, but tsc does, so every shimmed npm package has to be
+   * installed for types — as a devDependency — or the documented
+   * `import { toast } from "sonner"` fails to typecheck in a fresh scaffold.
+   * Derived from the build's shim table, so adding a slot without declaring
+   * its types fails here.
+   */
+  it("declares every runtime-shimmed package as a type-only devDependency", async () => {
+    const { dependencies, devDependencies } =
+      await scaffoldWithDependencies(workDir);
+
+    expect(
+      SHIMMED_TYPE_PACKAGES.filter((name) => !devDependencies.includes(name)),
+    ).toEqual([]);
+    expect(
+      SHIMMED_TYPE_PACKAGES.filter((name) => dependencies.includes(name)),
+    ).toEqual([]);
+  });
 
   it("keeps host-provided packages out of dependencies", async () => {
-    const { dependencies } = await scaffoldWithDependencies({
-      workDir,
-      app: true,
-    });
+    const { dependencies } = await scaffoldWithDependencies(workDir);
 
     // Bundling a shimmed package ships a second copy of a singleton (a second
     // React means "Invalid hook call"), and bundling an external defeats the
