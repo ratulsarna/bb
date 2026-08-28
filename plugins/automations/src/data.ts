@@ -5,6 +5,7 @@ import {
   automationResponseSchema,
   automationRunResponseSchema,
   automationTriggerSchema,
+  repairableAutomationExecutionSchema,
   type AutomationExecution,
   type AutomationOrigin,
   type AutomationResponse,
@@ -211,12 +212,6 @@ export const migrations = [
      WHERE status = 'running';`,
 ];
 
-/**
- * Delay before the next attempt after `consecutiveFailures` failures in a
- * row: 30s, then 60s. The third failure pauses the automation instead
- * (AUTOMATION_MAX_CONSECUTIVE_FAILURES), so the sequence never grows past
- * that; raise the strike count and this doubles further.
- */
 function automationRetryDelayMs(consecutiveFailures: number): number {
   const exponent = Math.max(0, consecutiveFailures - 1);
   return AUTOMATION_RETRY_BASE_MS * 2 ** exponent;
@@ -248,7 +243,7 @@ function serializeTrigger(trigger: AutomationTrigger): string {
 }
 
 function serializeExecution(execution: AutomationExecution): string {
-  return JSON.stringify(execution);
+  return JSON.stringify(automationExecutionSchema.parse(execution));
 }
 
 export function parseAutomationTrigger(
@@ -261,6 +256,12 @@ export function parseAutomationExecution(
   execution: string,
 ): AutomationExecution {
   return automationExecutionSchema.parse(JSON.parse(execution));
+}
+
+export function parseRepairableAutomationExecution(
+  execution: string,
+): AutomationExecution {
+  return repairableAutomationExecutionSchema.parse(JSON.parse(execution));
 }
 
 export function toAutomationResponse(row: AutomationRow): AutomationResponse {
@@ -841,7 +842,6 @@ export function isAutomationSpawnedThread(db: Db, threadId: string): boolean {
   );
 }
 
-/** Every run still marked running, oldest first (startup reconciliation). */
 export function listRunningAutomationRuns(db: Db): AutomationRunRow[] {
   return db
     .prepare(

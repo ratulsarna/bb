@@ -60,10 +60,6 @@ export function findPaneByThread(
   );
 }
 
-/** Finds the pane representing the same routable page as `content`. Plugin
- * subpaths belong to one panel identity, so navigating within a panel updates
- * that pane instead of opening duplicates. The compose page is a singleton in
- * this prototype, matching its existing shared draft/project state. */
 export function findPaneByContent(
   root: LayoutNode,
   content: PaneContent,
@@ -78,6 +74,12 @@ export function findPaneByContent(
           candidate.kind === "thread" &&
           candidate.projectId === content.projectId &&
           candidate.threadId === content.threadId
+        );
+      }
+      if (content.kind === "plugin-detail") {
+        return (
+          candidate.kind === "plugin-detail" &&
+          candidate.pluginId === content.pluginId
         );
       }
       return (

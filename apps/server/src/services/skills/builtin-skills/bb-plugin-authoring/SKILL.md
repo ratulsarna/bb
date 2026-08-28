@@ -609,8 +609,11 @@ Control-plane declarations for host-local daemon behavior. Use
 `bb.hosts.declareSharedPorts(hostId, ports)` to replace this plugin's
 desired loopback port set for one host. `ports` contains integers from 1–65535;
 the server deduplicates and sorts them, owns the generation, and delivers the
-resulting set to the daemon. The call fails with an actionable error if the
-host has no bb connect machine enrollment.
+resulting set to the daemon. If an enrolled host is offline, the declaration
+stays dormant on the server and is delivered when a credentialed daemon
+session reconnects. The call fails with an actionable error if the host has no
+bb connect machine enrollment or its connected daemon reports that the local
+machine credential is missing.
 
 Call `await bb.hosts.ensureSharedPortTunnel(hostId)` to lazily assign and read
 the host's `{ label, baseDomain }` for constructing public URLs. The enrolled
@@ -686,7 +689,7 @@ Read and edit existing threads with the same area — you do not need a
 sidebar panel or a spawned thread to reach them:
 
 ```ts
-const { threads } = await bb.sdk.threads.list({ projectId, limit: 50 });
+const threads = await bb.sdk.threads.list({ projectId, limit: 50 });
 const thread = await bb.sdk.threads.get({ threadId });
 const timeline = await bb.sdk.threads.timeline({ threadId });
 await bb.sdk.threads.update({ threadId, title: "Fix the flaky test" });
@@ -1619,7 +1622,7 @@ The user can pin BB's list or a specific provider under
 **Settings → Appearance → Sidebar**. The choice is per client.
 
 Your component gets the scrolling list and nothing else. The New-thread button,
-the search field, the plugin nav rows, and the footer stay host-rendered —
+the search action, the plugin nav rows, and the footer stay host-rendered —
 other plugins live in two of those, so a replaced list must not remove them.
 Put your own controls at the top of your scroll area instead.
 
@@ -1634,11 +1637,10 @@ interface PluginThreadListProps {
   activeThreadId: string | null;
   activeProjectId: string | null;
   isCompactViewport: boolean;
-  /** Closes the mobile drawer and clears the host search field. Always call it
-      after opening a thread, or the sidebar stays in search mode. */
+  /** Closes the mobile drawer. Always call it after opening a thread. */
   onNavigate: () => void;
-  /** The host search field's text; "" when the field is closed. The host owns
-      that field — filter by this rather than shipping a second one. */
+  /** Deprecated compatibility value for the removed sidebar search field.
+      The host always supplies "". */
   searchQuery: string;
   /** BB's bound thread list. Render it to delegate conditionally without
       re-entering plugin replacement resolution. */
@@ -2338,7 +2340,7 @@ serviceTier?, executionInputSources, environment, input }`. Forward it
   />;
   ```
 
-  ```ts
+  ```ts create-thread-handler
   // server.ts
   async createThread({ request, sectionId }) {
     const thread = await bb.sdk.threads.spawn({

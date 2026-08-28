@@ -138,7 +138,8 @@ export interface PluginStorage {
   database(): Database.Database;
   /**
    * Ordered-statement migration helper: statement index = migration id in a
-   * `_bb_migrations` table; unapplied statements run in one transaction.
+   * `_bb_migrations` table; unapplied statements run in one transaction. The
+   * host records each statement hash and rejects changed or reused indexes.
    * Append-only — never reorder or edit shipped statements.
    */
   migrate(db: Database.Database, statements: string[]): void;
@@ -1160,8 +1161,11 @@ export interface PluginHosts {
   /**
    * Replace this plugin's desired shared-loopback ports for one host. The
    * server aggregates declarations, owns generations, and delivers the
-   * resulting set to that host's daemon. Tunnel identity is deliberately not
-   * accepted here: it is owned by the daemon's trusted enrollment.
+   * resulting set to that host's daemon. When an enrolled host is offline,
+   * the server retains the declaration and delivers it on the next
+   * credentialed daemon session. A connected daemon that reports no machine
+   * credential is rejected. Tunnel identity is deliberately not accepted
+   * here: it is owned by the daemon's trusted enrollment.
    */
   declareSharedPorts(hostId: string, ports: readonly number[]): void;
 }

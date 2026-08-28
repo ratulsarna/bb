@@ -5,18 +5,10 @@ import {
   loadShareIntentModule,
   type ShareIntentModule,
 } from "@/lib/share";
-import { newThreadHref } from "@/screens/shell/hrefs";
+import { webViewShellHref } from "@/screens/shell/hrefs";
 import { toast } from "@/ui";
 import { useProfiles } from "./ProfilesProvider";
 
-/**
- * Inbound "Send to bb": when the binary bundles `expo-share-intent`, a share
- * from another app (text / URL) opens the composer seeded with it
- * (home, `/?initialPrompt=`). Without the native module (the current dev
- * client; see apps/mobile/README.md "Share sheet") this renders nothing, so
- * the JS side ships ahead of the native rebuild. Render once inside the
- * ProfilesProvider.
- */
 export function ShareIntentHandler() {
   const module = useMemo(() => loadShareIntentModule(), []);
   if (module === null) return null;
@@ -39,7 +31,6 @@ function ShareIntentHandlerWithModule({
   }, [error]);
   useEffect(() => {
     if (!hasShareIntent) return;
-    // Consume the intent exactly once per share, whatever happens next.
     resetShareIntent();
     if (activeProfile === null) {
       toast.info("Add a server first, then share again.");
@@ -50,7 +41,11 @@ function ShareIntentHandlerWithModule({
       toast.info("Only text and links can be sent to bb for now.");
       return;
     }
-    router.navigate(newThreadHref({ initialPrompt: seed.initialPrompt }));
+    router.navigate(
+      webViewShellHref({
+        path: `/?initialPrompt=${encodeURIComponent(seed.initialPrompt)}`,
+      }),
+    );
   }, [activeProfile, hasShareIntent, resetShareIntent, router, shareIntent]);
   return null;
 }

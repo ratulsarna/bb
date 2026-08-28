@@ -68,7 +68,7 @@
  */
 
 import { createInterface } from "node:readline";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, renameSync, writeFileSync } from "node:fs";
 
 const failLoad = process.env.FAKE_ACP_FAIL_LOAD === "1";
 const loadSession = process.env.FAKE_ACP_LOAD_SESSION === "1" || failLoad;
@@ -144,7 +144,12 @@ for (let i = fakeModels.length; i < modelCount; i += 1) {
 
 process.on("SIGTERM", () => {
   if (process.env.FAKE_ACP_SIGNAL_FILE) {
-    writeFileSync(process.env.FAKE_ACP_SIGNAL_FILE, "SIGTERM\n");
+    const signalFile = process.env.FAKE_ACP_SIGNAL_FILE;
+    const stagedSignalFile = `${signalFile}.${process.pid}.tmp`;
+    // The final path is the test's completion boundary: publish it only after
+    // the marker bytes are complete.
+    writeFileSync(stagedSignalFile, "SIGTERM\n");
+    renameSync(stagedSignalFile, signalFile);
   }
   process.exit(0);
 });
@@ -211,6 +216,7 @@ function cursorModelOptions() {
         { value: "composer-2.5", name: "Composer 2.5" },
         { value: "grok-4.6", name: "Cursor Grok 4.6" },
         { value: "grok-4.5", name: "Cursor Grok 4.5" },
+        { value: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
       ]
     : [
         { value: "default[]", name: "Auto" },
@@ -244,7 +250,10 @@ function cursorConfigOptions() {
       options: models,
     },
   ];
-  if (clientSupportsParameterizedModels && selectedModel.startsWith("grok-")) {
+  if (
+    clientSupportsParameterizedModels &&
+    (selectedModel.startsWith("grok-") || selectedModel === "claude-sonnet-4-6")
+  ) {
     options.push(
       {
         id: "effort",

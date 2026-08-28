@@ -6,8 +6,10 @@ import {
   getPluginPanelRoutePath,
   getRootComposeRoutePath,
   getThreadRoutePath,
+  getPluginDetailRoutePath,
 } from "@/lib/route-paths";
 import { splitLayoutAtom } from "@/lib/split-layout/atoms";
+import { openPaneContentInSplit } from "@/lib/split-layout/openPaneContentInSplit";
 import {
   countPanes,
   findPaneByContent,
@@ -32,6 +34,9 @@ const MAIN_CONTENT_SELECTOR = "main";
 function routeForContent(content: PaneContent): string {
   if (content.kind === "thread") return getThreadRoutePath(content);
   if (content.kind === "new-thread") return getRootComposeRoutePath();
+  if (content.kind === "plugin-detail") {
+    return getPluginDetailRoutePath({ pluginId: content.pluginId });
+  }
   return getPluginPanelRoutePath({
     pluginId: content.pluginId,
     path: content.panelPath,
@@ -39,7 +44,6 @@ function routeForContent(content: PaneContent): string {
   });
 }
 
-/** Prototype drag/cmd-click source for non-thread pages. */
 export function usePaneContentSplitDrag({
   content,
   enabled,
@@ -54,21 +58,13 @@ export function usePaneContentSplitDrag({
   const isCompact = useIsCompactViewport();
 
   const openInSplit = useCallback(() => {
-    const route = routeForContent(content);
-    const layout = store.get(splitLayoutAtom);
-    if (!enabled || isCompact || layout === null) {
-      navigate(route);
-      return;
-    }
-    const existing = findPaneByContent(layout.root, content);
-    const next =
-      existing !== null
-        ? setFocus(layout, existing.paneId)
-        : countPanes(layout.root) >= MAX_PANES
-          ? replacePaneContent(layout, layout.focusedPaneId, content)
-          : splitPane(layout, layout.focusedPaneId, "right", content);
-    if (next !== layout) store.set(splitLayoutAtom, next);
-    navigate(route, existing !== null ? { replace: true } : undefined);
+    openPaneContentInSplit({
+      store,
+      navigate,
+      content,
+      route: routeForContent(content),
+      enabled: enabled && !isCompact,
+    });
   }, [content, enabled, isCompact, navigate, store]);
 
   const onPointerDown = useCallback(

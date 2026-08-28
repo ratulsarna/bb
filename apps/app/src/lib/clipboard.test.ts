@@ -11,10 +11,7 @@ vi.mock("@/components/ui/app-toast", () => ({
   appToast: toastMocks,
 }));
 
-import {
-  copyTextToClipboard,
-  copyToClipboardWithToast,
-} from "./clipboard";
+import { copyTextToClipboard, copyToClipboardWithToast } from "./clipboard";
 
 function installClipboard(writeText: (text: string) => Promise<void>): void {
   Object.defineProperty(navigator, "clipboard", {
@@ -30,9 +27,7 @@ function removeClipboard(): void {
   });
 }
 
-function installEditingCommand(
-  implementation: (command: string) => boolean,
-) {
+function installEditingCommand(implementation: (command: string) => boolean) {
   const execCommand = vi.fn(implementation);
   Object.defineProperty(document, "execCommand", {
     configurable: true,

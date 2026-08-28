@@ -4,8 +4,10 @@ import {
   SectionSidebar,
   SectionSidebarIcon,
   SectionSidebarLabel,
+  SectionSidebarActionRow,
   SectionSidebarRow,
 } from "@/components/sidebar/SectionSidebar";
+import { canOpenNativeScreen, shellOpenNative } from "@/lib/native-shell";
 import {
   SETTINGS_ROUTE_PATH,
   getPluginConfigurationRoutePath,
@@ -19,16 +21,12 @@ interface SettingsSidebarProps {
   isResizing: boolean;
   showTopReserve: boolean;
   appRoutePath: string;
-  /** Render the body only, inside a compact drawer panel owned by the caller. */
   mobileHosted?: boolean;
 }
 
 type SettingsSidebarNavigation = Pick<
   SettingsNavState,
-  | "activePluginId"
-  | "activeSection"
-  | "pluginEntries"
-  | "sections"
+  "activePluginId" | "activeSection" | "pluginEntries" | "sections"
 >;
 
 interface SettingsSidebarContentProps extends SettingsSidebarProps {
@@ -36,7 +34,6 @@ interface SettingsSidebarContentProps extends SettingsSidebarProps {
   testIdPrefix?: string;
 }
 
-/** Shared Settings navigation renderer for production and full-page stories. */
 export function SettingsSidebarContent({
   onResizeMouseDown,
   isResizing,
@@ -46,8 +43,7 @@ export function SettingsSidebarContent({
   navigation,
   testIdPrefix = "settings",
 }: SettingsSidebarContentProps) {
-  const { activePluginId, activeSection, pluginEntries, sections } =
-    navigation;
+  const { activePluginId, activeSection, pluginEntries, sections } = navigation;
 
   return (
     <SectionSidebar
@@ -101,6 +97,22 @@ export function SettingsSidebarContent({
           </div>
         </>
       ) : null}
+      {canOpenNativeScreen() ? (
+        <>
+          <div className="mt-4">
+            <SectionSidebarLabel>This phone</SectionSidebarLabel>
+          </div>
+          <div className="mt-1 space-y-0.5">
+            <SectionSidebarActionRow
+              label="This device"
+              testId="settings-nav-native-device"
+              onClick={() => shellOpenNative("device-settings")}
+            >
+              <SectionSidebarIcon name="Smartphone" />
+            </SectionSidebarActionRow>
+          </div>
+        </>
+      ) : null}
       {sections.some((section) => section.id === "archived") ? (
         <>
           <div className="mt-4">
@@ -126,7 +138,6 @@ export function SettingsSidebarContent({
   );
 }
 
-/** Focused Settings navigation using the shared section-sidebar shell. */
 export function SettingsSidebar({
   onResizeMouseDown,
   isResizing,

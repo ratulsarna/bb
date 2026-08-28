@@ -165,7 +165,7 @@ const ACTIVE_MESSAGE_DIRECTIVES: MarkdownMessageDirectives = {
 
 afterEach(() => {
   cleanup();
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   setPreferredTheme("system");
 });
 
@@ -559,6 +559,39 @@ describe("MarkdownPreview thread mentions", () => {
     expect(sdk.threads.resolveMentions).toHaveBeenCalledTimes(1);
   });
 
+  it("retries a failed title mention batch once", async () => {
+    vi.useFakeTimers();
+    try {
+      const threadId = "thr_2222222222";
+      vi.mocked(sdk.threads.resolveMentions)
+        .mockRejectedValueOnce(new Error("temporary failure"))
+        .mockRejectedValueOnce(new Error("temporary failure"));
+      renderMarkdown(
+        <ThreadTitleMentions title={`Review @thread:${threadId}`} />,
+        [],
+      );
+
+      await act(async () => vi.advanceTimersByTimeAsync(60));
+      expect(sdk.threads.resolveMentions).toHaveBeenCalledTimes(2);
+      await act(async () => vi.advanceTimersByTimeAsync(1_000));
+      expect(sdk.threads.resolveMentions).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks an omitted title mention unavailable", async () => {
+    const threadId = "thr_2222222222";
+    vi.mocked(sdk.threads.resolveMentions).mockResolvedValueOnce([]);
+    renderMarkdown(
+      <ThreadTitleMentions title={`Review @thread:${threadId}`} />,
+      [],
+    );
+
+    expect(await screen.findByText("Unavailable thread")).not.toBeNull();
+    expect(sdk.threads.resolveMentions).toHaveBeenCalledTimes(1);
+  });
+
   it("shares one raw-id resolution across sibling messages and a title", async () => {
     const threadId = "thr_2222222222";
     vi.mocked(sdk.threads.resolveMentions).mockResolvedValueOnce([
@@ -714,8 +747,6 @@ describe("MarkdownPreview thread mentions", () => {
       />,
     );
 
-    // The token is not a mention here, so it stays verbatim prose — one text
-    // node, no pill and no directive mount.
     const paragraph = container.querySelector("p");
     expect(paragraph?.textContent).toBe("@thread:thr_child[label]");
     expect(paragraph?.querySelector("a")).toBeNull();
@@ -925,7 +956,6 @@ describe("MarkdownPreview thread mentions", () => {
       <MarkdownPreview content="See @thread:thr_child for the report." />,
     );
 
-    // No mentions prop → no remark plugin → token is plain text, no pill anchor.
     expect(screen.queryByText("Rebuild comments")).toBeNull();
     expect(
       screen.getByText(/@thread:thr_child/u, { exact: false }),

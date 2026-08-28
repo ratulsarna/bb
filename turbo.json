@@ -20,6 +20,48 @@
     // bb:bundle-stats Vite plugin writes beside dist for the boot-payload
     // budget check. Without it a cache hit would leave CI checking a stale
     // file, or none at all.
+    // The docs' UI-anatomy manifest is the contract this test checks the real
+    // app components against, so a manifest edit must re-run it.
+    "@bb/app#test": {
+      "dependsOn": [
+        "//#ensure-native-modules",
+        "topo"
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/plugin-api-map/src/anatomy-manifest.json",
+        "$TURBO_ROOT$/vitest.shared.ts"
+      ]
+    },
+    // The Plugin Guide's API inventory is checked against the SDK's committed
+    // declarations, so those files are inputs to this test.
+    "@bb/plugin-api-map#test": {
+      "dependsOn": [
+        "//#ensure-native-modules",
+        "@get-bb/plugin-sdk#build:types",
+        "topo"
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/plugin-sdk/bundled-types/**",
+        "$TURBO_ROOT$/packages/plugin-sdk/package.json",
+        // wireframes.test.ts asserts fixture fidelity against the real app
+        // source, and maintenance-skill.test.ts reads the repository skill plus
+        // Plugin Guide source; all are inputs to prevent stale cache hits.
+        "$TURBO_ROOT$/apps/app/src/views/thread-detail/ThreadDetailView.tsx",
+        "$TURBO_ROOT$/.agents/skills/plugin-guide-maintenance/**",
+        "$TURBO_ROOT$/.bb/skills/plugin-guide-maintenance/**",
+        "$TURBO_ROOT$/plugins/plugin-api-docs/**",
+        "$TURBO_ROOT$/vitest.shared.ts"
+      ]
+    },
+    "@bb/plugin-api-map#update:sdk-inventory": {
+      "dependsOn": ["@get-bb/plugin-sdk#build:types"],
+      "cache": false
+    },
+    "@bb/plugin-api-map#scaffold:surface-entry": {
+      "cache": false
+    },
     "@bb/app#build": {
       "dependsOn": ["topo"],
       "inputs": [
@@ -148,6 +190,13 @@
       "cache": false,
       "outputs": [],
       "passThroughEnv": ["*"]
+    },
+    "@bb/desktop#smoke:appimage-lifecycle": {
+      "cache": false,
+      "outputs": [],
+      "passThroughEnv": [
+        "*"
+      ]
     },
     "@bb/desktop#dev": {
       "dependsOn": ["bb-app#build"],
@@ -665,6 +714,9 @@
     // Either through a tsconfig `paths` map or through the workspace symlink's
     // package `types` field; both land on bundled-types/, a build output.
     "bb-plugin-composer-customization#typecheck": {
+      "dependsOn": ["@get-bb/plugin-sdk#build:types", "topo"]
+    },
+    "bb-plugin-plugin-api-docs#typecheck": {
       "dependsOn": ["@get-bb/plugin-sdk#build:types", "topo"]
     },
     "bb-plugin-echo-provider#typecheck": {

@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { getBbDesktopInfo, isDesktopBrowserAvailable } from "@/lib/bb-desktop";
+import { shellOpenExternal } from "@/lib/native-shell";
 import {
   openUrlByPreference,
   useOpenLinksInAppBrowserPreference,
@@ -34,6 +35,7 @@ export function openUrlInExternalBrowser(url: string): void {
     desktopInfo.openExternalUrl(url);
     return;
   }
+  if (shellOpenExternal(url)) return;
   if (typeof window !== "undefined") {
     window.open(url, "_blank", "noopener,noreferrer");
   }
@@ -50,7 +52,6 @@ export function UrlOpenRoutingProvider({
   );
 }
 
-/** Installs URL opening for a window or a nested browser-capable surface. */
 export function AppNavigationUrlHost({ children }: { children: ReactNode }) {
   const openUrl = useOpenUrlByPreference();
   const capabilities = useMemo(

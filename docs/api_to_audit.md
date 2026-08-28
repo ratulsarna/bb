@@ -272,6 +272,7 @@ ever needs two configured differently. For `acpLaunchSpecSchema`: the shape
 is stored in the ACP plugin's `customAgents` setting and in registrations'
 bridge options, so a change is a migration of stored agents — decide what a
 plugin is owed when the spec grows a field.
+
 ## `PluginProviderDeclaration.experimental_nativeSkillRoots`
 
 **Kept experimental (2026-08-22).** every first-party provider declares it now (stabilization S5 moved the daemon's per-provider scan table here), but no third-party agent has validated the relative-path / 32-root rule or the per-root options, and the split between a global declaration and the per-workspace resolver (`experimental_resolvesNativeRoots`) is one release old.
@@ -882,7 +883,13 @@ Before stabilization, audit:
   statuses;
 - persistence expectations across full app reloads and multiple windows;
 - validation, accessibility labels, reduced motion, and cleanup on plugin
-  reload/disable/removal.
+  reload/disable/removal;
+- the name of `PluginComposerThreadRowStatus.tone`. The field is a state the
+  plugin reports (`default | running | success | error`), not a tone: the host
+  maps it to both a color and an animation (`running` pulses in the success
+  color; `success` and `error` are static; omitted is muted). `state` is the
+  candidate rename. Nothing under `plugins/*` sets a status today, so the
+  rename is free until the prefix drops.
 
 ## `bb.providers.register` (`experimental_bridgeOptions`, `experimental_visibility`, and the `experimental_providerBridge` artifact export)
 
@@ -1574,13 +1581,14 @@ one toast.
 2. **Fallback discoverability.** Confirm one toast is the right signal when a
    crash silently swaps the user's sidebar back.
 3. **Region boundary.** The plugin gets the scrolling list and nothing else:
-   the New-thread button, search field, plugin nav rows, and footer stay
+   the New-thread button, search action, plugin nav rows, and footer stay
    host-rendered, because they are shared surfaces (other plugins live in two
    of them) and a replaced list must not remove them. Confirm no real sidebar
    needs to claim more, and that passing those regions down as props — letting
    a plugin place them, at the risk of dropping them — stays the wrong trade.
-4. **Search ownership.** The host owns the search field and passes
-   `searchQuery` down. Confirm a plugin list never needs its own field.
+4. **Search compatibility.** Confirm released plugins no longer need the
+   required deprecated `searchQuery` field before removing it in a deliberate
+   breaking change. Until then, the host supplies `""`.
 5. **Accessibility.** Confirm the host can still guarantee list semantics,
    focus order, and the mobile close behavior when a plugin owns the markup —
    `onNavigate` is currently the plugin's responsibility to call.

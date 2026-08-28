@@ -7,6 +7,7 @@ import {
   jsonRpcEnvelopeSchema,
 } from "@get-bb/plugin-sdk/provider-bridge";
 import { z } from "zod";
+import type { CodexErrorInfo as GeneratedCodexErrorInfo } from "./generated/codex-app-server/schema/v2/CodexErrorInfo.js";
 
 const codexTurnStatusSchema = z.enum([
   "completed",
@@ -478,9 +479,11 @@ const codexErrorHttpStatusSchema = z
 
 const codexErrorInfoSchema = z.union([
   z.literal("contextWindowExceeded"),
+  z.literal("sessionBudgetExceeded"),
   z.literal("usageLimitExceeded"),
   z.literal("serverOverloaded"),
   z.literal("cyberPolicy"),
+  z.literal("misalignmentPolicyViolation"),
   z.object({ httpConnectionFailed: codexErrorHttpStatusSchema }),
   z.object({ responseStreamConnectionFailed: codexErrorHttpStatusSchema }),
   z.literal("internalServerError"),
@@ -500,6 +503,12 @@ const codexErrorInfoSchema = z.union([
   z.literal("other"),
 ]);
 export type CodexErrorInfo = z.infer<typeof codexErrorInfoSchema>;
+const codexErrorInfoSchemaMatchesGenerated: GeneratedCodexErrorInfo extends CodexErrorInfo
+  ? CodexErrorInfo extends GeneratedCodexErrorInfo
+    ? true
+    : false
+  : false = true;
+void codexErrorInfoSchemaMatchesGenerated;
 
 const codexTurnErrorSchema = z
   .object({
@@ -509,13 +518,14 @@ const codexTurnErrorSchema = z
   })
   .passthrough();
 
-const codexTurnSchema = z
+export const codexTurnSchema = z
   .object({
     id: z.string(),
     status: codexTurnStatusSchema,
     error: codexTurnErrorSchema.nullable().optional(),
   })
   .passthrough();
+export type CodexTurn = z.infer<typeof codexTurnSchema>;
 
 const codexThreadSchema = z
   .object({
@@ -776,6 +786,7 @@ const codexRateLimitSnapshotUpdateSchema = z
     secondary: codexRateLimitWindowSchema.nullable().optional(),
     credits: codexCreditsSnapshotSchema.nullable().optional(),
     individualLimit: codexSpendControlLimitSnapshotSchema.nullable().optional(),
+    spendControlReached: z.boolean().nullable().optional(),
     planType: z.string().nullable().optional(),
     rateLimitReachedType: z.string().nullable().optional(),
   })
@@ -791,6 +802,7 @@ export interface CodexRateLimitSnapshot {
   secondary: z.output<typeof codexRateLimitWindowSchema> | null;
   credits: z.output<typeof codexCreditsSnapshotSchema> | null;
   individualLimit: z.output<typeof codexSpendControlLimitSnapshotSchema> | null;
+  spendControlReached: boolean | null;
   planType: string | null;
   rateLimitReachedType: string | null;
 }

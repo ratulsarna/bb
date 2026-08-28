@@ -20,12 +20,9 @@ vi.mock("@/hooks/useUpdateInventory", () => ({
   useUpdateInventory: useUpdateInventoryMock,
 }));
 
-// The marks come from the provider roster: each registered provider's
-// declared logo, served by the host.
 vi.mock("@/lib/sdk", async () => {
-  const { makeProviderInfo: provider } = await import(
-    "@/test/provider-info-fixture"
-  );
+  const { makeProviderInfo: provider } =
+    await import("@/test/provider-info-fixture");
   return {
     sdk: {
       providers: {
@@ -237,17 +234,14 @@ describe("SidebarUpdatesBadge", () => {
     });
 
     const providerChip = screen.getByTestId("sidebar-updates-badge-providers");
-    // The first host-reported provider order is retained while duplicates
-    // from later machines collapse into one mark.
     expect(providerChip.getAttribute("aria-label")).toBe(
       "Claude Code and Codex updates available",
     );
-    // One served logo per stale provider, drawn as a currentColor mask once
-    // the roster has loaded; the bb chip keeps its own inline mark.
     await waitFor(() =>
       expect(
-        providerChip.querySelectorAll("[data-provider-icon] [data-provider-logo]")
-          .length,
+        providerChip.querySelectorAll(
+          "[data-provider-icon] [data-provider-logo]",
+        ).length,
       ).toBe(2),
     );
     expect(
@@ -255,6 +249,11 @@ describe("SidebarUpdatesBadge", () => {
         node.getAttribute("data-provider-icon"),
       ),
     ).toEqual(["claude-code", "codex"]);
+    expect(
+      [...providerChip.querySelectorAll("[data-provider-icon]")].every((node) =>
+        node.classList.contains("flex"),
+      ),
+    ).toBe(true);
     expect(screen.getByTestId("sidebar-updates-badge-bb")).toBeTruthy();
   });
 });

@@ -1,18 +1,31 @@
-import { Extension, InputRule, Node, type Extensions } from "@tiptap/core";
+import {
+  Extension,
+  getHTMLFromFragment,
+  InputRule,
+  Node,
+  type Extensions,
+} from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import Image from "@tiptap/extension-image";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Placeholder from "@tiptap/extension-placeholder";
+import Table from "@tiptap/extension-table";
+import TableCell from "@tiptap/extension-table-cell";
+import TableHeader from "@tiptap/extension-table-header";
+import TableRow from "@tiptap/extension-table-row";
 import { Markdown } from "tiptap-markdown";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
-import type { DOMOutputSpec } from "@tiptap/pm/model";
+import {
+  Fragment,
+  type DOMOutputSpec,
+  type Node as ProseMirrorNode,
+} from "@tiptap/pm/model";
 import { Suggestion, type SuggestionProps } from "@tiptap/suggestion";
 import type { IconSvgElement } from "@hugeicons/react";
 import { BubbleChatIcon } from "@hugeicons/core-free-icons";
 
-/** One entry in the @-mention popover: a task or a bb thread. */
 export type MentionItem =
   | { type: "task"; id: string; key: string; title: string }
   | { type: "thread"; id: string; title: string };
@@ -22,8 +35,6 @@ const THREAD_MENTION_SCHEME = "bbthread://";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-// Hugeicons ships icon artwork as React-style [tag, camelCaseAttrs] tuples;
-// ProseMirror DOM specs need real (kebab-case) SVG attribute names.
 function svgSpecAttributes(
   attrs: Record<string, string | number>,
 ): Record<string, string> {
@@ -45,19 +56,13 @@ function mentionIconSpec(icon: IconSvgElement): DOMOutputSpec {
       class: "bb-tasks-mention-icon",
       "aria-hidden": "true",
     },
-    ...icon.map(
-      ([tag, attrs]): DOMOutputSpec => [
-        `${SVG_NS} ${tag}`,
-        svgSpecAttributes(attrs),
-      ],
-    ),
+    ...icon.map(([tag, attrs]): DOMOutputSpec => [
+      `${SVG_NS} ${tag}`,
+      svgSpecAttributes(attrs),
+    ]),
   ];
 }
 
-// tiptap-markdown only adds a `tight` attribute to bulletList/orderedList, so
-// task lists would always serialize loose (blank lines between items).
-// Mirror its attribute here: default tight, loose only when the source
-// markdown had paragraph-separated items.
 const TightTaskList = TaskList.extend({
   addAttributes() {
     return {
@@ -75,8 +80,6 @@ const TightTaskList = TaskList.extend({
   },
 });
 
-// Typing "[ ] " / "[x] " at the start of a line turns into a task list item,
-// mirroring how the markdown source spells checkboxes.
 const MarkdownTaskInput = Extension.create({
   name: "markdownTaskInput",
   priority: 200,
@@ -95,8 +98,98 @@ const MarkdownTaskInput = Extension.create({
   },
 });
 
-// Inline atom that renders as a pill and serializes to markdown as a
-// bbtask:// link: [TSK-42](bbtask://TSK-42).
+interface TableMarkdownState {
+  out: string;
+  inTable: boolean;
+  write(value: string): void;
+  ensureNewLine(): void;
+  closeBlock(node: ProseMirrorNode): void;
+  render(node: ProseMirrorNode, parent: ProseMirrorNode, index: number): void;
+  renderInline(node: ProseMirrorNode): void;
+}
+
+function tableChildren(node: ProseMirrorNode): readonly ProseMirrorNode[] {
+  return node.content.content;
+}
+
+function hasMergedCell(node: ProseMirrorNode): boolean {
+  return node.attrs.colspan > 1 || node.attrs.rowspan > 1;
+}
+
+function isMarkdownTable(node: ProseMirrorNode): boolean {
+  const [header, ...body] = tableChildren(node);
+  if (!header) return false;
+  if (
+    tableChildren(header).some(
+      (cell) =>
+        cell.type.name !== "tableHeader" ||
+        hasMergedCell(cell) ||
+        cell.childCount > 1,
+    )
+  ) {
+    return false;
+  }
+  return !body.some((row) =>
+    tableChildren(row).some(
+      (cell) =>
+        cell.type.name === "tableHeader" ||
+        hasMergedCell(cell) ||
+        cell.childCount > 1,
+    ),
+  );
+}
+
+function renderTableCell(
+  state: TableMarkdownState,
+  cell: ProseMirrorNode,
+): void {
+  const content = cell.firstChild;
+  if (!content) return;
+  const start = state.out.length;
+  if (content.type.name === "image") state.render(content, cell, 0);
+  else if (content.childCount > 0) state.renderInline(content);
+  state.out =
+    state.out.slice(0, start) + state.out.slice(start).replaceAll("|", "\\|");
+}
+
+const MarkdownTable = Table.extend({
+  addStorage() {
+    return {
+      markdown: {
+        serialize(state: TableMarkdownState, node: ProseMirrorNode) {
+          if (!isMarkdownTable(node)) {
+            state.write(
+              getHTMLFromFragment(Fragment.from(node), node.type.schema),
+            );
+            state.closeBlock(node);
+            return;
+          }
+
+          state.inTable = true;
+          node.forEach((row, _offset, rowIndex) => {
+            state.write("| ");
+            row.forEach((cell, _cellOffset, cellIndex) => {
+              if (cellIndex > 0) state.write(" | ");
+              renderTableCell(state, cell);
+            });
+            state.write(" |");
+            state.ensureNewLine();
+            if (rowIndex === 0) {
+              state.write(
+                `| ${Array.from({ length: row.childCount }, () => "---").join(" | ")} |`,
+              );
+              state.ensureNewLine();
+            }
+          });
+          state.closeBlock(node);
+          state.inTable = false;
+        },
+        parse: {},
+      },
+    };
+  },
+});
+
 const TaskMention = Node.create({
   name: "taskMention",
   group: "inline",
@@ -119,8 +212,6 @@ const TaskMention = Node.create({
         },
       },
       {
-        // Markdown input arrives as <a href="bbtask://KEY">label</a>; this
-        // rule must outrank the Link mark's a[href] rule.
         tag: `a[href^="${MENTION_SCHEME}"]`,
         priority: 100,
         getAttrs: (element) => {
@@ -160,9 +251,6 @@ const TaskMention = Node.create({
   },
 });
 
-// Inline atom that renders as a pill (with a small chat glyph to distinguish
-// it from task pills) and serializes to markdown as a bbthread:// link:
-// [Fix login flow](bbthread://thr_abc).
 const ThreadMention = Node.create({
   name: "threadMention",
   group: "inline",
@@ -187,8 +275,6 @@ const ThreadMention = Node.create({
         },
       },
       {
-        // Markdown input arrives as <a href="bbthread://thr_x">label</a>; this
-        // rule must outrank the Link mark's a[href] rule.
         tag: `a[href^="${THREAD_MENTION_SCHEME}"]`,
         priority: 100,
         getAttrs: (element) => {
@@ -232,13 +318,6 @@ const ThreadMention = Node.create({
   },
 });
 
-// Keeps a trailing empty paragraph after a terminal leaf block (a block image
-// or horizontal rule). Such a leaf offers no place for a text caret after it,
-// so a description whose only content is an image would otherwise be
-// impossible to focus or extend. The empty paragraph adds no characters when
-// the document is serialized back to markdown for an image-terminal document.
-// Runs only on transactions (not initial construction) and only while the
-// editor is editable; the host seeds the initial document separately.
 const TrailingParagraph = Extension.create({
   name: "trailingParagraph",
   addProseMirrorPlugins() {
@@ -268,9 +347,6 @@ export interface MentionSuggestionHandle {
   onKeyDown(event: KeyboardEvent): boolean;
 }
 
-// Wires the "@" suggestion popover to the host component. Without a handle
-// the extension contributes nothing, keeping the editor inert when the
-// mentionItems prop is absent.
 const MentionSuggestion = Extension.create<{
   handle: MentionSuggestionHandle | null;
 }>({
@@ -325,6 +401,10 @@ export function createEditorExtensions(options?: {
     Image.configure({ allowBase64: false }),
     TightTaskList,
     TaskItem.configure({ nested: true }),
+    MarkdownTable.configure({ renderWrapper: true }),
+    TableRow,
+    TableHeader,
+    TableCell,
     MarkdownTaskInput,
     TaskMention,
     ThreadMention,
@@ -340,6 +420,7 @@ export function createEditorExtensions(options?: {
       tightLists: true,
       bulletListMarker: "-",
       linkify: true,
+      transformPastedText: true,
     }),
   ];
 }

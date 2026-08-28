@@ -238,8 +238,6 @@ describe("PersistentResponsiveDrawerShell", () => {
     expect(content?.getAttribute("aria-hidden")).toBe("true");
     expect(appTree.getAttribute("aria-hidden")).toBeNull();
     expect(appTree.hasAttribute("inert")).toBe(false);
-    // The retained backdrop stays mounted at opacity 0 for the app's lifetime;
-    // a backdrop-filter on it would keep a full-viewport blur pass alive.
     const backdrop = document.querySelector<HTMLElement>(
       "[data-persistent-drawer-backdrop]",
     );
@@ -390,6 +388,7 @@ describe("PersistentResponsiveDrawerShell", () => {
 
   it("traps focus on coarse pointers and restores the trigger after close", () => {
     mockPointerCoarse(true);
+    const onAfterCloseAutoFocus = vi.fn();
 
     function FocusDrawer() {
       const [open, setOpen] = useState(false);
@@ -401,6 +400,9 @@ describe("PersistentResponsiveDrawerShell", () => {
           <PersistentResponsiveDrawerShell
             open={open}
             onOpenChange={setOpen}
+            onAfterCloseAutoFocus={() =>
+              onAfterCloseAutoFocus(document.activeElement)
+            }
             srLabel="Details"
           >
             <button type="button">First action</button>
@@ -428,6 +430,8 @@ describe("PersistentResponsiveDrawerShell", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(document.activeElement).toBe(trigger);
+    expect(onAfterCloseAutoFocus).toHaveBeenCalledOnce();
+    expect(onAfterCloseAutoFocus).toHaveBeenCalledWith(trigger);
   });
 
   it("keeps panel focus and uses the latest close callback after a parent rerender", () => {

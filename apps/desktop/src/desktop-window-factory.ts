@@ -19,13 +19,6 @@ import type { DesktopContextMenuWebContents } from "./desktop-context-menu.js";
 
 type DesktopWindowIcon = BrowserWindowConstructorOptions["icon"];
 
-// Inset the macOS traffic lights an equal distance from the window's top and
-// left edges so they sit on a 45° diagonal from the top-left corner. The shared
-// value vertically centers the lights within the 48px chrome row and brings them
-// onto the sidebar icon column's left rail. This is the native half of a paired
-// geometry contract: the renderer half is `CHROME_ROW_HEIGHT_CLASS` (48px) and
-// the traffic-light reserve tokens in apps/app/src/lib/bb-desktop.ts. The two
-// bundles can't share a runtime value, so keep this inset in sync with them.
 const MACOS_TRAFFIC_LIGHT_DIAGONAL_INSET = 18;
 const MACOS_TRAFFIC_LIGHT_POSITION = {
   x: MACOS_TRAFFIC_LIGHT_DIAGONAL_INSET,
@@ -87,7 +80,9 @@ interface CreateDesktopWindowFactoryArgs {
   createWindowStateKey(): WindowStateKey;
   displayWorkAreas: DisplayWorkArea[] | null;
   icon: DesktopWindowIcon;
+  isLinuxTransparent: boolean;
   isMac: boolean;
+  isLinuxFrameless: boolean;
   isQuitting(): boolean;
   openExternalUrl(args: OpenExternalUrlArgs): void;
   preloadPath: string;
@@ -137,7 +132,9 @@ interface LoadUrlIntoWindowArgs {
 interface CreateWindowOptionsArgs {
   bounds: WindowBounds;
   icon: DesktopWindowIcon;
+  isLinuxTransparent: boolean;
   isMac: boolean;
+  isLinuxFrameless: boolean;
   preloadPath: string;
 }
 
@@ -168,6 +165,10 @@ function createWindowOptions(
   args: CreateWindowOptionsArgs,
 ): BrowserWindowConstructorOptions {
   return {
+    ...(args.isLinuxFrameless ? { frame: false } : {}),
+    ...(args.isLinuxTransparent
+      ? { backgroundColor: "#00000000", transparent: true }
+      : {}),
     ...(args.isMac
       ? {
           frame: false,
@@ -195,9 +196,6 @@ function createWindowOptions(
 }
 
 async function loadUrlIntoWindow(args: LoadUrlIntoWindowArgs): Promise<void> {
-  // Native macOS traffic lights do not scale with Chromium page zoom, so reset
-  // app-window zoom before loading the renderer chrome that visually aligns to
-  // them. This also clears stale per-origin zoom persisted by Electron sessions.
   args.browserWindow.webContents.setZoomFactor(1);
   try {
     await args.browserWindow.loadURL(args.url);
@@ -237,7 +235,9 @@ export function createDesktopWindowFactory(
         createWindowOptions({
           bounds: restoredState.bounds,
           icon: args.icon,
+          isLinuxTransparent: args.isLinuxTransparent,
           isMac: args.isMac,
+          isLinuxFrameless: args.isLinuxFrameless,
           preloadPath: args.preloadPath,
         }),
       );
