@@ -489,6 +489,12 @@ describe("git branch name contract", () => {
     expect(
       contract.projectBranchesQuerySchema.safeParse({
         hostId: "host_123",
+        refresh: "blocking",
+      }).success,
+    ).toBe(false);
+    expect(
+      contract.projectBranchesQuerySchema.safeParse({
+        hostId: "host_123",
         selectedBranch: "upstream/main lock",
       }).success,
     ).toBe(false);

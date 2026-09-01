@@ -294,7 +294,12 @@ function dropAppSettingsValuesTable(db: DbConnection): void {
   db.$client.prepare("DROP TABLE IF EXISTS app_settings_values").run();
 }
 
+function dropThreadConversationOutlinesTable(db: DbConnection): void {
+  db.$client.prepare("DROP TABLE IF EXISTS thread_conversation_outlines").run();
+}
+
 function dropRewindAddedTables(db: DbConnection): void {
+  dropThreadConversationOutlinesTable(db);
   db.$client.prepare("DROP TABLE IF EXISTS thread_tabs").run();
   db.$client.prepare("DROP TABLE IF EXISTS automation_runs").run();
   db.$client.prepare("DROP TABLE IF EXISTS automations").run();
@@ -634,6 +639,7 @@ function dropMarketplaceCatalogSchema(db: DbConnection): void {
 }
 
 function dropEventToolNameColumn(db: DbConnection): void {
+  dropThreadConversationOutlinesTable(db);
   db.$client.exec("DROP INDEX IF EXISTS events_delegating_item_lookup_idx");
   db.$client.exec("DROP INDEX IF EXISTS events_plan_steps_thread_sequence_idx");
   db.$client.prepare("DROP TABLE IF EXISTS deferred_thread_messages").run();

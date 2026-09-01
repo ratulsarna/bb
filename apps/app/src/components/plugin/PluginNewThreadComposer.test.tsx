@@ -128,6 +128,7 @@ vi.mock("@/hooks/queries/host-queries", () => ({
 }));
 
 vi.mock("@/hooks/queries/system-queries", () => ({
+  useSystemProviders: () => ({ data: undefined }),
   useSystemProviderStates: () => ({ data: undefined, isPending: false }),
   useKnownProviderModelCatalogScope: () => undefined,
   useHostProviderCliStatus: () => ({ data: undefined }),
@@ -645,7 +646,7 @@ describe("PluginNewThreadComposer seeding", () => {
       hostId: "host_1",
       workspace: {
         type: "managed-worktree",
-        baseBranch: { kind: "default" },
+        baseBranch: { kind: "named", name: "main" },
       },
     });
   });

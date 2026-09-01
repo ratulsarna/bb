@@ -45,6 +45,7 @@ export interface TerminalPtyExit {
 }
 
 export interface TerminalPtyProcess {
+  dispose(): void;
   kill(signal?: NodeJS.Signals): void;
   onData(listener: (data: string) => void): TerminalPtyDisposable;
   onExit(listener: (event: TerminalPtyExit) => void): TerminalPtyDisposable;
@@ -186,6 +187,14 @@ interface TerminalOperationCompletion {
   resolve: () => void;
 }
 
+function disposeNodePty(pty: ReturnType<typeof spawnPty>): void {
+  const destroy = "destroy" in pty ? pty.destroy : undefined;
+  if (typeof destroy !== "function") {
+    throw new Error("node-pty terminal does not expose resource disposal");
+  }
+  Reflect.apply(destroy, pty, []);
+}
+
 const nodePtyAdapter: TerminalPtyAdapter = {
   spawn(args) {
     ensureNodePtySpawnHelperExecutable(args.logger);
@@ -197,6 +206,7 @@ const nodePtyAdapter: TerminalPtyAdapter = {
       rows: args.rows,
     });
     return {
+      dispose: () => disposeNodePty(pty),
       kill: (signal) =>
         killProcessGroup({
           child: { pid: pty.pid, kill: (groupSignal) => pty.kill(groupSignal) },
@@ -341,6 +351,7 @@ function buildTerminalEnv(args: BuildTerminalEnvArgs): NodeJS.ProcessEnv {
     BB_TERMINAL_SESSION_ID: args.terminalId,
     COLORTERM: "truecolor",
     DISABLE_AUTO_TITLE: "true",
+    FORCE_HYPERLINK: "1",
     PROMPT_EOL_MARK: "",
     TERM: "xterm-256color",
   };
@@ -956,6 +967,17 @@ export class TerminalManager {
     }
     for (const disposable of args.session.disposables) {
       disposable.dispose();
+    }
+    try {
+      args.session.pty.dispose();
+    } catch (error) {
+      this.options.logger.warn(
+        {
+          terminalId: args.session.terminalId,
+          ...runtimeErrorLogFields(error),
+        },
+        "Failed to dispose terminal PTY",
+      );
     }
     this.options.sendMessage({
       type: "terminal.exited",

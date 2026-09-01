@@ -2,6 +2,7 @@ import type {
   Environment,
   Host,
   ProjectSource,
+  ProviderInfo,
   ReasoningLevel,
   Thread,
   ThreadListEntry,
@@ -12,6 +13,7 @@ import type {
   ProviderCliStatus,
 } from "@bb/host-daemon-contract";
 import type { ProjectResponse } from "@bb/server-contract";
+import { EMPTY_ORDERED_MENTION_SUGGESTIONS } from "@bb/client-core";
 import { getProviderIconInfo } from "../src/lib/provider-icon";
 import type { PickerOption } from "../src/components/pickers/OptionPicker";
 import type { ModelPickerOption } from "../src/components/pickers/model-picker-option";
@@ -60,7 +62,7 @@ export function makeTypeaheadConfig(
   commandOverrides: Partial<TypeaheadCommandConfig> = {},
 ): TypeaheadConfig {
   const mention: TypeaheadMentionConfig = {
-    suggestions: [],
+    results: EMPTY_ORDERED_MENTION_SUGGESTIONS,
     isLoading: false,
     isError: false,
     onQueryChange: noop,
@@ -93,6 +95,51 @@ function storyProviderIcon(providerId: string, glyph: string) {
   return getProviderIconInfo(providerId, { logoUrl: null, icon: { glyph } })
     ?.icon;
 }
+
+function makeStoryProvider(
+  id: string,
+  displayName: string,
+  glyph: string,
+): ProviderInfo {
+  return {
+    id,
+    pluginId: `provider-${id}`,
+    displayName,
+    logoUrl: null,
+    icon: { glyph },
+    available: true,
+    maintenance: { health: false, usage: false, installation: false },
+    composerActions: [],
+    capabilities: {
+      supportsThreadArchive: true,
+      supportsThreadRename: true,
+      supportsServiceTier: false,
+      supportsNativeUserQuestion: false,
+      supportsFork: true,
+      supportsSessionRewind: false,
+      modelCatalogScope: "workspace",
+      permissionModes: ["accept-edits", "auto", "full"],
+    },
+  };
+}
+
+const storyCodexProvider = makeStoryProvider("codex", "Codex", "Code");
+const storyClaudeCodeProvider = makeStoryProvider(
+  "claude-code",
+  "Claude Code",
+  "Brain",
+);
+const storyCursorProvider = makeStoryProvider("acp-cursor", "Cursor", "Zap");
+
+export const STORY_CODEX_PROVIDER_ID = storyCodexProvider.id;
+export const STORY_CLAUDE_CODE_PROVIDER_ID = storyClaudeCodeProvider.id;
+export const STORY_CURSOR_PROVIDER_ID = storyCursorProvider.id;
+
+export const STORY_PROVIDERS_BY_ID: ReadonlyMap<string, ProviderInfo> = new Map(
+  [storyCodexProvider, storyClaudeCodeProvider, storyCursorProvider].map(
+    (provider) => [provider.id, provider],
+  ),
+);
 
 export const STORY_PROVIDER_OPTIONS: readonly PickerOption<string>[] = [
   { value: "codex", label: "Codex", icon: storyProviderIcon("codex", "Code") },

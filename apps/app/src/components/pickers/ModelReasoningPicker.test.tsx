@@ -159,6 +159,7 @@ function renderPicker({
   modelLoadError = null,
   compact = false,
   splitPane = false,
+  muted = false,
 }: {
   onSelectedProviderChange?: ((value: string) => void) | null;
   onModelChange?: (value: string) => void;
@@ -176,6 +177,7 @@ function renderPicker({
   modelLoadError?: SystemExecutionOptionsModelLoadError | null;
   compact?: boolean;
   splitPane?: boolean;
+  muted?: boolean;
 } = {}) {
   const { queryClient, wrapper } = createQueryClientTestHarness();
   queryClient.setQueryData(
@@ -215,6 +217,7 @@ function renderPicker({
         fastModeEnabled={false}
         onFastModeChange={vi.fn()}
         showFastModeToggle={false}
+        muted={muted}
         modal={false}
       />
       <button type="button">Composer action</button>
@@ -248,6 +251,18 @@ afterEach(() => {
 });
 
 describe("ModelReasoningPicker", () => {
+  it("uses the lower-emphasis chrome token for the composer caret", () => {
+    renderPicker({ muted: true });
+
+    const trigger = screen.getByRole("button", {
+      name: "Provider, model and reasoning",
+    });
+    expect(
+      trigger.querySelector('[data-icon="ChevronDown"]')?.classList,
+    ).toContain("text-subtle-foreground/75");
+    expect(trigger.classList).toContain("font-normal");
+  });
+
   it("gives a non-SVG provider mark the same 16px trigger size as button SVGs", () => {
     renderPicker({
       pickerProviderOptions: [
@@ -489,7 +504,7 @@ describe("ModelReasoningPicker", () => {
     ).toBe("");
   });
 
-  it("scrolls the desktop models and reasoning rows as one region", () => {
+  it("caps the desktop picker and scrolls only the model list", () => {
     renderPicker({ modelOptions: manyCodexModels });
 
     fireEvent.click(
@@ -498,8 +513,9 @@ describe("ModelReasoningPicker", () => {
 
     const menu = screen.getByRole("dialog");
     expect(menu.className).toContain(
-      "max-h-[var(--radix-popover-content-available-height)]",
+      "max-h-[min(var(--radix-popover-content-available-height),calc(100dvh-0.5rem))]",
     );
+    expect(menu.className).toContain("overflow-hidden");
 
     const scrollers = [
       ...(menu.className.includes("overflow-y-auto") ? [menu] : []),
@@ -507,15 +523,11 @@ describe("ModelReasoningPicker", () => {
     ];
     expect(scrollers).toHaveLength(1);
 
-    const body = scrollers[0];
-    expect(body.className).toContain("overscroll-contain");
-    expect(body.contains(screen.getByRole("listbox", { name: "Models" }))).toBe(
-      true,
-    );
-    expect(body.contains(screen.getByText("High"))).toBe(true);
-
     const models = screen.getByRole("listbox", { name: "Models" });
-    expect(models.className).not.toContain("max-h-");
+    expect(scrollers[0]).toBe(models);
+    expect(models.className).toContain("overscroll-contain");
+    expect(models.className).toContain("max-h-64");
+    expect(models.contains(screen.getByText("High"))).toBe(false);
   });
 
   it("leaves compact drawer height and scrolling to the responsive shell", async () => {
@@ -525,9 +537,7 @@ describe("ModelReasoningPicker", () => {
       screen.getByRole("button", { name: "Provider, model and reasoning" }),
     );
 
-    expect(screen.getByRole("dialog").className).not.toContain(
-      "max-h-[var(--radix-popover-content-available-height)]",
-    );
+    expect(screen.getByRole("dialog").className).not.toContain("100dvh");
     expect(
       (await screen.findByRole("listbox", { name: "Models" })).className,
     ).not.toContain("max-h-");

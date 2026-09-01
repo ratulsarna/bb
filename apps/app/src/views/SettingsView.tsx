@@ -183,12 +183,10 @@ interface ExperimentsSettingsSectionProps {
   changelogPreviewEnabled: boolean;
   editMessagesEnabled: boolean;
   mobileAppEnabled: boolean;
-  providerSessionReapingEnabled: boolean;
   timelineWindowingEnabled: boolean;
   onChangelogPreviewEnabledChange: (enabled: boolean) => void;
   onEditMessagesEnabledChange: (enabled: boolean) => void;
   onMobileAppEnabledChange: (enabled: boolean) => void;
-  onProviderSessionReapingEnabledChange: (enabled: boolean) => void;
   onTimelineWindowingEnabledChange: (enabled: boolean) => void;
 }
 
@@ -531,8 +529,21 @@ const NAVIGATE_TO_THREAD_AFTER_CREATE_SETTING_LABEL =
 const RICH_TEXT_EDITING_SETTING_LABEL = "Markdown formatting in prompt box";
 const UNHANDLED_PROVIDER_EVENTS_SETTING_LABEL =
   "Show unhandled provider events";
-const STEER_ACTIVE_THREAD_ON_ENTER_SETTING_LABEL =
-  "Steer running threads on Enter";
+const FOLLOW_UP_BEHAVIOR_SETTING_LABEL = "Default thread followup behavior";
+const FOLLOW_UP_BEHAVIOR_OPTIONS = [
+  {
+    steerOnEnter: false,
+    label: "Queue",
+    description:
+      "Enter adds a follow-up. It runs when the agent stops. Command+Enter steers the run.",
+  },
+  {
+    steerOnEnter: true,
+    label: "Steer",
+    description:
+      "Enter steers the run now. Command+Enter adds a follow-up for later.",
+  },
+] as const;
 const STREAMER_MODE_SETTING_LABEL = "Streamer mode";
 
 export function AppearanceSettingsSection({
@@ -728,15 +739,56 @@ export function GeneralSettingsSection({
         </SettingsWithControl>
 
         <SettingsWithControl
-          label={STEER_ACTIVE_THREAD_ON_ENTER_SETTING_LABEL}
-          description="Use Enter to steer the current run and Command+Enter to queue a follow-up."
+          label={FOLLOW_UP_BEHAVIOR_SETTING_LABEL}
+          description="What Enter does in the prompt box while the thread runs."
         >
-          <Switch
-            checked={steerActiveThreadOnEnter}
-            disabled={steerActiveThreadOnEnterDisabled}
-            onCheckedChange={onSteerActiveThreadOnEnterChange}
-            aria-label={STEER_ACTIVE_THREAD_ON_ENTER_SETTING_LABEL}
-          />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={SETTINGS_DROPDOWN_TRIGGER_CLASS}
+                disabled={steerActiveThreadOnEnterDisabled}
+                aria-label={FOLLOW_UP_BEHAVIOR_SETTING_LABEL}
+              >
+                {steerActiveThreadOnEnter ? "Steer" : "Queue"}
+                <Icon
+                  name="ChevronDown"
+                  className="size-3.5 text-muted-foreground"
+                />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className={cn(SETTINGS_DROPDOWN_CONTENT_CLASS, "max-w-72")}
+            >
+              {FOLLOW_UP_BEHAVIOR_OPTIONS.map((option) => (
+                <DropdownMenuItem
+                  key={option.label}
+                  className="items-start"
+                  onSelect={() =>
+                    onSteerActiveThreadOnEnterChange(option.steerOnEnter)
+                  }
+                >
+                  <span className="min-w-0">
+                    <span className="block">{option.label}</span>
+                    <span className="block text-2xs leading-snug text-subtle-foreground">
+                      {option.description}
+                    </span>
+                  </span>
+                  <Icon
+                    name="Check"
+                    className={cn(
+                      "ml-auto",
+                      steerActiveThreadOnEnter !== option.steerOnEnter &&
+                        "opacity-0",
+                      COARSE_POINTER_ICON_SIZE_CLASS,
+                    )}
+                  />
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </SettingsWithControl>
 
         {desktopBrowserAvailable ? (
@@ -804,20 +856,16 @@ export function DebugSettingsSection({
 const CHANGELOG_PREVIEW_EXPERIMENT_LABEL = "Changelog preview";
 const EDIT_MESSAGES_EXPERIMENT_LABEL = "Edit messages";
 const MOBILE_APP_EXPERIMENT_LABEL = "Mobile app";
-const PROVIDER_SESSION_REAPING_EXPERIMENT_LABEL =
-  "Idle provider session release";
 const TIMELINE_WINDOWING_EXPERIMENT_LABEL = "Timeline windowing";
 export function ExperimentsSettingsSection({
   changelogPreviewEnabled,
   disabled,
   editMessagesEnabled,
   mobileAppEnabled,
-  providerSessionReapingEnabled,
   timelineWindowingEnabled,
   onChangelogPreviewEnabledChange,
   onEditMessagesEnabledChange,
   onMobileAppEnabledChange,
-  onProviderSessionReapingEnabledChange,
   onTimelineWindowingEnabledChange,
 }: ExperimentsSettingsSectionProps) {
   return (
@@ -859,18 +907,6 @@ export function ExperimentsSettingsSection({
             disabled={disabled}
             onCheckedChange={onMobileAppEnabledChange}
             aria-label={MOBILE_APP_EXPERIMENT_LABEL}
-          />
-        </SettingsWithControl>
-
-        <SettingsWithControl
-          label={PROVIDER_SESSION_REAPING_EXPERIMENT_LABEL}
-          description="Release restorable provider sessions after 30 idle minutes. A change can take up to five minutes."
-        >
-          <Switch
-            checked={providerSessionReapingEnabled}
-            disabled={disabled}
-            onCheckedChange={onProviderSessionReapingEnabledChange}
-            aria-label={PROVIDER_SESSION_REAPING_EXPERIMENT_LABEL}
           />
         </SettingsWithControl>
 
@@ -1029,13 +1065,6 @@ export function SettingsView() {
           updateExperimentsMutation.mutate({
             ...experiments,
             mobileApp: enabled,
-          })
-        }
-        providerSessionReapingEnabled={experiments.providerSessionReaping}
-        onProviderSessionReapingEnabledChange={(enabled) =>
-          updateExperimentsMutation.mutate({
-            ...experiments,
-            providerSessionReaping: enabled,
           })
         }
         timelineWindowingEnabled={experiments.timelineWindowing}

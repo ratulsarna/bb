@@ -438,6 +438,7 @@ describe("slow query index plans", () => {
       "item/backgroundTask/completed",
       "backgroundTask",
       "toolCall",
+      "item/started",
     ]);
     const details = queryPlanDetails({
       db,
@@ -450,6 +451,9 @@ describe("slow query index plans", () => {
     expect(
       details.match(/USING INDEX events_thread_type_item_kind_sequence_idx/gu),
     ).toHaveLength(2);
+    expect(details).toMatch(
+      /USING INDEX events_item_lifecycle_thread_item_sequence_idx/u,
+    );
     expect(details).toMatch(
       /USING COVERING INDEX events_background_task_thread_type_item_sequence_idx/u,
     );

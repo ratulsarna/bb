@@ -21,6 +21,12 @@ export type {
 } from "./projects.js";
 
 export {
+  getThreadConversationOutlineRecord,
+  upsertThreadConversationOutlineRecord,
+} from "./thread-conversation-outlines.js";
+export type { ThreadConversationOutlineRecord } from "./thread-conversation-outlines.js";
+
+export {
   createThreadSection,
   deleteThreadSection,
   getThreadSectionById,

@@ -47,15 +47,6 @@ export type HostDaemonLoadedEnvironment = z.infer<
   typeof hostDaemonLoadedEnvironmentSchema
 >;
 
-export const hostDaemonRuntimePolicySchema = z
-  .object({
-    providerSessionReaping: z.boolean(),
-  })
-  .strict();
-export type HostDaemonRuntimePolicy = z.infer<
-  typeof hostDaemonRuntimePolicySchema
->;
-
 const hostDaemonWatchSetWorkspaceTargetSchema = z
   .object({
     environmentId: z.string().min(1),
@@ -424,7 +415,7 @@ const hostDaemonOnlineRpcResponseSuccessSchema = z.discriminatedUnion(
     onlineRpcResponseSuccessSchemaFor("host.global_skills_status"),
     onlineRpcResponseSuccessSchemaFor("host.file_metadata"),
     onlineRpcResponseSuccessSchemaFor("host.list_branch_options"),
-    onlineRpcResponseSuccessSchemaFor("host.list_branches"),
+    onlineRpcResponseSuccessSchemaFor("host.inspect_git_source"),
     onlineRpcResponseSuccessSchemaFor("host.read_file"),
     onlineRpcResponseSuccessSchemaFor("host.read_file_relative"),
     onlineRpcResponseSuccessSchemaFor("host.write_file"),
@@ -796,9 +787,6 @@ export const hostDaemonSkillTreeSchema = z
 export type HostDaemonSkillTree = z.infer<typeof hostDaemonSkillTreeSchema>;
 
 export type HostDaemonInternalSchema = {
-  "/runtime-policy": {
-    $get: Endpoint<Record<never, never>, HostDaemonRuntimePolicy, 200>;
-  };
   "/skills/tree/:hash": {
     $get: Endpoint<Record<never, never>, HostDaemonSkillTree, 200>;
   };

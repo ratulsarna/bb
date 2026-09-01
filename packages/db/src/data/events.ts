@@ -2410,6 +2410,31 @@ function storedConversationOutlineStructuralWhere(threadId: string): SQL {
   )!;
 }
 
+function storedConversationOutlineStructuralEventRowFields() {
+  return {
+    ...storedEventRowFields,
+    data: sql<string>`CASE ${events.itemKind}
+      WHEN 'toolCall' THEN json_remove(
+        ${events.data},
+        '$.item.arguments',
+        '$.item.result',
+        '$.item.error',
+        '$.item.durationMs',
+        '$.item.truncation'
+      )
+      WHEN 'backgroundTask' THEN json_remove(
+        ${events.data},
+        '$.item.workflow',
+        '$.item.usage',
+        '$.item.summary',
+        '$.item.error',
+        '$.item.outputFile'
+      )
+      ELSE ${events.data}
+    END`,
+  };
+}
+
 export function getLatestStoredConversationOutlineSequence(
   db: DbConnection,
   args: GetLatestStoredConversationOutlineSequenceArgs,
@@ -2445,11 +2470,30 @@ export function listStoredConversationOutlineEventRows(
     .from(events)
     .where(storedConversationOutlineCompletedWhere(args.threadId));
   const structuralRows = db
-    .select(storedEventRowFields)
+    .select(storedConversationOutlineStructuralEventRowFields())
     .from(events)
     .where(
       and(
         storedConversationOutlineStructuralWhere(args.threadId),
+        or(
+          eq(events.type, "item/started"),
+          sql`json_extract(${events.data}, '$.item.status') <> 'completed'`,
+          sql`NOT EXISTS (
+            SELECT 1
+            FROM events AS earlier_structural_start
+              INDEXED BY events_item_lifecycle_thread_item_sequence_idx
+            WHERE earlier_structural_start.thread_id = ${events.threadId}
+              AND earlier_structural_start.item_id = ${events.itemId}
+              AND earlier_structural_start.type IN (
+                'item/started',
+                'item/completed',
+                'item/backgroundTask/completed'
+              )
+              AND earlier_structural_start.type = 'item/started'
+              AND earlier_structural_start.item_kind = ${events.itemKind}
+              AND earlier_structural_start.sequence < ${events.sequence}
+          )`,
+        ),
         isNotSupersededBackgroundTaskProgress,
       ),
     );

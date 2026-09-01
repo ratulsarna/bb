@@ -114,6 +114,7 @@ interface NewThreadComposerPromptOptions {
   id?: string;
   placeholder?: string;
   autoFocus?: boolean;
+  allowSoftKeyboardAutoFocus?: boolean;
   banner?: ReactNode;
   header?: ReactNode;
   blockedReason?: string;
@@ -645,6 +646,7 @@ export function NewThreadComposer({
   } = useScopedBranchSelection({
     environmentValue: effectiveEnvironmentValue,
     projectId,
+    selectionScope,
   });
   const selectedBranch =
     pickedBranch ??
@@ -1169,12 +1171,12 @@ export function NewThreadComposer({
     },
     [serviceTier, setServiceTier, snapshotDraftBeforeOptionChange],
   );
-  const refetchBranches = branchesQuery.refetch;
+  const refreshBranchesFromRemote = branchesQuery.refreshFromRemote;
   const handleBranchOpenChange = useCallback(
     (open: boolean) => {
-      if (open) void refetchBranches();
+      if (open) void refreshBranchesFromRemote().catch(() => undefined);
     },
-    [refetchBranches],
+    [refreshBranchesFromRemote],
   );
   const handleWorktreeChange = useCallback(
     (environmentId: string) => {
@@ -1200,6 +1202,7 @@ export function NewThreadComposer({
           disabledReason={disabledReason ?? undefined}
           placeholder={options.placeholder}
           autoFocus={options.autoFocus}
+          allowSoftKeyboardAutoFocus={options.allowSoftKeyboardAutoFocus}
           pluginComposerHost={options.pluginComposerHost ?? pluginComposerHost}
           textEffects={options.textEffects ?? textEffects}
           history={{
@@ -1211,7 +1214,7 @@ export function NewThreadComposer({
           typeahead={{
             mention: {
               triggers: promptMentions.triggers,
-              suggestions: promptMentions.suggestions,
+              results: promptMentions.results,
               isLoading: promptMentions.isLoading,
               isError: promptMentions.isError,
               onQueryChange: promptMentions.setQuery,
