@@ -90,6 +90,8 @@ import {
   getCodexProviderUsage,
 } from "./provider-maintenance.js";
 
+type BbThreadResumeParams = ThreadResumeParams & { excludeTurns: boolean };
+
 const codexBridgeCommandSchema = z.discriminatedUnion("method", [
   z.object({
     method: z.literal("initialize"),
@@ -930,7 +932,10 @@ async function constructThreadSession(
     };
 
     let method: string;
-    let params: BbThreadStartParams | ThreadResumeParams | BbThreadForkParams;
+    let params:
+      | BbThreadStartParams
+      | BbThreadResumeParams
+      | BbThreadForkParams;
     switch (args.request.kind) {
       case "start": {
         method = "thread/start";
@@ -944,8 +949,9 @@ async function constructThreadSession(
       }
       case "resume": {
         method = "thread/resume";
-        const resumeParams: ThreadResumeParams = {
+        const resumeParams: BbThreadResumeParams = {
           threadId: args.request.providerThreadId,
+          excludeTurns: true,
           ...sharedConstructionParams,
         };
         params = resumeParams;

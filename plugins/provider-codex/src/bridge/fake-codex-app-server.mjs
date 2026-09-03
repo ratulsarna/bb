@@ -143,6 +143,7 @@ function runScriptedTurn(threadId, presetTurnId) {
 const scriptPath = process.argv[2];
 const script = scriptPath ? JSON.parse(readFileSync(scriptPath, "utf8")) : null;
 const scriptedTurns = script?.turns ?? null;
+const requestLogPath = script?.requestLogPath ?? null;
 const modelListFailOnceMarkerPath = script?.modelListFailOnceMarkerPath ?? null;
 /**
  * `archiveStatePath`: a JSON file of archived thread ids shared by every fake
@@ -311,6 +312,9 @@ function replayLastTurnUsage(threadId) {
 async function handleRequest(message) {
   const { id, method } = message;
   const params = message.params ?? {};
+  if (requestLogPath !== null) {
+    appendFileSync(requestLogPath, `${JSON.stringify({ method, params })}\n`);
+  }
   switch (method) {
     case "initialize":
       respond(id, {});
