@@ -23,6 +23,51 @@ The builtin Custom instructions plugin adds a multiline editor under Settings
 → Custom instructions. Saved text is persisted on this bb host and included in
 agent task instructions; blank text contributes nothing.
 
+The builtin Account Pool plugin is disabled on fresh installations. It stores
+Claude account tokens in per-account 0600 secret files and proxies Anthropic
+Messages API requests through the bb server. Enable it and add an account:
+
+```
+bb plugin enable account-pool
+bb pool account add --provider claude --login
+printf '%s\n' "$CLAUDE_AUTH_CODE" | bb pool account login-complete --session <id> --code-stdin
+bb pool account add --provider claude --import
+printf '%s\n' "$ANTHROPIC_API_KEY" | bb pool account add --provider claude --api-key-stdin [--label <text>] [--priority <n>]
+bb pool account add --provider claude --api-key <key> [--label <text>] [--priority <n>]
+bb pool account list [--json]
+bb pool account remove <id>
+bb pool account enable <id>
+bb pool account disable <id>
+bb pool status [--json]
+bb pool token rotate --machine <id-or-name>
+bb pool bypass <thread-id> [--off]
+```
+
+`--login` starts a ten-minute in-memory PKCE session, prints the Claude browser
+sign-in URL and session ID, then exits. After sign-in, pipe the manual callback
+code to `account login-complete` with that session ID. The browser does not need
+to run on the bb server machine, and neither the code nor account tokens enter
+process arguments. The same flow is available in the plugin settings page
+through the **Sign in to Claude** button.
+
+The hub starts immediately, even before an account is configured, so newly
+added or enabled accounts are available without a plugin reload. With an
+enabled account whose secret file remains readable and valid, the plugin
+contributes its server route, a distinct secret token, and
+`ENABLE_TOOL_SEARCH=true` (tool search stays on through the hub) to Claude
+Code sessions on every host. Tokens are never printed. `status` prunes tokens for
+unenrolled machines and shows token timestamps plus recently routed threads
+whose machines need a local Claude login before the pool can be disabled
+safely. Rotation keeps the prior token valid for ten minutes. Agents should use
+`--api-key-stdin`, which reads exactly one non-empty key from piped standard
+input. The compatibility form `--api-key <key>` exposes the key in process
+arguments, shell history, and agent transcripts. Prefer `--import` when Claude
+Code is already signed in. JSON account status reports rejected upstream
+bucket resets under `bucketExhaustion`; this is diagnostic status and does not
+affect selection.
+The `upstreamBaseUrl` setting exists for tests and QA and defaults to
+`https://api.anthropic.com`; `switchThreshold` defaults to `0.98`.
+
 The builtin Keep Awake plugin prevents macOS idle sleep while bb is running.
 Its settings page lets you target all hosts or selected hosts. The CLI
 equivalents are:
@@ -367,8 +412,11 @@ bb stores the last catalog that it validated. An invalid manifest keeps that
 catalog. The app also includes a seed snapshot for the first offline start. A
 refresh changes discovery data and icons only. It never installs, updates, or
 runs plugin code. The server fetches and serves entry icons. The detail page
-loads screenshots from the URLs that the marketplace declares. An install
-uses the normal git or npm source pipeline. bb records the source marketplace.
+loads screenshots from the URLs that the marketplace declares. An entry can
+also carry a long-form markdown description. The detail page renders it below
+the short description, and `bb plugin search --json` returns it as `overview`.
+An install uses the normal git or npm source pipeline. bb records the source
+marketplace.
 
 The BB Community marketplace also publishes install counts beside its
 manifest, at https://getbb.app/marketplace/v1/stats.json. bb re-reads that

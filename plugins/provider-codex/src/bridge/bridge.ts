@@ -375,6 +375,8 @@ interface CodexBridgeSession {
   pendingPreIdentityDeltas: ThreadDelta[];
   rebuildBeforeNextTurnReason: string | null;
   closing: boolean;
+  previousChildExit: Promise<void> | null;
+  releasePromise: Promise<void> | null;
 }
 
 const sessionsByBbThreadId = new Map<string, CodexBridgeSession>();
@@ -402,13 +404,26 @@ function currentSession(
   return session;
 }
 
-function releaseSession(session: CodexBridgeSession): void {
+function releaseSession(session: CodexBridgeSession): Promise<void> {
+  if (session.releasePromise !== null) {
+    return session.releasePromise;
+  }
   session.closing = true;
   if (sessionsByBbThreadId.get(session.bbThreadId) === session) {
     sessionsByBbThreadId.delete(session.bbThreadId);
   }
-  session.connection?.kill();
+  const previousChildExit = session.previousChildExit;
+  session.previousChildExit = null;
+  const currentChildExit = session.connection?.kill() ?? Promise.resolve();
   session.connection = null;
+  const releasePromise =
+    previousChildExit === null
+      ? currentChildExit
+      : Promise.all([previousChildExit, currentChildExit]).then(
+          () => undefined,
+        );
+  session.releasePromise = releasePromise;
+  return releasePromise;
 }
 
 const codexProviderOptionsSchema = z
@@ -846,10 +861,6 @@ async function constructThreadSession(
   args: ConstructThreadSessionArgs,
 ): Promise<ConstructedCodexSession> {
   const existing = sessionsByBbThreadId.get(args.threadId);
-  if (existing) {
-    releaseSession(existing);
-  }
-
   const decoded = decodeCodexOptions(args.options);
   sessionSerialCounter += 1;
   const serial = sessionSerialCounter;
@@ -887,8 +898,25 @@ async function constructThreadSession(
     pendingPreIdentityDeltas: [],
     rebuildBeforeNextTurnReason: null,
     closing: false,
+    previousChildExit: null,
+    releasePromise: null,
   };
   sessionsByBbThreadId.set(args.threadId, session);
+  if (existing) {
+    const previousChildExit = releaseSession(existing);
+    session.previousChildExit = previousChildExit;
+    await previousChildExit;
+    if (session.previousChildExit === previousChildExit) {
+      session.previousChildExit = null;
+    }
+    if (session.closing) {
+      throw new CodexSessionReleasedError(
+        new Error(
+          "codex session was released while waiting for the previous app-server to exit",
+        ),
+      );
+    }
+  }
   if (args.request.kind === "resume") {
     announceSessionIdentity(session, args.request.providerThreadId);
   }
@@ -932,10 +960,7 @@ async function constructThreadSession(
     };
 
     let method: string;
-    let params:
-      | BbThreadStartParams
-      | BbThreadResumeParams
-      | BbThreadForkParams;
+    let params: BbThreadStartParams | BbThreadResumeParams | BbThreadForkParams;
     switch (args.request.kind) {
       case "start": {
         method = "thread/start";
@@ -995,7 +1020,7 @@ async function constructThreadSession(
       sessionsByBbThreadId.delete(args.threadId);
     }
     session.closing = true;
-    connection.kill();
+    await connection.kill();
     throw released ? new CodexSessionReleasedError(error) : error;
   }
 }
@@ -1030,6 +1055,8 @@ function registerResumableSession(session: CodexBridgeSession): void {
     pendingPreIdentityDeltas: [],
     rebuildBeforeNextTurnReason: null,
     closing: false,
+    previousChildExit: null,
+    releasePromise: null,
   });
 }
 
@@ -1091,7 +1118,7 @@ async function withMaintenanceChild<T>(
     return await fn(connection);
   } finally {
     maintenanceConnections.delete(connection);
-    connection.kill();
+    await connection.kill();
   }
 }
 
@@ -1127,7 +1154,7 @@ async function getModelListConnection(): Promise<CodexAppServerConnection> {
       return connection;
     } catch (error) {
       maintenanceConnections.delete(connection);
-      connection.kill();
+      await connection.kill();
       throw error;
     }
   })();
@@ -1496,7 +1523,7 @@ async function handleThreadStop(
 
   if (params.intent === "release") {
     if (session) {
-      releaseSession(session);
+      await releaseSession(session);
     }
     sendResult(id, { ok: true });
     return;
@@ -1552,7 +1579,7 @@ async function handleThreadStop(
       providerThreadId: session.codexThreadId,
     }),
   );
-  releaseSession(session);
+  await releaseSession(session);
   sendResult(id, { ok: true });
 }
 
@@ -1600,11 +1627,11 @@ async function handleThreadMaintenance(
     alreadyInRequestedState?: RegExp;
   },
 ): Promise<void> {
-  const settle = (): void => {
+  const settle = async (): Promise<void> => {
     if (options?.releaseAfter) {
       const session = sessionsByBbThreadId.get(params.threadId);
       if (session) {
-        releaseSession(session);
+        await releaseSession(session);
       }
     }
     sendResult(id, { ok: true });
@@ -1613,13 +1640,13 @@ async function handleThreadMaintenance(
     await withChildForThread(params.threadId, (connection) =>
       sendMaintenanceRequestWithRetries(connection, request),
     );
-    settle();
+    await settle();
   } catch (error) {
     if (
       error instanceof Error &&
       options?.alreadyInRequestedState?.test(error.message) === true
     ) {
-      settle();
+      await settle();
       return;
     }
     rejectWithCodexError(id, error);

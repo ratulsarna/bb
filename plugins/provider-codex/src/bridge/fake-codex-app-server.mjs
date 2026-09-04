@@ -169,6 +169,7 @@ const archivedThreadIds = new Set();
 const processLogPath = script?.processLogPath ?? null;
 /** `startDelayMs`: answer `thread/start` only after this many milliseconds. */
 const startDelayMs = script?.startDelayMs ?? 0;
+const sigtermDelayMs = script?.sigtermDelayMs ?? 0;
 
 function logProcessStep(step) {
   if (processLogPath === null) {
@@ -178,9 +179,17 @@ function logProcessStep(step) {
 }
 
 logProcessStep("spawn");
-process.on("SIGTERM", () => {
+function exitCleanly() {
   logProcessStep("exit");
   process.exit(0);
+}
+
+process.on("SIGTERM", () => {
+  if (sigtermDelayMs > 0) {
+    setTimeout(exitCleanly, sigtermDelayMs);
+    return;
+  }
+  exitCleanly();
 });
 let scriptedTurnIndex = 0;
 
@@ -599,6 +608,5 @@ stdinLines.on("line", (line) => {
   }
 });
 stdinLines.on("close", () => {
-  logProcessStep("exit");
-  process.exit(0);
+  exitCleanly();
 });

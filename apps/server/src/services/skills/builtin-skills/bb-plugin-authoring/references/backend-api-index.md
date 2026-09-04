@@ -149,6 +149,10 @@ Read the installed declarations for exact current signatures.
 - `PluginProviderCapabilities`
 - `PluginProviderComposerAction`
 - `PluginProviderDeclaration`
+- `ExperimentalPluginProviderEnvContext`
+- `ExperimentalPluginProviderEnvEntry`
+- `ExperimentalPluginProviderEnvHealthContext`
+- `ExperimentalPluginProviderEnvHealth`
 - `PluginProviderExtensionKindDeclaration`
 - `PluginProviderFallbackModel`
 - `PluginProviderIconRegistration`
@@ -290,6 +294,8 @@ Read the installed declarations for exact current signatures.
 - `createFakePluginHost`
 - `createFakeSdk`
 - `experimental_scanPublicSdkOnly`
+- `makeMessageDispatchHookContext`
+- `makePluginAgentConfigurationContext`
 - `makeQueueEntry`
 - `makeThreadResponse`
 - `makeTurnFailedEvent`

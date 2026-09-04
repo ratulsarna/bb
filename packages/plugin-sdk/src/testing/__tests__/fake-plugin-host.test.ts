@@ -12,7 +12,60 @@ import {
   PLUGIN_AGENT_STATUS_LABEL_MAX_CHARS,
   RESERVED_BB_CLI_COMMANDS,
 } from "../../internal/host-policy.js";
-import { createFakePluginHost, makeThreadResponse } from "../index.js";
+import {
+  createFakePluginHost,
+  makeMessageDispatchHookContext,
+  makePluginAgentConfigurationContext,
+  makeThreadResponse,
+} from "../index.js";
+
+describe("fixtures", () => {
+  it("derives linked dispatch identities unless explicitly overridden", () => {
+    const inherited = makeMessageDispatchHookContext({
+      project: { id: "project-target" },
+      environment: { id: "environment-target" },
+      host: { id: "host-target" },
+    });
+    const explicit = makeMessageDispatchHookContext({
+      project: { id: "project-target" },
+      environment: {
+        id: "environment-target",
+        projectId: "environment-project-explicit",
+        hostId: "environment-host-explicit",
+      },
+      host: { id: "host-target" },
+      thread: {
+        projectId: "thread-project-explicit",
+        environmentId: "thread-environment-explicit",
+      },
+    });
+
+    expect(inherited.thread.projectId).toBe("project-target");
+    expect(inherited.thread.environmentId).toBe("environment-target");
+    expect(inherited.environment?.projectId).toBe("project-target");
+    expect(inherited.environment?.hostId).toBe("host-target");
+    expect(explicit.thread.projectId).toBe("thread-project-explicit");
+    expect(explicit.thread.environmentId).toBe("thread-environment-explicit");
+    expect(explicit.environment?.projectId).toBe(
+      "environment-project-explicit",
+    );
+    expect(explicit.environment?.hostId).toBe("environment-host-explicit");
+  });
+
+  it("keeps queued messages on the dispatch context thread by default", () => {
+    const inherited = makeMessageDispatchHookContext({
+      thread: { id: "thread-target" },
+      queuedMessage: { id: "queued-target" },
+    });
+    const explicit = makeMessageDispatchHookContext({
+      thread: { id: "thread-target" },
+      queuedMessage: { threadId: "thread-explicit" },
+    });
+
+    expect(inherited.queuedMessage?.threadId).toBe("thread-target");
+    expect(explicit.queuedMessage?.threadId).toBe("thread-explicit");
+  });
+});
 
 describe("server", () => {
   it("serves the configured public app URL and defaults to null", () => {
@@ -875,34 +928,13 @@ describe("sdk", () => {
 });
 
 describe("agent tools", () => {
-  const configurationContext = {
-    thread: {
-      id: "thread-test",
-      title: null,
-      parentThreadId: null,
-      sourceThreadId: null,
-    },
-    project: {
-      id: "project-test",
-      kind: "standard",
-      name: "Test",
-      gitRemoteUrl: null,
-    },
-    environment: {
-      id: "environment-test",
-      name: null,
-      path: "/tmp/test",
-      workspaceProvisionType: "unmanaged",
-      branchName: null,
-    },
-    host: { id: "host-test", name: "Test host" },
+  const configurationContext = makePluginAgentConfigurationContext({
     provider: {
       id: "codex",
       model: "gpt-5",
       capabilities: { supportsNativeUserQuestion: false },
     },
-    origin: { kind: null, pluginId: null },
-  } satisfies PluginAgentConfigurationContext;
+  });
 
   it("validates zod parameters per call and executes with a default context", async () => {
     const { bb, harness } = createFakePluginHost();
@@ -1172,16 +1204,14 @@ describe("agent tools", () => {
     });
 
     const alpha = await harness.resolveAgentConfiguration(configurationContext);
-    const betaContext: PluginAgentConfigurationContext = {
-      ...configurationContext,
-      thread: { ...configurationContext.thread, id: "thread-beta" },
+    const betaContext = makePluginAgentConfigurationContext({
+      thread: { id: "thread-beta" },
       host: { id: "host-beta", name: "Beta host" },
       provider: {
         id: "claude-code",
         model: "claude-opus",
-        capabilities: { supportsNativeUserQuestion: false },
       },
-    };
+    });
     const beta = await harness.resolveAgentConfiguration(betaContext);
 
     expect(alpha.tools.map((tool) => tool.name)).toEqual(["alpha_tool"]);
@@ -1542,6 +1572,109 @@ describe("providers.register", () => {
     expect(harness.registrations.providerRegistrations).toEqual([]);
     expect(() => bb.providers.register(agentDeclaration())).toThrow(
       "used a stale API handle",
+    );
+  });
+});
+
+describe("providers.experimental_contributeEnv", () => {
+  it("round trips validated entries with the provider context", async () => {
+    const { bb, harness } = createFakePluginHost({ pluginId: "auth-proxy" });
+    const contexts: unknown[] = [];
+    bb.providers.experimental_contributeEnv("claude-code", (context) => {
+      contexts.push(context);
+      return [
+        {
+          name: "PLUGIN_API_URL",
+          value: { serverPath: "/plugins/auth-proxy/api" },
+          reason: "Route provider traffic through the plugin",
+          secret: true,
+        },
+      ];
+    });
+
+    await expect(
+      harness.behavior.resolveProviderEnv("claude-code", {
+        threadId: "thread-1",
+        projectId: "project-1",
+        hostId: "host-1",
+      }),
+    ).resolves.toEqual([
+      {
+        name: "PLUGIN_API_URL",
+        value: { serverPath: "/plugins/auth-proxy/api" },
+        reason: "Route provider traffic through the plugin",
+        secret: true,
+      },
+    ]);
+    expect(contexts).toEqual([
+      {
+        threadId: "thread-1",
+        projectId: "project-1",
+        hostId: "host-1",
+      },
+    ]);
+  });
+
+  it("resolves environment-backed provider health only beside an env resolver", async () => {
+    const first = createFakePluginHost();
+    first.bb.providers.experimental_contributeEnvHealth("claude-code", () => ({
+      label: "Proxied",
+      statusMessage: "Credentials are provided by a proxy.",
+    }));
+    await expect(
+      first.harness.behavior.resolveProviderEnvHealth("claude-code", {
+        hostId: "host-one",
+      }),
+    ).resolves.toBeNull();
+
+    const second = createFakePluginHost();
+    second.bb.providers.experimental_contributeEnv("claude-code", () => []);
+    second.bb.providers.experimental_contributeEnvHealth(
+      "claude-code",
+      ({ hostId }) =>
+        hostId === "host-one"
+          ? {
+              label: "Proxied",
+              statusMessage: "Credentials are provided by a proxy.",
+            }
+          : null,
+    );
+    await expect(
+      second.harness.behavior.resolveProviderEnvHealth("claude-code", {
+        hostId: "host-one",
+      }),
+    ).resolves.toEqual({
+      label: "Proxied",
+      statusMessage: "Credentials are provided by a proxy.",
+    });
+  });
+
+  it("fails a malformed resolver closed and rejects duplicate registration", async () => {
+    const { bb, harness } = createFakePluginHost();
+    bb.providers.experimental_contributeEnv("codex", () => [
+      {
+        name: "lowercase",
+        value: "hidden",
+        reason: "invalid name",
+        secret: false,
+      },
+    ]);
+    expect(() =>
+      bb.providers.experimental_contributeEnv("codex", () => []),
+    ).toThrow("already registered");
+
+    await expect(
+      harness.behavior.resolveProviderEnv("codex", {
+        threadId: "thread-1",
+        projectId: "project-1",
+        hostId: "host-1",
+      }),
+    ).resolves.toEqual([]);
+    expect(harness.inspection.logEntries.at(-1)).toMatchObject({
+      level: "warn",
+    });
+    expect(JSON.stringify(harness.inspection.logEntries)).not.toContain(
+      "hidden",
     );
   });
 });
