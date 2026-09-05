@@ -13,6 +13,7 @@ import type {
   ThreadTurnInitiator,
   TurnRequestTarget,
 } from "@bb/domain";
+import { isStandaloneBuiltinClearCommand } from "@bb/domain";
 import type { SendMessageRequest } from "@bb/server-contract";
 import { renderTemplate } from "@bb/templates";
 import type {
@@ -63,6 +64,8 @@ import {
 } from "../lib/lifecycle-api-errors.js";
 import { validatePromptAttachmentReferences } from "../projects/attachments.js";
 import { resolvePluginMentionContextInputs } from "../plugins/plugin-mentions.js";
+import { clearThreadContext } from "./thread-context-clear.js";
+import { withThreadSendGuard } from "./thread-context-mutation-guard.js";
 import {
   prependDeferredFirstTurnContext,
   requireDeferredFirstTurnContextCurrent,
@@ -397,6 +400,22 @@ function appendAndQueueSendThreadMessageInTransaction({
 }
 
 export async function sendThreadMessage(
+  deps: LoggedPendingInteractionWorkSessionDeps,
+  args: SendThreadMessageArgs,
+): Promise<void> {
+  if (isStandaloneBuiltinClearCommand(args.payload.input)) {
+    await clearThreadContext(deps, {
+      environment: args.environment,
+      thread: args.thread,
+    });
+    return;
+  }
+  return withThreadSendGuard(args.thread.id, () =>
+    sendThreadMessageWithoutContextClear(deps, args),
+  );
+}
+
+async function sendThreadMessageWithoutContextClear(
   deps: LoggedPendingInteractionWorkSessionDeps,
   args: SendThreadMessageArgs,
 ): Promise<void> {

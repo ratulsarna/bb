@@ -113,7 +113,10 @@ export function refineTurnRequestRetryMarker(
   data: Pick<TurnRequestEventData, "retryOfRequestId" | "retryAttempt">,
   ctx: z.RefinementCtx,
 ): void {
-  if ((data.retryOfRequestId === undefined) !== (data.retryAttempt === undefined)) {
+  if (
+    (data.retryOfRequestId === undefined) !==
+    (data.retryAttempt === undefined)
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message:
@@ -184,6 +187,8 @@ export const ownershipChangeOperationMetadataSchema = z.object({
 export type OwnershipChangeOperationMetadata = z.infer<
   typeof ownershipChangeOperationMetadataSchema
 >;
+
+export const THREAD_CONTEXT_CLEAR_OPERATION = "context_clear";
 
 export const systemOperationEventDataSchema = z.object({
   operation: z.string(),

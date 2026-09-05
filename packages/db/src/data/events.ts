@@ -32,6 +32,7 @@ import {
   LOCAL_BASH_TASK_TYPE,
   LOCAL_SUBAGENT_TASK_TYPE,
   LOCAL_WORKFLOW_TASK_TYPE,
+  THREAD_CONTEXT_CLEAR_OPERATION,
   clientTurnRequestIdSchema,
   getThreadEventScopeTurnId,
   parseStoredThreadEvent,
@@ -1125,15 +1126,18 @@ export interface ListStoredTurnStartedKeysArgs {
 export interface ListRecentStoredEventRowsArgs {
   excludedTypes?: readonly ThreadEventType[];
   maxInlineOutputChars: InlineOutputCharLimit;
+  sequenceStart: number;
   threadId: string;
 }
 
 export interface ListStoredConversationOutlineEventRowsArgs {
+  sequenceStart: number;
   threadId: string;
 }
 
-export type GetLatestStoredConversationOutlineSequenceArgs =
-  ListStoredConversationOutlineEventRowsArgs;
+export interface GetLatestStoredConversationOutlineSequenceArgs {
+  threadId: string;
+}
 
 export interface ListStoredTimelineWindowEventRowsArgs {
   beforeSequence?: number;
@@ -1164,6 +1168,12 @@ export type StoredTimelineWindowByteBudgetFloor =
     };
 
 export interface ListContextWindowUsageRowsArgs {
+  sequenceStart: number;
+  threadId: string;
+}
+
+export interface GetLatestCompletedThreadContextClearSequenceArgs {
+  atOrBeforeSequence?: number;
   threadId: string;
 }
 
@@ -2461,6 +2471,7 @@ export function listRecentStoredEventRows(
 ): StoredEventRow[] {
   const conditions: SQL[] = [
     eq(events.threadId, args.threadId),
+    gte(events.sequence, args.sequenceStart),
     isNotSupersededBackgroundTaskProgress,
   ];
   if (args.excludedTypes && args.excludedTypes.length > 0) {
@@ -2502,24 +2513,36 @@ const conversationOutlineStructuralLifecycleTypes = [
   "item/backgroundTask/completed",
 ] satisfies ThreadEventType[];
 
-function storedConversationOutlineLifecycleWhere(threadId: string): SQL {
+function storedConversationOutlineLifecycleWhere(
+  threadId: string,
+  sequenceStart: number,
+): SQL {
   return and(
     eq(events.threadId, threadId),
+    gte(events.sequence, sequenceStart),
     inArray(events.type, conversationOutlineLifecycleTypes),
   )!;
 }
 
-function storedConversationOutlineCompletedWhere(threadId: string): SQL {
+function storedConversationOutlineCompletedWhere(
+  threadId: string,
+  sequenceStart: number,
+): SQL {
   return and(
     eq(events.threadId, threadId),
+    gte(events.sequence, sequenceStart),
     eq(events.type, "item/completed"),
     inArray(events.itemKind, conversationOutlineItemKinds),
   )!;
 }
 
-function storedConversationOutlineStructuralWhere(threadId: string): SQL {
+function storedConversationOutlineStructuralWhere(
+  threadId: string,
+  sequenceStart: number,
+): SQL {
   return and(
     eq(events.threadId, threadId),
+    gte(events.sequence, sequenceStart),
     inArray(events.type, conversationOutlineStructuralLifecycleTypes),
     inArray(events.itemKind, conversationOutlineStructuralItemKinds),
   )!;
@@ -2557,17 +2580,28 @@ export function getLatestStoredConversationOutlineSequence(
   const lifecycle = db
     .select({ sequence: max(events.sequence) })
     .from(events)
-    .where(storedConversationOutlineLifecycleWhere(args.threadId));
+    .where(storedConversationOutlineLifecycleWhere(args.threadId, 0));
   const completedConversation = db
     .select({ sequence: max(events.sequence) })
     .from(events)
-    .where(storedConversationOutlineCompletedWhere(args.threadId));
+    .where(storedConversationOutlineCompletedWhere(args.threadId, 0));
   const structural = db
     .select({ sequence: max(events.sequence) })
     .from(events)
-    .where(storedConversationOutlineStructuralWhere(args.threadId));
+    .where(storedConversationOutlineStructuralWhere(args.threadId, 0));
+  const contextClear = db
+    .select({ sequence: max(events.sequence) })
+    .from(events)
+    .where(
+      and(
+        eq(events.threadId, args.threadId),
+        eq(events.type, "system/operation"),
+        sql`json_extract(${events.data}, '$.operation') = ${THREAD_CONTEXT_CLEAR_OPERATION}`,
+        sql`json_extract(${events.data}, '$.status') = 'completed'`,
+      ),
+    );
 
-  return unionAll(lifecycle, completedConversation, structural)
+  return unionAll(lifecycle, completedConversation, structural, contextClear)
     .all()
     .reduce((latest, row) => Math.max(latest, row.sequence ?? 0), 0);
 }
@@ -2579,17 +2613,30 @@ export function listStoredConversationOutlineEventRows(
   const lifecycleRows = db
     .select(storedEventRowFields)
     .from(events)
-    .where(storedConversationOutlineLifecycleWhere(args.threadId));
+    .where(
+      storedConversationOutlineLifecycleWhere(
+        args.threadId,
+        args.sequenceStart,
+      ),
+    );
   const completedConversationRows = db
     .select(storedEventRowFields)
     .from(events)
-    .where(storedConversationOutlineCompletedWhere(args.threadId));
+    .where(
+      storedConversationOutlineCompletedWhere(
+        args.threadId,
+        args.sequenceStart,
+      ),
+    );
   const structuralRows = db
     .select(storedConversationOutlineStructuralEventRowFields())
     .from(events)
     .where(
       and(
-        storedConversationOutlineStructuralWhere(args.threadId),
+        storedConversationOutlineStructuralWhere(
+          args.threadId,
+          args.sequenceStart,
+        ),
         or(
           eq(events.type, "item/started"),
           sql`json_extract(${events.data}, '$.item.status') <> 'completed'`,
@@ -2628,7 +2675,10 @@ export interface StandardTimelineSegmentAnchorRow {
 
 function timelineSegmentAnchorSelection() {
   return {
-    rowId: sql<string>`${events.threadId} || ':user-seed:' || ${events.sequence}`,
+    rowId: sql<string>`CASE
+      WHEN ${events.type} = 'system/operation' THEN ${events.id}
+      ELSE ${events.threadId} || ':user-seed:' || ${events.sequence}
+    END`,
     sequence: events.sequence,
   };
 }
@@ -2636,25 +2686,34 @@ function timelineSegmentAnchorSelection() {
 function timelineSegmentAnchorConditions(threadId: string): SQL | undefined {
   return and(
     eq(events.threadId, threadId),
-    eq(events.type, "client/turn/requested"),
-    sql`(
-      COALESCE(json_extract(${events.data}, '$.target.kind'), 'new-turn')
-        IN ('thread-start', 'new-turn')
-      OR (
-        json_extract(${events.data}, '$.target.kind') IN ('auto', 'steer')
-        AND json_extract(${events.data}, '$.target.expectedTurnId') IS NULL
-      )
-    )`,
-    sql`EXISTS (
-      SELECT 1
-      FROM json_each(${events.data}, '$.input') AS input_part
-      WHERE (
-        json_extract(input_part.value, '$.type') = 'text'
-        AND COALESCE(json_extract(input_part.value, '$.text'), '') <> ''
-      )
-      OR json_extract(input_part.value, '$.type')
-        IN ('image', 'localImage', 'localFile')
-    )`,
+    or(
+      and(
+        eq(events.type, "client/turn/requested"),
+        sql`(
+          COALESCE(json_extract(${events.data}, '$.target.kind'), 'new-turn')
+            IN ('thread-start', 'new-turn')
+          OR (
+            json_extract(${events.data}, '$.target.kind') IN ('auto', 'steer')
+            AND json_extract(${events.data}, '$.target.expectedTurnId') IS NULL
+          )
+        )`,
+        sql`EXISTS (
+          SELECT 1
+          FROM json_each(${events.data}, '$.input') AS input_part
+          WHERE (
+            json_extract(input_part.value, '$.type') = 'text'
+            AND COALESCE(json_extract(input_part.value, '$.text'), '') <> ''
+          )
+          OR json_extract(input_part.value, '$.type')
+            IN ('image', 'localImage', 'localFile')
+        )`,
+      ),
+      and(
+        eq(events.type, "system/operation"),
+        sql`json_extract(${events.data}, '$.operation') = ${THREAD_CONTEXT_CLEAR_OPERATION}`,
+        sql`json_extract(${events.data}, '$.status') = 'completed'`,
+      ),
+    ),
   );
 }
 
@@ -2662,11 +2721,13 @@ export interface ListTimelineSegmentAnchorsDescendingArgs {
   threadId: string;
   beforeSequence?: number;
   limit: number;
+  sequenceStart: number;
 }
 
 export interface FindTimelineWindowBudgetFloorSequenceArgs {
   excludedTypes: readonly ThreadEventType[];
   eventBudget: number;
+  sequenceStart: number;
   threadId: string;
   beforeSequence?: number;
 }
@@ -2677,6 +2738,7 @@ export function findTimelineWindowBudgetFloorSequence(
 ): number | undefined {
   const conditions: SQL[] = [
     eq(events.threadId, args.threadId),
+    gte(events.sequence, args.sequenceStart),
     isNotSupersededBackgroundTaskProgress,
   ];
   if (args.excludedTypes.length > 0) {
@@ -2769,7 +2831,10 @@ export function listTimelineSegmentAnchorsDescending(
   db: DbConnection,
   args: ListTimelineSegmentAnchorsDescendingArgs,
 ): StandardTimelineSegmentAnchorRow[] {
-  const conditions = timelineSegmentAnchorConditions(args.threadId);
+  const conditions = and(
+    timelineSegmentAnchorConditions(args.threadId),
+    gte(events.sequence, args.sequenceStart),
+  );
   const where =
     args.beforeSequence === undefined
       ? conditions
@@ -2973,6 +3038,7 @@ function listLatestRowsForContextWindowUsage(
     eventType:
       | "thread/contextWindowUsage/updated"
       | "thread/tokenUsage/updated";
+    sequenceStart: number;
     threadId: string;
   },
 ): StoredEventRow[] {
@@ -2982,6 +3048,7 @@ function listLatestRowsForContextWindowUsage(
     .where(
       and(
         eq(events.threadId, args.threadId),
+        gte(events.sequence, args.sequenceStart),
         eq(events.type, args.eventType),
         isNotNestedTurnUsageEvent,
       ),
@@ -3000,6 +3067,7 @@ function listLatestRowsForContextWindowUsage(
     .where(
       and(
         eq(events.threadId, args.threadId),
+        gte(events.sequence, args.sequenceStart),
         eq(events.type, args.eventType),
         isNotNestedTurnUsageEvent,
         sql`json_extract(${events.data}, ${args.contextWindowJsonPath}) IS NOT NULL`,
@@ -3022,6 +3090,7 @@ export function listContextWindowUsageRows(
 ): StoredEventRow[] {
   return listLatestRowsForContextWindowUsage(db, {
     threadId: args.threadId,
+    sequenceStart: args.sequenceStart,
     eventType: "thread/contextWindowUsage/updated",
     contextWindowJsonPath: "$.contextWindowUsage.modelContextWindow",
   });
@@ -3125,6 +3194,29 @@ export function getActiveStoredTurnId(
   return completed ? null : latestStarted.turnId;
 }
 
+export function getLatestCompletedThreadContextClearSequence(
+  db: DbQueryConnection,
+  args: GetLatestCompletedThreadContextClearSequenceArgs,
+): number | null {
+  const conditions: SQL[] = [
+    eq(events.threadId, args.threadId),
+    eq(events.type, "system/operation"),
+    sql`json_extract(${events.data}, '$.operation') = ${THREAD_CONTEXT_CLEAR_OPERATION}`,
+    sql`json_extract(${events.data}, '$.status') = 'completed'`,
+  ];
+  if (args.atOrBeforeSequence !== undefined) {
+    conditions.push(lte(events.sequence, args.atOrBeforeSequence));
+  }
+  const row = db
+    .select({ sequence: events.sequence })
+    .from(events)
+    .where(and(...conditions))
+    .orderBy(desc(events.sequence))
+    .limit(1)
+    .get();
+  return row?.sequence ?? null;
+}
+
 export function getLastStoredProviderThreadId(
   db: DbQueryConnection,
   threadId: string,
@@ -3134,7 +3226,15 @@ export function getLastStoredProviderThreadId(
     .from(events)
     .where(
       sql`${events.threadId} = ${threadId}
-        AND ${events.providerThreadId} IS NOT NULL`,
+        AND ${events.providerThreadId} IS NOT NULL
+        AND ${events.sequence} > COALESCE((
+          SELECT MAX(context_clear.sequence)
+          FROM events AS context_clear
+          WHERE context_clear.thread_id = ${threadId}
+            AND context_clear.type = 'system/operation'
+            AND json_extract(context_clear.data, '$.operation') = ${THREAD_CONTEXT_CLEAR_OPERATION}
+            AND json_extract(context_clear.data, '$.status') = 'completed'
+        ), 0)`,
     )
     .orderBy(sql`${events.sequence} DESC`)
     .limit(1)
@@ -3221,6 +3321,14 @@ export function listThreadTurnInterruptionEventStates(
           FROM events AS latest
           WHERE latest.thread_id = ${events.threadId}
             AND latest.provider_thread_id IS NOT NULL
+            AND latest.sequence > COALESCE((
+              SELECT MAX(context_clear.sequence)
+              FROM events AS context_clear
+              WHERE context_clear.thread_id = ${events.threadId}
+                AND context_clear.type = 'system/operation'
+                AND json_extract(context_clear.data, '$.operation') = ${THREAD_CONTEXT_CLEAR_OPERATION}
+                AND json_extract(context_clear.data, '$.status') = 'completed'
+            ), 0)
         )`,
       ),
     )

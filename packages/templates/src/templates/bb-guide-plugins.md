@@ -23,15 +23,16 @@ The builtin Custom instructions plugin adds a multiline editor under Settings
 → Custom instructions. Saved text is persisted on this bb host and included in
 agent task instructions; blank text contributes nothing.
 
-The builtin Account Pool plugin is disabled on fresh installations. It stores
-Claude account tokens in per-account 0600 secret files and proxies Anthropic
-Messages API requests through the bb server. Enable it and add an account:
+The builtin Account Pooler plugin is disabled on fresh installations. It stores
+Claude and Codex account tokens in per-account 0600 secret files and proxies
+provider API requests through the bb server. Enable it and add an account:
 
 ```
 bb plugin enable account-pool
 bb pool account add --provider claude --login
 printf '%s\n' "$CLAUDE_AUTH_CODE" | bb pool account login-complete --session <id> --code-stdin
 bb pool account add --provider claude --import
+bb pool account add --provider codex --import
 printf '%s\n' "$ANTHROPIC_API_KEY" | bb pool account add --provider claude --api-key-stdin [--label <text>] [--priority <n>]
 bb pool account add --provider claude --api-key <key> [--label <text>] [--priority <n>]
 bb pool account list [--json]
@@ -39,34 +40,48 @@ bb pool account remove <id>
 bb pool account enable <id>
 bb pool account disable <id>
 bb pool status [--json]
+bb pool routing <claude|codex> [--off]
+bb pool config
+bb pool config set <anthropicUpstreamBaseUrl|codexUpstreamBaseUrl|switchThreshold> <value>
 bb pool token rotate --machine <id-or-name>
 bb pool bypass <thread-id> [--off]
 ```
 
-`--login` starts a ten-minute in-memory PKCE session, prints the Claude browser
+Claude `--login` starts a ten-minute in-memory PKCE session, prints the browser
 sign-in URL and session ID, then exits. After sign-in, pipe the manual callback
 code to `account login-complete` with that session ID. The browser does not need
 to run on the bb server machine, and neither the code nor account tokens enter
-process arguments. The same flow is available in the plugin settings page
-through the **Sign in to Claude** button.
+process arguments. Codex `--login` prints a device verification URL, one-time
+code, session ID, and an `account login-poll` command that waits for
+authorization. Both flows are available in the plugin settings page through
+the **Sign in to Claude** and **Sign in to Codex** buttons. The CLI Codex import
+path continues to read the bb server host's `~/.codex/auth.json`.
 
 The hub starts immediately, even before an account is configured, so newly
 added or enabled accounts are available without a plugin reload. With an
 enabled account whose secret file remains readable and valid, the plugin
-contributes its server route, a distinct secret token, and
-`ENABLE_TOOL_SEARCH=true` (tool search stays on through the hub) to Claude
-Code sessions on every host. Tokens are never printed. `status` prunes tokens for
+contributes its provider-specific server route and a distinct secret token to
+Claude Code or Codex sessions on every host. Claude Code also receives
+`ENABLE_TOOL_SEARCH=true` so tool search stays on through the hub. Codex
+receives `CODEX_OPENAI_BASE_URL` and the secret `CODEX_POOL_AUTH_TOKEN`; its
+app server uses those values without editing `~/.codex/config.toml`. Tokens are
+never printed. `status` prunes tokens for
 unenrolled machines and shows token timestamps plus recently routed threads
 whose machines need a local Claude login before the pool can be disabled
 safely. Rotation keeps the prior token valid for ten minutes. Agents should use
 `--api-key-stdin`, which reads exactly one non-empty key from piped standard
 input. The compatibility form `--api-key <key>` exposes the key in process
 arguments, shell history, and agent transcripts. Prefer `--import` when Claude
-Code is already signed in. JSON account status reports rejected upstream
-bucket resets under `bucketExhaustion`; this is diagnostic status and does not
-affect selection.
-The `upstreamBaseUrl` setting exists for tests and QA and defaults to
-`https://api.anthropic.com`; `switchThreshold` defaults to `0.98`.
+Code is already signed in. OAuth quota refreshes on add or enable and every
+five minutes while the account is idle. Account tables add columns for the
+family buckets Anthropic reports, and JSON status exposes the same observations
+under `familyWeekly`. Selection skips an account only for a spent requested
+family while retaining it for other families. When Claude Code supplies an
+account UUID in `metadata.user_id`, the hub aligns it with the selected OAuth
+account. `bb pool config` prints the quota switch threshold and both upstream
+URLs. Use `bb pool config set <key> <value>` to change one; the two URL values
+are QA-only overrides. Upgrading from a build that stored these values through
+plugin settings resets the threshold and QA overrides to their defaults.
 
 The builtin Keep Awake plugin prevents macOS idle sleep while bb is running.
 Its settings page lets you target all hosts or selected hosts. The CLI
@@ -110,7 +125,7 @@ block recovery. Its `maximumWait` setting defaults to `6 hours`; choose
 
 The builtin Workflows plugin runs durable provider-independent JavaScript
 orchestration. It is disabled on fresh installations; enable `workflows` under
-Extensions → Plugins or run `bb plugin enable workflows` before using:
+Settings → Installed plugins or run `bb plugin enable workflows` before using:
 
   bb workflows validate (--script '<javascript>'|--source '<javascript>'|
                         --file <path>|--name <name>)
@@ -695,7 +710,7 @@ Everything else (zod included) bundles from the plugin's node_modules (`npm inst
 release packages with their declared production dependencies). A crashing slot collapses to a
 "plugin <id> crashed" chip without
 touching the rest of the app. Installed plugins and their declared settings
-(same data as `bb plugin config`) also appear under Extensions → Plugins.
+(same data as `bb plugin config`) also appear under Settings → Installed plugins.
 
 Plugin CLI commands: a plugin can register one top-level subcommand (for
 example `bb github …`). Unknown `bb` commands are looked up against installed
@@ -731,6 +746,14 @@ floor rather than a ceiling; scaffold writes `">=0.4.3"` for SDK 0.4.3). Use
 default. Scoped names such as `@acme/bb-plugin-hello` are also supported. The
 plugin id is the final package-name component minus `bb-plugin-`, so both forms
 use `hello`.
+
+The scaffold also writes `PLUGIN_OVERVIEW.md` beside package.json: the
+long-form store listing, shown in an Overview section under `bb.description` on
+the plugin detail page in the app and on getbb.app. It says the same thing as
+`bb.description` at length, so update both together. Keep it under 4000
+characters, use headings, paragraphs, emphasis, code, blockquotes, lists,
+thematic breaks, and absolute https links only, and do not open with a `#`
+title. A submission to the BB Community marketplace requires the file.
 
 Plugins can contribute palettes with `bb.themes`: an array of
 `{ id, name, description?, css, codeTheme? }`, where `css` is a

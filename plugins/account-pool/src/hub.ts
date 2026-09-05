@@ -1,34 +1,37 @@
-import { z } from "zod";
 import type {
   Account,
   AccountQuota,
   AccountSecret,
+  ModelFamily,
+  PoolProvider,
   PoolStatus,
 } from "./contracts.js";
+import { createClaudeAdapter } from "./claude-adapter.js";
+import {
+  createCodexAdapter,
+  DEFAULT_CODEX_REFRESH_URL,
+  DEFAULT_CODEX_USAGE_URL,
+} from "./codex-adapter.js";
+import type { ProviderAdapter } from "./provider-adapter.js";
+import type { ImportedProviderAccount } from "./provider-adapter.js";
+import type {
+  ImportedClaudeCredentials,
+  ImportedCodexCredentials,
+} from "./credentials.js";
 import {
   accountStatus,
+  governingWeeklyResetAt,
   isQuotaExhausted,
-  isQuotaRejection,
-  quotaFromHeaders,
   retryAfterMilliseconds,
 } from "./quota.js";
 import type { AccountStore, HubTokenStore, QuotaStore } from "./store.js";
 
 const ROUTE = "/api/v1/plugins/account-pool/http";
-const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const DEFAULT_REFRESH_URL = "https://platform.claude.com/v1/oauth/token";
-const REFRESH_WINDOW_MS = 5 * 60 * 1_000;
+const DEFAULT_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+const DEFAULT_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
+const DEFAULT_USAGE_REFRESH_INTERVAL_MS = 5 * 60 * 1_000;
 const MAX_INLINE_HOLD_MS = 20_000;
-
-const ALLOWED_REQUEST_HEADERS = new Set([
-  "accept",
-  "content-type",
-  "user-agent",
-  "x-app",
-]);
-
-const ALLOWED_REQUEST_HEADER_PREFIXES = ["anthropic-", "x-stainless-"];
-
 const DROPPED_RESPONSE_HEADERS = new Set([
   "content-encoding",
   "content-length",
@@ -42,17 +45,9 @@ const DROPPED_RESPONSE_HEADERS = new Set([
   "upgrade",
 ]);
 
-const refreshResponseSchema = z
-  .object({
-    access_token: z.string().min(1),
-    refresh_token: z.string().min(1).optional(),
-    expires_in: z.number().positive().optional(),
-    expires_at: z.number().positive().optional(),
-  })
-  .passthrough();
-
 export interface HubSettings {
-  upstreamBaseUrl: string;
+  anthropicUpstreamBaseUrl: string;
+  codexUpstreamBaseUrl: string;
   switchThreshold: number;
 }
 
@@ -61,17 +56,18 @@ interface HubOptions {
   quotas: QuotaStore;
   hubTokens: HubTokenStore;
   getSettings: () => HubSettings;
+  adapters: ReadonlyMap<PoolProvider, ProviderAdapter>;
   fetch: typeof fetch;
   now: () => number;
-  refreshUrl: string;
+  usageRefreshIntervalMs: number;
   drainTimeoutMs: number;
+  onAccountsChanged: () => void;
 }
 
 interface SelectedAccount {
   account: Account;
   quota: AccountQuota;
 }
-
 interface UpstreamResult {
   response: Response;
   controller: AbortController;
@@ -83,14 +79,108 @@ export class AccountPoolHub {
   private readonly inFlightByAccount = new Map<string, number>();
   private readonly activeControllers = new Set<AbortController>();
   private readonly refreshes = new Map<string, Promise<AccountSecret>>();
+  private readonly usageRefreshes = new Map<string, Promise<void>>();
+  private readonly lastUsageRefreshAt = new Map<string, number>();
   private readonly drainWaiters = new Set<() => void>();
 
   constructor(private readonly options: HubOptions) {}
 
   async start(signal: AbortSignal): Promise<void> {
     this.accepting = true;
-    await waitForAbort(signal);
+    while (!signal.aborted) {
+      await this.refreshUsage();
+      await waitForDelay(this.options.usageRefreshIntervalMs, signal);
+    }
     await this.stop();
+  }
+
+  async authenticate(request: Request): Promise<string | null> {
+    const token =
+      request.headers.get("x-bb-account-pool-token") ??
+      readBearer(request.headers.get("authorization"));
+    return this.options.hubTokens.authenticate(token);
+  }
+
+  async importAccount(
+    provider: PoolProvider,
+  ): Promise<ImportedProviderAccount> {
+    return this.adapter(provider).importAccount();
+  }
+
+  async handle(request: Request, provider: PoolProvider): Promise<Response> {
+    const adapter = this.adapter(provider);
+    const hostId = await this.authenticate(request);
+    if (hostId === null) {
+      return adapter.errorResponse(401, "Invalid Account Pooler bearer token.");
+    }
+    return this.handleAuthenticated(request, provider, hostId);
+  }
+
+  async handleAuthenticated(
+    request: Request,
+    provider: PoolProvider,
+    hostId: string | null = null,
+  ): Promise<Response> {
+    const adapter = this.adapter(provider);
+    if (!this.accepting)
+      return adapter.errorResponse(
+        503,
+        "Account Pooler is not accepting requests.",
+      );
+    return this.forward(
+      request,
+      new Uint8Array(await request.arrayBuffer()),
+      adapter,
+      hostId,
+    );
+  }
+
+  async refreshUsage(accountId?: string, force = false): Promise<void> {
+    const accounts = (await this.options.accounts.list()).filter(
+      (account) =>
+        account.enabled &&
+        account.kind === "oauth" &&
+        (accountId === undefined || account.id === accountId),
+    );
+    await Promise.all(
+      accounts.map((account) => this.refreshAccountUsage(account, force)),
+    );
+  }
+
+  private async refreshAccountUsage(
+    account: Account,
+    force: boolean,
+  ): Promise<void> {
+    const adapter = this.adapter(account.provider);
+    if (
+      adapter.refreshUsage === undefined ||
+      (this.inFlightByAccount.get(account.id) ?? 0) > 0
+    )
+      return;
+    const now = this.options.now();
+    const last = this.lastUsageRefreshAt.get(account.id);
+    if (
+      !force &&
+      last !== undefined &&
+      now - last < this.options.usageRefreshIntervalMs
+    )
+      return;
+    const running = this.usageRefreshes.get(account.id);
+    if (running !== undefined) return running;
+    this.lastUsageRefreshAt.set(account.id, now);
+    const refresh = adapter
+      .refreshUsage({
+        account,
+        freshSecret: () => this.freshSecret(account, adapter),
+        accounts: this.options.accounts,
+        quotas: this.options.quotas,
+        fetch: this.options.fetch,
+        now: this.options.now,
+      })
+      .catch(() => undefined)
+      .finally(() => this.usageRefreshes.delete(account.id));
+    this.usageRefreshes.set(account.id, refresh);
+    return refresh;
   }
 
   async stop(): Promise<void> {
@@ -98,9 +188,7 @@ export class AccountPoolHub {
     if (this.inFlightCount() === 0) return;
     let timeout: ReturnType<typeof setTimeout> | null = null;
     await Promise.race([
-      new Promise<void>((resolve) => {
-        this.drainWaiters.add(resolve);
-      }),
+      new Promise<void>((resolve) => this.drainWaiters.add(resolve)),
       new Promise<void>((resolve) => {
         timeout = setTimeout(resolve, this.options.drainTimeoutMs);
       }),
@@ -110,36 +198,15 @@ export class AccountPoolHub {
     for (const controller of this.activeControllers) {
       controller.abort(
         new Error(
-          "Account Pool stopped before the upstream response completed.",
+          "Account Pooler stopped before the upstream response completed.",
         ),
       );
     }
   }
 
-  async handle(request: Request): Promise<Response> {
-    if (
-      (await this.options.hubTokens.authenticate(
-        readBearer(request.headers.get("authorization")),
-      )) === null
-    ) {
-      return anthropicError(
-        401,
-        "authentication_error",
-        "Invalid Account Pool bearer token.",
-      );
-    }
-    if (!this.accepting) {
-      return anthropicError(
-        503,
-        "api_error",
-        "Account Pool is not accepting requests.",
-      );
-    }
-    const body = new Uint8Array(await request.arrayBuffer());
-    return this.forward(request, body);
-  }
-
-  async status(): Promise<Omit<PoolStatus, "routedThreadsWithoutLocalLogin">> {
+  async status(): Promise<
+    Omit<PoolStatus, "routedThreadsWithoutLocalLogin" | "routing">
+  > {
     const settings = this.options.getSettings();
     const now = this.options.now();
     const accounts = await this.options.accounts.list();
@@ -153,6 +220,7 @@ export class AccountPoolHub {
         const quota = this.options.quotas.get(account.id);
         return {
           ...account,
+          lastUsedHostName: null,
           fiveHourUtilization: quota.fiveHourUtilization,
           fiveHourResetAt: quota.fiveHourResetAt,
           fiveHourStatus: quota.fiveHourStatus,
@@ -160,7 +228,8 @@ export class AccountPoolHub {
           sevenDayResetAt: quota.sevenDayResetAt,
           sevenDayStatus: quota.sevenDayStatus,
           representativeClaim: quota.representativeClaim,
-          bucketExhaustion: quota.bucketExhaustion,
+          familyWeekly: quota.familyWeekly,
+          limitWindows: quota.limitWindows,
           observedAt: quota.observedAt,
           heldUntil: quota.heldUntil,
           error: quota.error,
@@ -171,16 +240,33 @@ export class AccountPoolHub {
     };
   }
 
-  private async forward(request: Request, body: Uint8Array): Promise<Response> {
+  private async forward(
+    request: Request,
+    body: Uint8Array,
+    adapter: ProviderAdapter,
+    hostId: string | null,
+  ): Promise<Response> {
     const attempted = new Set<string>();
-    const accounts = await this.options.accounts.list();
+    const accounts = (await this.options.accounts.list()).filter(
+      (account) => account.provider === adapter.provider,
+    );
+    const family = adapter.modelFamily(body);
     while (attempted.size < accounts.length) {
-      const selected = await this.select(attempted);
-      if (selected === null) return this.noEligibleResponse(accounts);
+      const selected = await this.select(adapter.provider, attempted, family);
+      if (selected === null)
+        return this.noEligibleResponse(accounts, family, adapter);
       attempted.add(selected.account.id);
+      if (hostId !== null) {
+        const changed = await this.options.accounts.recordUsed(
+          selected.account.id,
+          this.options.now(),
+          hostId,
+        );
+        if (changed) this.options.onAccountsChanged();
+      }
       let secret: AccountSecret;
       try {
-        secret = await this.freshSecret(selected.account);
+        secret = await this.freshSecret(selected.account, adapter);
       } catch (error) {
         this.markError(selected.account.id, errorMessage(error));
         continue;
@@ -189,27 +275,28 @@ export class AccountPoolHub {
       try {
         upstream = await this.fetchUpstream(
           request,
-          body,
+          adapter.prepareBody(body, selected.account),
           selected.account,
           secret,
+          adapter,
         );
-      } catch (error) {
-        return anthropicError(
+      } catch {
+        return adapter.errorResponse(
           502,
-          "api_error",
-          "Account Pool could not reach Anthropic.",
+          `Account Pooler could not reach ${adapter.upstreamName}.`,
         );
       }
-      const observed = quotaFromHeaders(
+      const observed = adapter.quotaFromHeaders(
         selected.account.id,
         upstream.response.headers,
         this.options.quotas.get(selected.account.id),
+        family,
         this.options.now(),
       );
       this.options.quotas.put(observed);
       if (
         upstream.response.status === 429 &&
-        isQuotaRejection(observed, this.options.now())
+        adapter.isQuotaRejection(upstream.response.headers)
       ) {
         await upstream.response.body?.cancel();
         upstream.release();
@@ -231,85 +318,89 @@ export class AccountPoolHub {
           try {
             const retry = await this.fetchUpstream(
               request,
-              body,
+              adapter.prepareBody(body, selected.account),
               selected.account,
               secret,
+              adapter,
             );
-            const retryQuota = quotaFromHeaders(
+            const retryQuota = adapter.quotaFromHeaders(
               selected.account.id,
               retry.response.headers,
               this.options.quotas.get(selected.account.id),
+              family,
               this.options.now(),
             );
-            if (retry.response.status === 429) {
-              const retryWaitMs = retryAfterMilliseconds(
-                retry.response.headers.get("retry-after"),
-                this.options.now(),
-              );
-              this.options.quotas.put({
-                ...retryQuota,
-                heldUntil: this.options.now() + retryWaitMs,
-              });
-            } else {
-              this.options.quotas.put(retryQuota);
-            }
-            if (
-              retry.response.status === 401 ||
-              retry.response.status === 403
-            ) {
-              const detail = await retry.response
-                .clone()
-                .text()
-                .catch(() => "");
-              this.markError(
-                selected.account.id,
-                detail.trim() ||
-                  `Anthropic returned HTTP ${retry.response.status}.`,
-              );
-            }
+            this.options.quotas.put(
+              retry.response.status === 429
+                ? {
+                    ...retryQuota,
+                    heldUntil:
+                      this.options.now() +
+                      retryAfterMilliseconds(
+                        retry.response.headers.get("retry-after"),
+                        this.options.now(),
+                      ),
+                  }
+                : retryQuota,
+            );
+            await this.captureAuthError(
+              retry.response,
+              selected.account,
+              adapter,
+            );
             return this.clientResponse(retry);
           } catch {
-            return anthropicError(
+            return adapter.errorResponse(
               502,
-              "api_error",
-              "Account Pool could not reach Anthropic.",
+              `Account Pooler could not reach ${adapter.upstreamName}.`,
             );
           }
         }
       }
-      if (
-        upstream.response.status === 401 ||
-        upstream.response.status === 403
-      ) {
-        const detail = await upstream.response
-          .clone()
-          .text()
-          .catch(() => "");
-        this.markError(
-          selected.account.id,
-          detail.trim() ||
-            `Anthropic returned HTTP ${upstream.response.status}.`,
-        );
-      }
+      await this.captureAuthError(upstream.response, selected.account, adapter);
       return this.clientResponse(upstream);
     }
-    return this.noEligibleResponse(accounts);
+    return this.noEligibleResponse(accounts, family, adapter);
+  }
+
+  private async captureAuthError(
+    response: Response,
+    account: Account,
+    adapter: ProviderAdapter,
+  ): Promise<void> {
+    if (response.status !== 401 && response.status !== 403) return;
+    const detail = await response
+      .clone()
+      .text()
+      .catch(() => "");
+    this.markError(
+      account.id,
+      detail.trim() ||
+        `${adapter.upstreamName} returned HTTP ${response.status}.`,
+    );
   }
 
   private async select(
+    provider: PoolProvider,
     attempted: ReadonlySet<string>,
+    family: ModelFamily,
   ): Promise<SelectedAccount | null> {
     const now = this.options.now();
     const threshold = this.options.getSettings().switchThreshold;
     const candidates = (await this.options.accounts.list())
-      .filter((account) => account.enabled && !attempted.has(account.id))
+      .filter(
+        (account) =>
+          account.provider === provider &&
+          account.enabled &&
+          !attempted.has(account.id),
+      )
       .map((account) => ({
         account,
         quota: this.options.quotas.get(account.id),
       }))
       .filter(({ quota }) => quota.error === null)
       .filter(({ quota }) => quota.heldUntil === null || quota.heldUntil <= now)
-      .filter(({ quota }) => !isQuotaExhausted(quota, threshold, now));
+      .filter(({ quota }) => !isQuotaExhausted(quota, family, threshold, now));
     candidates.sort((left, right) => {
       const priority = left.account.priority - right.account.priority;
       if (priority !== 0) return priority;
@@ -318,69 +409,40 @@ export class AccountPoolHub {
         (this.inFlightByAccount.get(right.account.id) ?? 0);
       if (inFlight !== 0) return inFlight;
       return (
-        (left.quota.sevenDayResetAt ?? Number.MAX_SAFE_INTEGER) -
-        (right.quota.sevenDayResetAt ?? Number.MAX_SAFE_INTEGER)
+        (governingWeeklyResetAt(left.quota, family) ??
+          Number.MAX_SAFE_INTEGER) -
+        (governingWeeklyResetAt(right.quota, family) ?? Number.MAX_SAFE_INTEGER)
       );
     });
     return candidates[0] ?? null;
   }
 
-  private async freshSecret(account: Account): Promise<AccountSecret> {
-    const secret = await this.options.accounts.readSecret(account.id);
-    if (
-      secret.kind !== "oauth" ||
-      secret.expiresAt === null ||
-      secret.expiresAt > this.options.now() + REFRESH_WINDOW_MS
-    ) {
-      return secret;
-    }
+  private async freshSecret(
+    account: Account,
+    adapter: ProviderAdapter,
+  ): Promise<AccountSecret> {
     const existing = this.refreshes.get(account.id);
     if (existing !== undefined) return existing;
-    const refresh = this.refresh(account.id, secret).finally(() => {
-      this.refreshes.delete(account.id);
-    });
+    const secret = await this.options.accounts.readSecret(account.id);
+    const refresh = adapter
+      .refreshSecret({
+        account,
+        secret,
+        accounts: this.options.accounts,
+        quotas: this.options.quotas,
+        fetch: this.options.fetch,
+        now: this.options.now,
+      })
+      .then((result) => {
+        if (result.refreshed) {
+          const quota = this.options.quotas.get(account.id);
+          this.options.quotas.put({ ...quota, error: null });
+        }
+        return result.secret;
+      })
+      .finally(() => this.refreshes.delete(account.id));
     this.refreshes.set(account.id, refresh);
     return refresh;
-  }
-
-  private async refresh(
-    accountId: string,
-    secret: Extract<AccountSecret, { kind: "oauth" }>,
-  ): Promise<AccountSecret> {
-    const response = await this.options.fetch(this.options.refreshUrl, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-      },
-      body: JSON.stringify({
-        grant_type: "refresh_token",
-        refresh_token: secret.refreshToken,
-        client_id: OAUTH_CLIENT_ID,
-      }),
-    });
-    if (!response.ok) {
-      throw new Error(`OAuth refresh failed with HTTP ${response.status}.`);
-    }
-    const parsed = refreshResponseSchema.parse(await response.json());
-    const rawExpiresAt =
-      parsed.expires_at ??
-      (parsed.expires_in === undefined
-        ? this.options.now() + 60 * 60 * 1_000
-        : this.options.now() + parsed.expires_in * 1_000);
-    const refreshed: AccountSecret = {
-      kind: "oauth",
-      accessToken: parsed.access_token,
-      refreshToken: parsed.refresh_token ?? secret.refreshToken,
-      expiresAt:
-        rawExpiresAt < 1_000_000_000_000
-          ? Math.round(rawExpiresAt * 1_000)
-          : Math.round(rawExpiresAt),
-    };
-    await this.options.accounts.writeSecret(accountId, refreshed);
-    const quota = this.options.quotas.get(accountId);
-    this.options.quotas.put({ ...quota, error: null });
-    return refreshed;
   }
 
   private async fetchUpstream(
@@ -388,45 +450,39 @@ export class AccountPoolHub {
     body: Uint8Array,
     account: Account,
     secret: AccountSecret,
+    adapter: ProviderAdapter,
   ): Promise<UpstreamResult> {
-    const requestUrl = new URL(request.url);
-    const mountedPath = requestUrl.pathname.indexOf("/http/");
-    const upstreamPath =
-      mountedPath < 0
-        ? requestUrl.pathname
-        : requestUrl.pathname.slice(mountedPath + 5);
-    const upstreamUrl = new URL(
-      upstreamPath.replace(/^\//u, "") + requestUrl.search,
-      ensureSlash(this.options.getSettings().upstreamBaseUrl),
-    );
-    const headers = new Headers();
-    for (const [name, value] of request.headers) {
-      if (isAllowedRequestHeader(name)) headers.append(name, value);
-    }
-    if (secret.kind === "oauth") {
-      headers.set("authorization", `Bearer ${secret.accessToken}`);
-    } else {
-      headers.set("x-api-key", secret.apiKey);
-    }
     const controller = new AbortController();
+    const abortFromRequest = () => controller.abort(request.signal.reason);
     this.activeControllers.add(controller);
     this.increment(account.id);
+    if (request.signal.aborted) abortFromRequest();
+    else
+      request.signal.addEventListener("abort", abortFromRequest, {
+        once: true,
+      });
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
+      request.signal.removeEventListener("abort", abortFromRequest);
       this.activeControllers.delete(controller);
       this.decrement(account.id);
     };
     try {
       const upstreamBody = new ArrayBuffer(body.byteLength);
       new Uint8Array(upstreamBody).set(body);
-      const response = await this.options.fetch(upstreamUrl, {
-        method: request.method,
-        headers,
-        body: upstreamBody,
-        signal: controller.signal,
-      });
+      const response = await this.options.fetch(
+        adapter.upstreamUrl(request, this.options.getSettings()),
+        {
+          method: request.method,
+          headers: adapter.requestHeaders(request.headers, account, secret),
+          ...(request.method === "GET" || request.method === "HEAD"
+            ? {}
+            : { body: upstreamBody }),
+          signal: controller.signal,
+        },
+      );
       return { response, controller, release };
     } catch (error) {
       release();
@@ -462,24 +518,21 @@ export class AccountPoolHub {
           if (chunk.done) {
             upstream.release();
             controller.close();
-            return;
-          }
-          controller.enqueue(chunk.value);
+          } else controller.enqueue(chunk.value);
         } catch (error) {
           upstream.release();
-          if (eventStream) {
-            const message = errorMessage(error);
-            controller.enqueue(
-              new TextEncoder().encode(
-                `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "api_error", message } })}\n\n`,
-              ),
-            );
-            controller.close();
-          } else {
+          if (!eventStream) {
             controller.error(
               error instanceof Error ? error : new Error(String(error)),
             );
+            return;
           }
+          controller.enqueue(
+            new TextEncoder().encode(
+              `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "api_error", message: errorMessage(error) } })}\n\n`,
+            ),
+          );
+          controller.close();
         }
       },
       async cancel() {
@@ -495,12 +548,15 @@ export class AccountPoolHub {
     });
   }
 
-  private noEligibleResponse(accounts: readonly Account[]): Response {
+  private noEligibleResponse(
+    accounts: readonly Account[],
+    family: ModelFamily,
+    adapter: ProviderAdapter,
+  ): Response {
     if (!accounts.some((account) => account.enabled)) {
-      return anthropicError(
+      return adapter.errorResponse(
         503,
-        "api_error",
-        "Account Pool has no enabled account",
+        "Account Pooler has no enabled account",
       );
     }
     const now = this.options.now();
@@ -512,6 +568,8 @@ export class AccountPoolHub {
           quota.heldUntil,
           quota.fiveHourResetAt,
           quota.sevenDayResetAt,
+          ...quota.limitWindows.map((window) => window.resetAt),
+          governingWeeklyResetAt(quota, family),
         ].filter((value): value is number => value !== null && value > now);
       })
       .sort((left, right) => left - right)[0];
@@ -519,10 +577,9 @@ export class AccountPoolHub {
       1,
       Math.ceil(((next ?? now + 1_000) - now) / 1_000),
     );
-    return anthropicError(
+    return adapter.errorResponse(
       429,
-      "rate_limit_error",
-      "No Account Pool account is currently eligible.",
+      "No Account Pooler account is currently eligible.",
       { "retry-after": String(retryAfter) },
     );
   }
@@ -530,6 +587,13 @@ export class AccountPoolHub {
   private markError(accountId: string, message: string): void {
     const quota = this.options.quotas.get(accountId);
     this.options.quotas.put({ ...quota, error: message.slice(0, 1_000) });
+  }
+
+  private adapter(provider: PoolProvider): ProviderAdapter {
+    const adapter = this.options.adapters.get(provider);
+    if (adapter === undefined)
+      throw new Error(`Missing ${provider} Account Pooler adapter.`);
+    return adapter;
   }
 
   private increment(accountId: string): void {
@@ -563,60 +627,75 @@ export function createHub(options: {
   fetch?: typeof fetch;
   now?: () => number;
   refreshUrl?: string;
+  codexRefreshUrl?: string;
+  codexUsageUrl?: string;
+  importClaudeCredentials?: () => Promise<ImportedClaudeCredentials>;
+  importCodexCredentials?: () => Promise<ImportedCodexCredentials>;
+  usageUrl?: string;
+  profileUrl?: string;
+  usageRefreshIntervalMs?: number;
   drainTimeoutMs?: number;
+  onAccountsChanged?: () => void;
 }): AccountPoolHub {
+  const adapters: ReadonlyMap<PoolProvider, ProviderAdapter> = new Map([
+    [
+      "claude",
+      createClaudeAdapter({
+        refreshUrl: options.refreshUrl ?? DEFAULT_REFRESH_URL,
+        usageUrl: options.usageUrl ?? DEFAULT_USAGE_URL,
+        profileUrl: options.profileUrl ?? DEFAULT_PROFILE_URL,
+        importCredentials: options.importClaudeCredentials,
+      }),
+    ],
+    [
+      "codex",
+      createCodexAdapter({
+        refreshUrl: options.codexRefreshUrl ?? DEFAULT_CODEX_REFRESH_URL,
+        usageUrl: options.codexUsageUrl ?? DEFAULT_CODEX_USAGE_URL,
+        importCredentials: options.importCodexCredentials,
+      }),
+    ],
+  ]);
   return new AccountPoolHub({
     accounts: options.accounts,
     quotas: options.quotas,
     hubTokens: options.hubTokens,
     getSettings: options.getSettings,
+    adapters,
     fetch: options.fetch ?? fetch,
     now: options.now ?? Date.now,
-    refreshUrl: options.refreshUrl ?? DEFAULT_REFRESH_URL,
+    usageRefreshIntervalMs:
+      options.usageRefreshIntervalMs ?? DEFAULT_USAGE_REFRESH_INTERVAL_MS,
     drainTimeoutMs: options.drainTimeoutMs ?? 60_000,
+    onAccountsChanged: options.onAccountsChanged ?? (() => {}),
   });
-}
-
-function isAllowedRequestHeader(name: string): boolean {
-  const normalized = name.toLowerCase();
-  return (
-    ALLOWED_REQUEST_HEADERS.has(normalized) ||
-    ALLOWED_REQUEST_HEADER_PREFIXES.some((prefix) =>
-      normalized.startsWith(prefix),
-    )
-  );
-}
-
-function ensureSlash(value: string): string {
-  return value.endsWith("/") ? value : `${value}/`;
 }
 
 function readBearer(value: string | null): string | null {
   if (value === null) return null;
-  const match = /^Bearer\s+(.+)$/iu.exec(value);
-  return match?.[1] ?? null;
-}
-
-function anthropicError(
-  status: number,
-  type: string,
-  message: string,
-  headers?: HeadersInit,
-): Response {
-  return Response.json(
-    { type: "error", error: { type, message } },
-    { status, headers },
-  );
+  return /^Bearer\s+(.+)$/iu.exec(value)?.[1] ?? null;
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function waitForAbort(signal: AbortSignal): Promise<void> {
+function waitForDelay(
+  milliseconds: number,
+  signal: AbortSignal,
+): Promise<void> {
   if (signal.aborted) return Promise.resolve();
   return new Promise((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    timeout.unref();
+    const abort = () => {
+      clearTimeout(timeout);
+      resolve();
+    };
+    signal.addEventListener("abort", abort, { once: true });
   });
 }
 

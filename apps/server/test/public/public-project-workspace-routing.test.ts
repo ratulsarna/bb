@@ -295,10 +295,7 @@ describe("public project workspace routing", () => {
         `/api/v1/projects/${project.id}/commands?provider=codex`,
       );
       await expect(readJson(primaryCommands)).resolves.toMatchObject({
-        commands: [
-          expect.objectContaining({ name: "compact" }),
-          primaryCommand,
-        ],
+        commands: expect.arrayContaining([primaryCommand]),
       });
       const primaryContent = await harness.app.request(
         `/api/v1/projects/${project.id}/files/content?path=primary.txt`,
@@ -329,7 +326,7 @@ describe("public project workspace routing", () => {
         `/api/v1/projects/${project.id}/commands?provider=codex&hostId=${remoteHost.id}`,
       );
       await expect(readJson(commands)).resolves.toMatchObject({
-        commands: [expect.objectContaining({ name: "compact" }), remoteCommand],
+        commands: expect.arrayContaining([remoteCommand]),
       });
       expect(
         remoteRpc.requests.find(

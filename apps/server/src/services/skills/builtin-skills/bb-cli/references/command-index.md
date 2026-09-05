@@ -140,6 +140,7 @@ This index lists every command path that the core CLI registers. Read the task-s
 - `bb thread retry`
 - `bb thread stop`
 - `bb thread compact`
+- `bb thread clear`
 - `bb thread cancel-plan`
 - `bb thread clear-goal`
 - `bb thread interactions`

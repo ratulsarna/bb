@@ -2,14 +2,11 @@ import type {
   Account,
   AccountSummary,
   HubTokenSummary,
+  PoolProvider,
   PoolStatus,
   RoutedThreadStatus,
 } from "./contracts.js";
 import type { AccountAddInput } from "./contracts.js";
-import {
-  importClaudeCredentials,
-  type ImportedClaudeCredentials,
-} from "./credentials.js";
 import type { AccountPoolHub } from "./hub.js";
 import type {
   AccountStore,
@@ -18,6 +15,7 @@ import type {
   RoutingStore,
 } from "./store.js";
 import type { ClaudeOAuthAccount } from "./oauth-login.js";
+import type { CodexDeviceAccount } from "./codex-device-login.js";
 
 interface PoolHost {
   id: string;
@@ -44,18 +42,24 @@ export class PoolOperations {
       hostId: string,
     ) => Promise<PoolProviderState[]>,
     private readonly now: () => number = Date.now,
-    private readonly importCredentials: () => Promise<ImportedClaudeCredentials> = importClaudeCredentials,
     private readonly onAccountsChanged: () => void = () => {},
+    private readonly onAccountEnabled: (
+      accountId: string,
+    ) => Promise<void> = async () => {},
   ) {}
 
   async add(input: AccountAddInput): Promise<Account> {
     if (input.source.kind === "api-key") {
+      if (input.provider !== "claude") {
+        throw new Error("Codex accounts can only be added with --import.");
+      }
       const account = await this.accounts.add(
         {
           provider: input.provider,
           kind: "api-key",
           label: input.label ?? "Claude API key",
           email: null,
+          accountUuid: null,
           subscriptionType: null,
           rateLimitTier: null,
           enabled: true,
@@ -64,28 +68,29 @@ export class PoolOperations {
         { kind: "api-key", apiKey: input.source.apiKey },
       );
       this.onAccountsChanged();
+      await this.onAccountEnabled(account.id);
       return account;
     }
-    const imported = await this.importCredentials();
+    const imported = await this.hub.importAccount(input.provider);
     const account = await this.accounts.add(
       {
         provider: input.provider,
         kind: "oauth",
-        label: input.label ?? imported.email ?? "Claude Code account",
+        label: input.label ?? imported.label,
         email: imported.email,
+        accountUuid: imported.accountUuid ?? null,
+        ...(imported.codexAccountId === undefined
+          ? {}
+          : { codexAccountId: imported.codexAccountId }),
         subscriptionType: imported.subscriptionType,
         rateLimitTier: imported.rateLimitTier,
         enabled: true,
         priority: input.priority,
       },
-      {
-        kind: "oauth",
-        accessToken: imported.accessToken,
-        refreshToken: imported.refreshToken,
-        expiresAt: imported.expiresAt,
-      },
+      imported.secret,
     );
     this.onAccountsChanged();
+    await this.onAccountEnabled(account.id);
     return account;
   }
 
@@ -96,6 +101,7 @@ export class PoolOperations {
         kind: "oauth",
         label: authenticated.label,
         email: authenticated.email,
+        accountUuid: authenticated.accountUuid,
         subscriptionType: authenticated.subscriptionType,
         rateLimitTier: authenticated.rateLimitTier,
         enabled: true,
@@ -109,11 +115,45 @@ export class PoolOperations {
       },
     );
     this.onAccountsChanged();
+    await this.onAccountEnabled(account.id);
     return account;
   }
 
+  async addCodexOAuth(
+    authenticated: CodexDeviceAccount,
+  ): Promise<AccountSummary> {
+    const account = await this.accounts.add(
+      {
+        provider: "codex",
+        kind: "oauth",
+        label: authenticated.label,
+        email: authenticated.email,
+        accountUuid: null,
+        codexAccountId: authenticated.accountId,
+        subscriptionType: null,
+        rateLimitTier: null,
+        enabled: true,
+        priority: 100,
+      },
+      {
+        kind: "oauth",
+        accessToken: authenticated.accessToken,
+        refreshToken: authenticated.refreshToken,
+        idToken: authenticated.idToken,
+        expiresAt: authenticated.expiresAt,
+      },
+    );
+    this.onAccountsChanged();
+    await this.onAccountEnabled(account.id);
+    const summary = (await this.list()).find((item) => item.id === account.id);
+    if (summary === undefined) {
+      throw new Error("Added Codex account could not be read back.");
+    }
+    return summary;
+  }
+
   async list(): Promise<AccountSummary[]> {
-    return (await this.hub.status()).accounts;
+    return (await this.status()).accounts;
   }
 
   async remove(id: string): Promise<boolean> {
@@ -131,6 +171,7 @@ export class PoolOperations {
     const quota = this.quotas.get(id);
     this.quotas.put({ ...quota, error: null, heldUntil: null });
     this.onAccountsChanged();
+    await this.onAccountEnabled(account.id);
     return account;
   }
 
@@ -138,6 +179,31 @@ export class PoolOperations {
     const account = await this.accounts.setEnabled(id, false);
     if (account !== null) this.onAccountsChanged();
     return account;
+  }
+
+  async setPriority(id: string, priority: number): Promise<Account | null> {
+    const account = await this.accounts.setPriority(id, priority);
+    if (account !== null) this.onAccountsChanged();
+    return account;
+  }
+
+  async refreshUsage(id: string): Promise<AccountSummary | null> {
+    if ((await this.accounts.get(id)) === null) return null;
+    await this.hub.refreshUsage(id, true);
+    this.onAccountsChanged();
+    return (
+      (await this.status()).accounts.find((account) => account.id === id) ??
+      null
+    );
+  }
+
+  async setRouting(provider: PoolProvider, enabled: boolean): Promise<void> {
+    await this.routing.setProviderEnabled(provider, enabled);
+    this.onAccountsChanged();
+  }
+
+  isRoutingEnabled(provider: PoolProvider): Promise<boolean> {
+    return this.routing.isProviderEnabled(provider);
   }
 
   async status(): Promise<PoolStatus> {
@@ -148,12 +214,24 @@ export class PoolOperations {
       this.routedThreadsWithoutLocalLogin(),
     ]);
     const hostNames = new Map(hosts.map((host) => [host.id, host.name]));
+    const [claude, codex] = await Promise.all([
+      this.routing.isProviderEnabled("claude"),
+      this.routing.isProviderEnabled("codex"),
+    ]);
     return {
       ...status,
       hosts: status.hosts.map((token) => ({
         ...token,
         hostName: hostNames.get(token.hostId) ?? null,
       })),
+      accounts: status.accounts.map((account) => ({
+        ...account,
+        lastUsedHostName:
+          account.lastUsedHostId === null
+            ? null
+            : (hostNames.get(account.lastUsedHostId) ?? null),
+      })),
+      routing: { claude, codex },
       routedThreadsWithoutLocalLogin,
     };
   }
@@ -185,9 +263,13 @@ export class PoolOperations {
     return { threadId, bypassed };
   }
 
-  async hasUsableEnabledAccount(): Promise<boolean> {
+  async hasUsableEnabledAccount(provider?: PoolProvider): Promise<boolean> {
     for (const account of await this.accounts.list()) {
-      if (!account.enabled) continue;
+      if (
+        !account.enabled ||
+        (provider !== undefined && account.provider !== provider)
+      )
+        continue;
       try {
         await this.accounts.readSecret(account.id);
         return true;

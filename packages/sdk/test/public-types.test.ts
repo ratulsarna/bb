@@ -353,6 +353,7 @@ type ExpectedThreadsKey =
   | "archiveAll"
   | "cancelPlan"
   | "childSummary"
+  | "clearContext"
   | "clearGoal"
   | "compact"
   | "conversationOutline"

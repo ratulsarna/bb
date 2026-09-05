@@ -157,6 +157,14 @@ function searchIntent(query: string, path: string): TimelineActivityIntent {
   };
 }
 
+function listFilesIntent(path: string): TimelineActivityIntent {
+  return {
+    type: "list_files",
+    command: `ls ${path}`,
+    path,
+  };
+}
+
 function deletedFileRow(): TimelineFileChangeWorkRow {
   return {
     ...baseRow("file-1"),
@@ -1633,6 +1641,42 @@ describe("buildTimelineRowTitle", () => {
     expect(titles[0]?.title.decorations).toEqual([
       { kind: "status", status: "error", durationMs: null, emphasis: false },
     ]);
+  });
+
+  it("carries a presentation badge onto command and exploration titles", () => {
+    const badge = {
+      glyph: "SquareUnlock02",
+      label: "sandbox off",
+      hint: "Ran outside of sandbox",
+      tone: "destructive",
+    } as const;
+    const presentation = {
+      label: { pending: "Running command", completed: "Ran command" },
+      icon: { glyph: "Terminal" },
+      badge,
+    };
+    const badgeDecoration = {
+      kind: "badge",
+      glyph: "SquareUnlock02",
+      label: "sandbox off",
+      hint: "Ran outside of sandbox",
+      tone: "destructive",
+    };
+
+    const plainCommand = buildTimelineRowTitle(
+      { ...commandRow(), presentation } satisfies TimelineCommandWorkRow,
+      DEFAULT_OPTIONS,
+    );
+    expect(plainCommand.decorations[0]).toEqual(badgeDecoration);
+    expect(plainCommand.plain).toContain("(sandbox off)");
+
+    const explorationTitles = buildTimelineActivityIntentTitles({
+      ...commandRow(),
+      presentation,
+      activityIntents: [searchIntent("TODO", "src"), listFilesIntent("test")],
+    } satisfies TimelineCommandWorkRow);
+    expect(explorationTitles[0]?.title.decorations).toEqual([badgeDecoration]);
+    expect(explorationTitles[1]?.title.decorations).toEqual([]);
   });
 
   it("appends an (interrupted) decoration to compact exploration intents on interrupted rows", () => {

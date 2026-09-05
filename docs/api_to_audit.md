@@ -1,5 +1,30 @@
 # APIs To Audit
 
+## `bb.http.experimental_websocket`
+
+**What it does.** Registers an exact-path WebSocket upgrade in the plugin's
+existing `/api/v1/plugins/<id>/http/` namespace. It shares HTTP route auth
+modes, gives the plugin the upgrade request metadata, normalizes incoming text
+and binary frames, and closes sockets from a replaced or disabled plugin
+generation with code 1012. The supporting public types are
+`ExperimentalPluginWebSocket`, `ExperimentalPluginWebSocketContext`,
+`ExperimentalPluginWebSocketHandler`, and
+`ExperimentalPluginWebSocketHandlers`; the testing harness exposes
+`experimental_openWebSocket`, `ExperimentalFakeWebSocketRouteRecord`, and
+`ExperimentalFakeWebSocketSession`.
+
+**Audit before stabilizing.**
+
+1. Confirm the HTTP namespace and exact-path rule cover plugin proxy use cases
+   without a separate WebSocket namespace or parameterized routing.
+2. Decide whether subprotocol negotiation belongs in the context or returned
+   handler contract.
+3. Confirm string and `Uint8Array` are sufficient for frame data and sends.
+4. Confirm code 1012 is the right reload/disable signal and whether plugins
+   need a distinct disposal reason.
+5. Confirm the callback error policy should keep the socket open after an
+   isolated message-handler failure.
+
 ## `bb.providers.experimental_contributeEnvHealth`
 
 **What it does.** Registers one host-scoped readiness resolver beside a
@@ -1830,6 +1855,45 @@ Before stabilization, audit:
    `messageAction`'s `openPanel` and `useBbNavigate().openThreadPanel`. Do not
    re-litigate that in the stabilization audit; audit only whether the two
    _contexts_ should merge.
+
+## `app.experimental_sidebarFooter` (`@get-bb/plugin-sdk/app`)
+
+**What it does.** Registers host-rendered icon items in the app sidebar footer.
+An item is either an `action`, whose `onActivate` callback runs when selected,
+or a `disclosure`, whose React component is revealed above the footer row. The
+host owns button chrome, accessibility, responsive containment, and a
+single active disclosure across all plugins. A disclosure component owns
+everything inside its boundary and receives only `dismiss()`.
+
+Registering an action returns nothing. Registering a disclosure returns a
+controller that can request `open`, `close`, or `toggle`. Those requests go
+through the host's shared active-item coordinator, so opening one plugin's
+disclosure replaces another and a stale scoped `close` cannot dismiss a sibling.
+The existing `app.slots.sidebarFooterAction` remains a compatibility surface and
+renders in the same footer row.
+
+**Audit before stabilizing.**
+
+1. **Naming and shape.** Confirm `sidebarFooter`, `action`, and `disclosure` are
+   the durable concepts, and whether the managed namespace should keep one
+   discriminated `register` method or split registrations by behavior.
+2. **Imperative controller.** Validate real plugins can issue open requests
+   without leaking subscriptions across frontend generations. Decide whether
+   a declarative external-store contract would be safer.
+3. **Programmatic opening.** Confirm `open()` should remain available. The
+   intended policy is direct user-driven flows; background changes should not
+   surprise-open sidebar content.
+4. **Disclosure lifecycle.** Components currently mount only while open and
+   remount after dismissal. Confirm plugins do not require retained hidden state,
+   or add an explicit retention policy before stabilizing.
+5. **Footer capacity.** Establish overflow behavior when several plugins
+   register items, including compact viewports and icon-collapsed sidebars.
+6. **Compatibility.** Migrate representative users of
+   `sidebarFooterAction`, then decide whether stabilization replaces and
+   deprecates that method or keeps action registration in both surfaces.
+7. **Focus and dismissal.** Validate icon toggling, Escape, focus return,
+   disclosure replacement, plugin reload, crash isolation, and removal while
+   open across desktop and compact sidebar layouts.
 
 ## `app.slots.experimental_sidebarNavigation` (`@get-bb/plugin-sdk/app`)
 

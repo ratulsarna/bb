@@ -27,6 +27,7 @@ import {
 import { isTransientReadError } from "@/hooks/queries/query-helpers";
 import { stripProjectThreads } from "@/hooks/queries/project-queries";
 import { useSidebarNavigation } from "@/hooks/queries/sidebar-navigation-query";
+import { useSystemConfig } from "@/hooks/queries/system-queries";
 import { useReorderPinnedThread } from "@/hooks/mutations/thread-state-mutations";
 import {
   useCreateThreadSection,
@@ -899,6 +900,12 @@ export function ActiveSidebarModeSections({
   return renderProject();
 }
 
+function useSidebarProgressiveDisclosureEnabled(): boolean {
+  return (
+    useSystemConfig().data?.experiments.sidebarProgressiveDisclosure ?? false
+  );
+}
+
 interface ProjectModeSectionsProps extends BuiltInSectionRenderState {
   collapsedEnvironmentIds: Set<string>;
   collapsedThreadIds: Set<string>;
@@ -943,6 +950,8 @@ function ProjectModeSections({
   threads,
   threadsSection,
 }: ProjectModeSectionsProps) {
+  const progressiveDisclosureEnabled =
+    useSidebarProgressiveDisclosureEnabled();
   const [collapsedProjectIdList, setCollapsedProjectIdList] = useAtom(
     collapsedProjectIdsAtom,
   );
@@ -1040,16 +1049,17 @@ function ProjectModeSections({
     }
     return rows;
   }, [projectRows]);
+  const personalThreads =
+    threadsByProject.get(PERSONAL_PROJECT_ID)?.filter(isSidebarProjectThread) ??
+    [];
   const { onOrderChange, order, persistedOrder } = useSidebarModeSectionOrder({
     mode: "project",
     entitySectionIds: projectSectionIds,
+    hasThreadsSection: personalThreads.length > 0 || projectRows.length === 0,
     showPinnedSection,
     isReady,
   });
   const reorderDisabled = order.length < 2;
-  const personalThreads =
-    threadsByProject.get(PERSONAL_PROJECT_ID)?.filter(isSidebarProjectThread) ??
-    [];
   const builtInSections: BuiltInSidebarSectionOptionsById = {
     pinned: pinnedSection,
     threads: {
@@ -1063,6 +1073,7 @@ function ProjectModeSections({
             status,
             threads: personalThreads,
           })}
+          progressiveDisclosureEnabled={progressiveDisclosureEnabled}
           selectedThreadId={selectedThreadId}
           collapsedThreadIds={collapsedThreadIds}
           collapsedEnvironmentIds={collapsedEnvironmentIds}
@@ -1101,6 +1112,7 @@ function ProjectModeSections({
             sortableId={sectionId}
             project={row.project}
             threadListState={row.threadListState}
+            progressiveDisclosureEnabled={progressiveDisclosureEnabled}
             selectedThreadId={selectedThreadId}
             isActive={row.isActive}
             isCollapsed={collapsedProjectIds.has(row.project.id)}
@@ -1271,6 +1283,8 @@ export function MachineModeSections({
   threads,
   threadsSection,
 }: MachineModeSectionsProps) {
+  const progressiveDisclosureEnabled =
+    useSidebarProgressiveDisclosureEnabled();
   const { data: hosts } = useHosts();
   const [collapsedMachineKeyList, setCollapsedMachineKeyList] = useAtom(
     sidebarCollapsedMachinesAtom,
@@ -1347,6 +1361,7 @@ export function MachineModeSections({
       content: (
         <ProjectThreadTree
           threadListState={allThreadsListState}
+          progressiveDisclosureEnabled={progressiveDisclosureEnabled}
           compareThreads={compareThreads}
           variant="section"
           selectedThreadId={selectedThreadId}
@@ -1398,6 +1413,7 @@ export function MachineModeSections({
           >
             <ProjectThreadTree
               threadListState={section.threadListState}
+              progressiveDisclosureEnabled={progressiveDisclosureEnabled}
               compareThreads={compareThreads}
               variant="section"
               selectedThreadId={selectedThreadId}

@@ -1086,6 +1086,7 @@ function createThreadSession(attachment: ThreadAttachment): ThreadSession {
 
   const translator = createClaudeDeltaTranslator({
     cwd: attachment.sessionConstructionConfig.sessionOptions.cwd,
+    sandboxEnabled: attachment.sessionOptions.sandbox?.enabled === true,
   });
   translator.configureInjectedTools(
     (attachment.sessionConstructionConfig.dynamicTools ?? []).map((tool) => ({

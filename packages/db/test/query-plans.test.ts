@@ -480,7 +480,10 @@ describe("slow query index plans", () => {
     const { db, thread } = setup();
 
     const captured = captureStatements(db, () => {
-      listStoredConversationOutlineEventRows(db, { threadId: thread.id });
+      listStoredConversationOutlineEventRows(db, {
+        sequenceStart: 0,
+        threadId: thread.id,
+      });
     });
     const outline = captured.filter((query) =>
       query.sql.includes('from "events"'),
@@ -489,6 +492,7 @@ describe("slow query index plans", () => {
     const [query] = outline;
     expect(query?.params).toEqual([
       thread.id,
+      0,
       "client/turn/requested",
       "turn/input/accepted",
       "turn/started",
@@ -500,10 +504,12 @@ describe("slow query index plans", () => {
       "item/agentMessage/delta",
       "item/plan/delta",
       thread.id,
+      0,
       "item/completed",
       "agentMessage",
       "plan",
       thread.id,
+      0,
       "item/started",
       "item/completed",
       "item/backgroundTask/progress",

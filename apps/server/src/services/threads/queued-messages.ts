@@ -85,6 +85,10 @@ import {
 } from "../lib/lifecycle-api-errors.js";
 import { validatePromptAttachmentReferences } from "../projects/attachments.js";
 import { requestQueuedMessageDispatch } from "./queued-message-dispatch.js";
+import {
+  ThreadContextClearInProgressError,
+  withThreadSendGuard,
+} from "./thread-context-mutation-guard.js";
 
 interface SendQueuedMessageArgs {
   claimPolicy: QueuedThreadMessageGroupClaimPolicy;
@@ -164,30 +168,6 @@ async function requireReadyQueuedMessageEnvironment(
 export interface CreateQueuedMessageForThreadArgs {
   payload: CreateQueuedMessageRequest;
   thread: Thread;
-}
-
-export function queuedMessagePayloadFromSendRequest(
-  payload: SendMessageRequest,
-): CreateQueuedMessageRequest {
-  return {
-    input: payload.input,
-    ...(payload.model !== undefined ? { model: payload.model } : {}),
-    ...(payload.serviceTier !== undefined
-      ? { serviceTier: payload.serviceTier }
-      : {}),
-    ...(payload.reasoningLevel !== undefined
-      ? { reasoningLevel: payload.reasoningLevel }
-      : {}),
-    ...(payload.permissionMode !== undefined
-      ? { permissionMode: payload.permissionMode }
-      : {}),
-    ...(payload.executionInputSources !== undefined
-      ? { executionInputSources: payload.executionInputSources }
-      : {}),
-    ...(payload.senderThreadId !== undefined
-      ? { senderThreadId: payload.senderThreadId }
-      : {}),
-  };
 }
 
 function admitQueuedMessage(
@@ -692,7 +672,9 @@ async function sendClaimedQueuedMessageForThread(
   if (notice) {
     return notice;
   }
-  const sent = await sendClaimedQueuedMessageForIdleProviderThread(deps, args);
+  const sent = await withThreadSendGuard(args.thread.id, () =>
+    sendClaimedQueuedMessageForIdleProviderThread(deps, args),
+  );
   if (sent) {
     return sent;
   }
@@ -803,7 +785,10 @@ export async function sendQueuedMessage(
     );
   } catch (error) {
     releaseQueuedMessageClaims(deps, queuedMessages);
-    if (isQueuedMessageAutoSendPausedError(error)) {
+    if (
+      isQueuedMessageAutoSendPausedError(error) ||
+      error instanceof ThreadContextClearInProgressError
+    ) {
       return toThreadQueuedMessage(queuedMessages[0]!);
     }
     throw error;
@@ -883,7 +868,8 @@ export async function sendNextQueuedMessageIfPresent(
     releaseQueuedMessageClaims(deps, nextQueuedMessages);
     if (
       isQueuedMessageClaimLostError(error) ||
-      isQueuedMessageAutoSendPausedError(error)
+      isQueuedMessageAutoSendPausedError(error) ||
+      error instanceof ThreadContextClearInProgressError
     ) {
       return false;
     }

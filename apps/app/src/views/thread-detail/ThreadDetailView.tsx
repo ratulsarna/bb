@@ -217,6 +217,7 @@ import {
 } from "@/lib/app-navigation-host";
 import { openAppFixedTabFromDestinations } from "@/lib/app-fixed-tab-navigation";
 import {
+  getFileBasename,
   normalizeExperimentalFileOpenOptions,
   toFilePreviewLineRange,
 } from "@/lib/live-file-navigation";
@@ -439,11 +440,6 @@ function buildMarkdownPreviewLinkRouting({
   };
 }
 
-function getLocalFileBasename(path: string): string {
-  const normalizedPath = path.replace(/[\\/]+$/u, "");
-  return normalizedPath.split(/[\\/]/u).at(-1) ?? path;
-}
-
 function buildOpenTargetMenuItemLabel(target: WorkspaceOpenTarget): string {
   return `Open in ${target.label}`;
 }
@@ -630,11 +626,10 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
     },
   );
   const pendingInteractions = pendingInteractionsQuery.data ?? [];
-  const pendingInteractionsInitialLoading =
-    isPendingInteractionStateUnknown(
-      pendingInteractionsQuery.data,
-      pendingInteractionsQuery.isFetching,
-    );
+  const pendingInteractionsInitialLoading = isPendingInteractionStateUnknown(
+    pendingInteractionsQuery.data,
+    pendingInteractionsQuery.isFetching,
+  );
   const hasPendingInteraction =
     getLatestPendingInteraction(pendingInteractions) !== null;
   const { data: queuedMessagesForEditEligibility = [] } =
@@ -848,6 +843,7 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
     activeThinking,
     activeWorkflows,
     activeBackgroundCommands,
+    contextBoundarySeq,
     contextWindowUsage,
     goal,
     hasOlderTimelineRows,
@@ -2292,7 +2288,7 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
           id: "copy-name",
           label: "Copy file name",
           onSelect: () => {
-            void copyToClipboardWithToast(getLocalFileBasename(link.path), {
+            void copyToClipboardWithToast(getFileBasename(link.path), {
               successMessage: "File name copied",
               errorMessage: "Failed to copy file name",
             });
@@ -2909,6 +2905,7 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
             timeline={{
               activeThinking,
               canSpawnChild: thread.canSpawnChild,
+              contextBoundarySeq,
               threadOriginKind,
               hasOlderTimelineRows,
               hostConnectionNotice,

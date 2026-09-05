@@ -23,6 +23,7 @@ function makeResponse(rowCount: number): ThreadTimelineResponse {
       detail: null,
       status: null,
     })),
+    contextBoundarySeq: null,
     activePromptMode: null,
     activeThinking: null,
     activeWorkflows: [],

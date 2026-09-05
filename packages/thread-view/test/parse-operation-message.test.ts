@@ -178,6 +178,26 @@ describe("parseOperationMessage operation titles", () => {
     });
   });
 
+  it("renders a context clear as a concise completed boundary", () => {
+    const row = factory().systemOperation({
+      operation: "context_clear",
+      status: "completed",
+      message:
+        "New prompts won’t include messages above. Thread history and workspace are unchanged.",
+    });
+    const { event, meta } = decodeThreadEventRow(row);
+
+    expect(
+      parseOperationMessage(event, meta, { threadName: THREAD_NAME }),
+    ).toMatchObject({
+      kind: "operation",
+      title: "Context cleared",
+      detail:
+        "New prompts won’t include messages above. Thread history and workspace are unchanged.",
+      status: "completed",
+    });
+  });
+
   describe("ownership-change", () => {
     it("links the thread to its new/previous parent by action", () => {
       expect(

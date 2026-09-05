@@ -86,6 +86,18 @@ const ECHO_PRESENTATION: ThreadEventItemPresentation = {
   tint: { light: "#1d4ed8", dark: "#93c5fd" },
 };
 
+const SANDBOX_ESCAPED_COMMAND_PRESENTATION: ThreadEventItemPresentation = {
+  label: { pending: "Running command", completed: "Ran command" },
+  icon: { glyph: "Terminal" },
+  title: "ls -la ~/.claude/ide",
+  badge: {
+    glyph: "SquareUnlock02",
+    label: "sandbox off",
+    hint: "Ran outside of sandbox",
+    tone: "destructive",
+  },
+};
+
 const PLAN_PRESENTATION: ThreadEventItemPresentation = {
   label: { pending: "Updating plan", completed: "Updated plan" },
   icon: { glyph: "ListTodo" },
@@ -256,6 +268,35 @@ describe("v3 item projection", () => {
     expect(
       buildTimelineActivityIntentTitles(read).map((title) => title.title.plain),
     ).toEqual(["Read src/index.ts"]);
+  });
+
+  it("carries a command item's presentation through projection into its title", () => {
+    const event = createTimelineEventFactory({ threadId: "thread-1" });
+    const rendered = renderTimelineFixture({
+      events: [
+        event.turnStarted({ turnId: "turn-1", createdAt: 0 }),
+        event.commandStarted({
+          turnId: "turn-1",
+          itemId: "cmd-1",
+          command: "ls -la ~/.claude/ide",
+          presentation: SANDBOX_ESCAPED_COMMAND_PRESENTATION,
+          createdAt: 1_000,
+        }),
+        event.commandCompleted({
+          turnId: "turn-1",
+          itemId: "cmd-1",
+          command: "ls -la ~/.claude/ide",
+          presentation: SANDBOX_ESCAPED_COMMAND_PRESENTATION,
+          exitCode: 0,
+          createdAt: 2_000,
+        }),
+      ],
+      projectionOptions: { threadStatus: "idle", turnMessageDetail: "full" },
+    });
+
+    const row = workRow(rendered.rows, "command", "cmd-1");
+    expect(row.presentation).toEqual(SANDBOX_ESCAPED_COMMAND_PRESENTATION);
+    expect(plainTitle(row)).toContain("(sandbox off)");
   });
 
   it("groups v3 exploration rows into one exploration bundle like legacy reads", () => {

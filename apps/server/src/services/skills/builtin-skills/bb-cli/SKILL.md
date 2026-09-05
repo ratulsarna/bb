@@ -52,14 +52,17 @@ BB_HOST_DAEMON_PORT only for an intentional non-default target.
 - Pass `--yes` for a confirmed destructive command in a non-interactive shell.
 - Treat plugin commands as normal top-level commands after installation.
 
-The builtin Account Pool plugin is disabled by default. Enable it, add Claude
-credentials, and inspect its proxy route and account quota with:
+The builtin Account Pooler plugin is disabled by default. Enable it, add Claude
+or Codex credentials, and inspect its proxy routes and account quota with:
 
 ```sh
 bb plugin enable account-pool
 bb pool account add --provider claude --login
 printf '%s\n' "$CLAUDE_AUTH_CODE" | bb pool account login-complete --session <id> --code-stdin
+bb pool account add --provider codex --login
+bb pool account login-poll --session <id>
 bb pool account add --provider claude --import
+bb pool account add --provider codex --import
 printf '%s\n' "$ANTHROPIC_API_KEY" | bb pool account add --provider claude --api-key-stdin [--label <text>] [--priority <n>]
 bb pool account add --provider claude --api-key <key> [--label <text>] [--priority <n>]
 bb pool account list [--json]
@@ -67,17 +70,25 @@ bb pool account remove <id>
 bb pool account enable <id>
 bb pool account disable <id>
 bb pool status [--json]
+bb pool routing <claude|codex> [--off]
+bb pool config
+bb pool config set <anthropicUpstreamBaseUrl|codexUpstreamBaseUrl|switchThreshold> <value>
 bb pool token rotate --machine <id-or-name>
 bb pool bypass <thread-id> [--off]
 ```
 
-`--login` starts a PKCE session, prints a browser URL and session ID, then
-exits. Pipe the manual Claude callback code to `account login-complete` with
-that session ID within ten minutes. The code stays out of process arguments,
-and the browser and bb server may be on different machines. Newly added or
+Claude `--login` starts a PKCE session, prints a browser URL and session ID,
+then exits. Pipe the manual callback code to `account login-complete` with that
+session ID within ten minutes. Codex `--login` prints a device verification
+URL, one-time code, session ID, and an `account login-poll` command that waits
+for authorization. The Claude code stays out of process arguments, and either
+browser may be on a different machine from the bb server. Newly added or
 enabled accounts are available without a plugin reload. With an
-enabled account whose secret file remains readable and valid, Claude Code
-sessions receive the pool route and a distinct secret token for their machine.
+enabled account whose secret file remains readable and valid, matching Claude
+Code or Codex sessions receive the pool route and a distinct secret token for
+their machine.
+Codex receives `CODEX_OPENAI_BASE_URL` and the secret
+`CODEX_POOL_AUTH_TOKEN`; bb applies them as in-memory app-server config.
 Tokens are never printed. `status` prunes tokens for unenrolled machines and
 shows token timestamps plus recently routed threads whose machines need a
 local Claude login before the pool can be disabled safely. Rotation keeps the
@@ -85,9 +96,16 @@ prior token valid for ten minutes. Agents should pipe API keys to
 `--api-key-stdin`;
 `--api-key <key>` is an unsafe compatibility form that exposes the key in
 process arguments, shell history, and agent transcripts. Prefer `--import` for
-an existing Claude Code login. JSON account status
-reports rejected upstream bucket resets under `bucketExhaustion`; this
-diagnostic field does not affect account selection.
+an existing Claude Code login. The CLI Codex import path reads
+`~/.codex/auth.json` on the bb server host. OAuth quota refreshes on add or
+enable and every five minutes while an account is idle. Account tables add columns for observed
+model-family buckets; JSON status exposes their utilization, reset, status,
+observation time, and source under `familyWeekly`. Selection skips an account
+whose requested family is spent while retaining it for other families. A
+present `metadata.user_id` account UUID is aligned with the selected OAuth
+account. Use `bb pool config` to inspect the full routing configuration and
+`bb pool config set <key> <value>` to update one value. The upstream URL keys
+are QA-only overrides; `switchThreshold` must be greater than 0 and at most 1.
 
 - Inspect real status, logs, API results, or diffs instead of assumptions.
 - Keep file paths on the machine that owns the selected workspace.
@@ -108,3 +126,12 @@ bb skill list --environment "$BB_ENVIRONMENT_ID" --json
 
 Confirm the command result and any affected thread, environment, plugin, or
 remote service. Report the stable ID or URL that the user needs next.
+
+
+## Plugin configuration
+
+Use `bb plugin config <id>` to inspect the plugin’s configuration and
+`bb plugin config <id> set <key> <value>` to change it. Read the plugin’s own
+guidance for its delivery commands and supported clients. A server-side
+notification switch does not grant browser or operating system permission;
+that permission is granted from the target client’s settings.
