@@ -1580,18 +1580,19 @@ export function registerPluginCommands(
             value?.startsWith("-") === true &&
             (terminatorIndex < 0 ||
               terminatorIndex > rawArgs.lastIndexOf(value));
+          const valueIsUnknownOption =
+            valueIsOption &&
+            (actionName !== "set" || !negativeNumberValuePattern.test(value));
           const unknownOption =
             [id, actionName, key, ...command.args.slice(4)].find((argument) =>
               argument?.startsWith("-"),
-            ) ??
-            (valueIsOption && !negativeNumberValuePattern.test(value)
-              ? value
-              : undefined);
+            ) ?? (valueIsUnknownOption ? value : undefined);
           if (unknownOption !== undefined)
             command.error(`error: unknown option '${unknownOption}'`);
-          if (command.args.length > 4)
+          const expectedArgumentCount = actionName === "unset" ? 3 : 4;
+          if (command.args.length > expectedArgumentCount)
             command.error(
-              `error: too many arguments for 'config'. Expected 4 arguments but got ${command.args.length}.`,
+              `error: too many arguments for 'config'. Expected ${expectedArgumentCount} arguments but got ${command.args.length}.`,
             );
           const settingsPath = `/${encodeURIComponent(id)}/settings`;
           if (actionName === undefined) {

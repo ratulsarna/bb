@@ -26,6 +26,7 @@ import {
 import type { ConnectCredential } from "@bb/connect-client";
 import type { AppKeybindings } from "@bb/domain";
 import {
+  bbDesktopBrowserImportCookiesRequestSchema,
   bbDesktopThemeSchema,
   type BbDesktopInfo,
   type BbDesktopWindowState,
@@ -52,7 +53,7 @@ import {
   readForeignRuntimeDetails,
   stopForeignRuntime,
 } from "./foreign-runtime.js";
-import { createLocalViewUrl } from "./local-view.js";
+import { createLocalViewUrl, STARTUP_RETRY_CHANNEL } from "./local-view.js";
 import { installApplicationMenu } from "./menu.js";
 import {
   DEFAULT_APPLICATION_MENU_ACCELERATORS,
@@ -160,6 +161,22 @@ import {
 } from "./desktop-browser-view.js";
 import { resolveDesktopBrowserAppCommand } from "./desktop-browser-shortcuts.js";
 import { registerDesktopBrowserIpc } from "./desktop-browser-main-ipc.js";
+import { createBrowserImportService } from "./browser-import/browser-import.js";
+import { readMacAppIcon } from "./browser-import/mac-app-icon.js";
+import {
+  createDesktopBrowserBroker,
+  type DesktopBrowserBroker,
+} from "./desktop-browser-broker.js";
+import { createDesktopBrowserBrokerClient } from "./desktop-browser-broker-client.js";
+import { bbDesktopBrowserTabRefSchema } from "@bb/desktop-contract";
+import {
+  BB_DESKTOP_BROWSER_TARGET_CHANNEL,
+  BB_DESKTOP_BROWSER_GET_CONTROL_CHANNEL,
+  BB_DESKTOP_BROWSER_RELEASE_CONTROL_CHANNEL,
+  BB_DESKTOP_BROWSER_LIST_IMPORT_SOURCES_CHANNEL,
+  BB_DESKTOP_BROWSER_IMPORT_COOKIES_CHANNEL,
+  BB_DESKTOP_BROWSER_OPEN_FULL_DISK_ACCESS_SETTINGS_CHANNEL,
+} from "./desktop-browser-ipc.js";
 import { parseDesktopSystemConfig } from "./desktop-system-config.js";
 import { ensurePackagedUserShellPath } from "./desktop-shell-path.js";
 import { resolveDesktopReloadShortcut } from "./desktop-reload-shortcut.js";
@@ -208,6 +225,7 @@ interface DesktopRuntime {
 interface LoadStartupErrorArgs {
   details: string;
   logs: string;
+  retryable: boolean;
   title: string;
 }
 
@@ -300,6 +318,10 @@ const logViewerCopyRequestSchema = z
 
 let desktopWindowFactory: DesktopWindowFactory | null = null;
 let desktopBrowserViewManager: DesktopBrowserViewManager | null = null;
+let desktopBrowserBroker: DesktopBrowserBroker | null = null;
+let desktopBrowserBrokerClient: ReturnType<
+  typeof createDesktopBrowserBrokerClient
+> | null = null;
 let currentAppKeybindings: AppKeybindings = [];
 let currentApplicationMenuAccelerators = DEFAULT_APPLICATION_MENU_ACCELERATORS;
 let desktopUpdateService: DesktopUpdateService | null = null;
@@ -316,6 +338,8 @@ let systemConfigRefreshToken = 0;
 let refreshRemoteSystemConfig: (() => void) | null = null;
 const applicationWindowWebContentsIds = new Set<number>();
 let bbAppLoaded = false;
+let startupRetryUrl: string | null = null;
+let startupRetryPending = false;
 let stoppingForQuit = false;
 let quitting = false;
 let serverTargetStore: ServerTargetStore | null = null;
@@ -998,6 +1022,8 @@ function startRemoteSystemConfigSync(serverUrl: string): void {
 function registerApplicationWindow(browserWindow: DesktopBrowserWindow): void {
   const webContentsId = browserWindow.webContents.id;
   applicationWindowWebContentsIds.add(webContentsId);
+  const nativeWindow = BrowserWindow.fromId(browserWindow.id);
+  if (nativeWindow !== null) desktopBrowserBroker?.registerWindow(nativeWindow);
   registerApplicationRendererReloadShortcut(
     (browserWindow as BrowserWindow).webContents,
   );
@@ -1009,6 +1035,7 @@ function registerApplicationWindow(browserWindow: DesktopBrowserWindow): void {
     sendDesktopWindowStateChanged(browserWindow);
   });
   browserWindow.on("closed", () => {
+    desktopBrowserBroker?.releaseWindow(webContentsId);
     applicationWindowWebContentsIds.delete(webContentsId);
   });
 }
@@ -1148,7 +1175,30 @@ function ensureDesktopMachineEnrolled(): void {
   });
 }
 
+async function retryStartup(): Promise<void> {
+  if (startupRetryUrl === null || startupRetryPending) {
+    return;
+  }
+  startupRetryPending = true;
+  startupRetryUrl = null;
+  try {
+    await loadLoadingView();
+    await applyServerTarget();
+  } catch (error) {
+    await loadStartupError({
+      details: error instanceof Error ? error.message : String(error),
+      logs: "",
+      retryable: false,
+      title: "Could not open bb",
+    });
+  } finally {
+    startupRetryPending = false;
+  }
+}
+
 async function applyServerTarget(): Promise<void> {
+  startupRetryUrl = null;
+  desktopBrowserBrokerClient?.reconnect();
   if (serverTargetStore === null) {
     return;
   }
@@ -1168,6 +1218,7 @@ async function applyServerTarget(): Promise<void> {
         details:
           "Could not connect to the local bb server on this Mac. Check that the port is free or that a compatible bb server is running.",
         logs: "",
+        retryable: true,
         title: "Could not connect",
       });
       refreshApplicationMenu();
@@ -1198,6 +1249,7 @@ async function applyServerTarget(): Promise<void> {
           "The desktop app could not establish a session for this Connect server. " +
           `Try switching servers again. (${result.code}: ${result.detail})`,
         logs: "",
+        retryable: true,
         title: "Could not authenticate with bb Connect",
       });
       refreshApplicationMenu();
@@ -1448,6 +1500,7 @@ async function openServerDaemonLogs(): Promise<void> {
 }
 
 async function loadWindowUrl(args: LoadWindowUrlArgs): Promise<void> {
+  startupRetryUrl = null;
   currentWindowUrl = args.url;
   if (desktopWindowFactory === null) {
     return;
@@ -1471,16 +1524,18 @@ async function loadLoadingView(): Promise<void> {
 
 async function loadStartupError(args: LoadStartupErrorArgs): Promise<void> {
   bbAppLoaded = false;
-  await loadWindowUrl({
-    url: createLocalViewUrl({
-      viewModel: {
-        details: `${args.details} Logs are under ${formatLogDirectory()}/.`,
-        kind: "error",
-        logText: args.logs,
-        title: args.title,
-      },
-    }),
+  const url = createLocalViewUrl({
+    viewModel: {
+      details: `${args.details} Logs are under ${formatLogDirectory()}/.`,
+      kind: "error",
+      logText: args.logs,
+      retryable: args.retryable,
+      title: args.title,
+    },
   });
+  const loading = loadWindowUrl({ url });
+  startupRetryUrl = args.retryable ? url : null;
+  await loading;
 }
 
 async function loadBbApp(serverUrl: string): Promise<void> {
@@ -1549,6 +1604,8 @@ function handleBeforeQuit(event: Event): void {
 }
 
 async function finishQuit(): Promise<void> {
+  desktopBrowserBrokerClient?.stop();
+  desktopBrowserBroker?.dispose();
   stopSystemConfigSync();
   connectSessionRenewal?.stop();
   desktopUpdateService?.stop();
@@ -1604,6 +1661,18 @@ function registerDesktopUpdateIpc(): void {
       return;
     }
     nativeTheme.themeSource = parsed.data;
+  });
+  ipcMain.on(STARTUP_RETRY_CHANNEL, (event, ...payload: unknown[]) => {
+    if (
+      payload.length !== 0 ||
+      startupRetryUrl === null ||
+      !applicationWindowWebContentsIds.has(event.sender.id) ||
+      event.senderFrame !== event.sender.mainFrame ||
+      event.senderFrame?.url !== startupRetryUrl
+    ) {
+      return;
+    }
+    void retryStartup();
   });
 
   ipcMain.on(BB_DESKTOP_CLOSE_WINDOW_RESPONSE_CHANNEL, (event, payload) => {
@@ -1718,6 +1787,7 @@ async function startOwnedRuntime(
         exit,
       )}.`,
       logs: bbProcess.logs.text(),
+      retryable: false,
       title: "bb stopped",
     });
   });
@@ -1743,6 +1813,7 @@ async function startOwnedRuntime(
         raceResult.exit,
       )}.`,
       logs: bbProcess.logs.text(),
+      retryable: false,
       title: "Could not start bb",
     });
     setCurrentRuntime(null);
@@ -1759,6 +1830,7 @@ async function startOwnedRuntime(
         ? `Port ${args.serverUrl} is responding, but it does not look like bb: ${raceResult.result.reason}.`
         : `Timed out waiting for bb at ${args.serverUrl}: ${raceResult.result.reason}.`,
     logs: bbProcess.logs.text(),
+    retryable: false,
     title: "Could not start bb",
   });
   await stopOwnedRuntime();
@@ -1841,6 +1913,7 @@ async function decideOnExistingServer(
         `The bb at ${probe.serverUrl} records process ${String(stopResult.pid)}, but that ` +
         "process no longer matches the record. bb did not stop it. Stop it yourself, then open bb again.",
       logs: "",
+      retryable: false,
       title: "Could not stop the running bb",
     });
     return "quit";
@@ -1849,6 +1922,7 @@ async function decideOnExistingServer(
     await loadStartupError({
       details: `bb could not stop process ${String(stopResult.pid)}, even after SIGKILL.`,
       logs: "",
+      retryable: false,
       title: "Could not stop the running bb",
     });
     return "quit";
@@ -1859,6 +1933,7 @@ async function decideOnExistingServer(
         `Another bb started at ${probe.serverUrl} while the question was open, so bb stopped nothing. ` +
         "Open bb again to see the copy that runs now.",
       logs: "",
+      retryable: false,
       title: "Could not stop the running bb",
     });
     return "quit";
@@ -1867,6 +1942,7 @@ async function decideOnExistingServer(
     await loadStartupError({
       details: `The bb at ${probe.serverUrl} stopped, but the address is still in use.`,
       logs: "",
+      retryable: false,
       title: "Could not stop the running bb",
     });
     return "quit";
@@ -1922,6 +1998,7 @@ async function initializeRuntime(args: InitializeRuntimeArgs): Promise<void> {
     await loadStartupError({
       details: `Port ${args.serverUrl} is already in use, but it is not a compatible bb server: ${existingProbe.reason}.`,
       logs: "",
+      retryable: false,
       title: "Port conflict",
     });
     return;
@@ -2202,6 +2279,101 @@ async function runDesktopApp(): Promise<void> {
     },
   });
   registerDesktopBrowserIpc(desktopBrowserViewManager);
+  const browserImportService = createBrowserImportService({
+    context: { platform: process.platform, home: homedir() },
+    resolveIcon: (appPath) => readMacAppIcon(appPath),
+    log(message, details) {
+      createDesktopLogger().info(
+        `[desktop] ${message}${details ? ` ${JSON.stringify(details)}` : ""}`,
+      );
+    },
+  });
+  desktopBrowserBroker = createDesktopBrowserBroker({
+    manager: desktopBrowserViewManager,
+    product: `Chrome/${process.versions.chrome}`,
+    browserImport: browserImportService,
+  });
+  ipcMain.handle(
+    BB_DESKTOP_BROWSER_LIST_IMPORT_SOURCES_CHANNEL,
+    async (event) => {
+      if (!applicationWindowWebContentsIds.has(event.sender.id)) return null;
+      return { sources: await browserImportService.listSources() };
+    },
+  );
+  ipcMain.handle(
+    BB_DESKTOP_BROWSER_IMPORT_COOKIES_CHANNEL,
+    async (event, payload: unknown) => {
+      const parsed =
+        bbDesktopBrowserImportCookiesRequestSchema.safeParse(payload);
+      if (
+        !parsed.success ||
+        !applicationWindowWebContentsIds.has(event.sender.id)
+      )
+        return null;
+      const manager = desktopBrowserViewManager;
+      if (!manager) return null;
+      return browserImportService.importCookies(
+        {
+          sourceId: parsed.data.sourceId,
+          sourceProfileDirectory: parsed.data.sourceProfileDirectory,
+        },
+        manager.profileSession(parsed.data.profile),
+      );
+    },
+  );
+  ipcMain.on(
+    BB_DESKTOP_BROWSER_OPEN_FULL_DISK_ACCESS_SETTINGS_CHANNEL,
+    (event) => {
+      if (
+        !applicationWindowWebContentsIds.has(event.sender.id) ||
+        process.platform !== "darwin"
+      )
+        return;
+      void shell.openExternal(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+      );
+    },
+  );
+  ipcMain.handle(BB_DESKTOP_BROWSER_TARGET_CHANNEL, (event) => {
+    return applicationWindowWebContentsIds.has(event.sender.id)
+      ? (desktopBrowserBroker?.getTarget(event.sender.id) ?? null)
+      : null;
+  });
+  ipcMain.handle(
+    BB_DESKTOP_BROWSER_GET_CONTROL_CHANNEL,
+    (event, payload: unknown) => {
+      const parsed = bbDesktopBrowserTabRefSchema.safeParse(payload);
+      return parsed.success &&
+        applicationWindowWebContentsIds.has(event.sender.id)
+        ? (desktopBrowserBroker?.getControl(
+            event.sender.id,
+            parsed.data.tabId,
+          ) ?? null)
+        : null;
+    },
+  );
+  ipcMain.on(
+    BB_DESKTOP_BROWSER_RELEASE_CONTROL_CHANNEL,
+    (event, payload: unknown) => {
+      const parsed = bbDesktopBrowserTabRefSchema.safeParse(payload);
+      if (
+        parsed.success &&
+        applicationWindowWebContentsIds.has(event.sender.id)
+      )
+        desktopBrowserBroker?.takeOver(event.sender.id, parsed.data.tabId);
+    },
+  );
+  desktopBrowserBrokerClient = createDesktopBrowserBrokerClient({
+    broker: desktopBrowserBroker,
+    dataDir: resolveDataDirFromEnv({ env: process.env, homeDir: homedir() }),
+    homeDir: homedir(),
+    getServerUrl() {
+      const target = serverTargetStore?.getTarget();
+      if (target?.kind === "connect") return target.server.url;
+      if (target?.kind === "custom") return target.url;
+      return currentRuntime?.serverUrl ?? builtinServerUrl;
+    },
+  });
   if (desktopUpdateSupport.versionCheck) {
     desktopUpdateService.start();
   }
@@ -2271,6 +2443,7 @@ void runDesktopApp().catch((error) => {
   void loadStartupError({
     details: message,
     logs: "",
+    retryable: false,
     title: "Could not open bb",
   });
 });

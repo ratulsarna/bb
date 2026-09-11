@@ -1,3 +1,5 @@
+import { reportEnvironmentHookProgress } from "../services/environments/environment-hooks.js";
+import { syncDesktopBrowserTabs } from "../services/desktop-browsers.js";
 import { heartbeatSession } from "@bb/db";
 import {
   hasHostDaemonWebSocketProtocol,
@@ -182,12 +184,37 @@ export function onDaemonSocketMessage(
         );
         return;
       }
+      if (result.data.type === "desktop-browser.changed") {
+        const scope = {
+          hostId: args.hostId,
+          instanceId: result.data.instanceId,
+          generation: result.data.generation,
+          threadId: result.data.threadId,
+        };
+        try {
+          syncDesktopBrowserTabs(deps, scope, result.data.tabs);
+        } catch (error) {
+          deps.logger.warn(
+            {
+              sessionId: args.sessionId,
+              ...scope,
+              ...runtimeErrorLogFields(deps.config, error),
+            },
+            "Dropping desktop browser snapshot the server cannot apply",
+          );
+        }
+        return;
+      }
       if (result.data.type === "plugin-host.worker-exited") {
         plugins?.handleHostWorkerExit({
           authenticatedHostId: args.hostId,
           pluginId: result.data.pluginId,
           generation: result.data.generation,
         });
+        return;
+      }
+      if (result.data.type === "environment.hook.progress") {
+        reportEnvironmentHookProgress(deps, args.hostId, result.data);
         return;
       }
       if (result.data.type === "plugin-host.signal") {
@@ -239,9 +266,10 @@ export function onDaemonSocketMessage(
     deps.logger.warn(
       {
         sessionId: args.sessionId,
+        messageType: result.data.type,
         ...runtimeErrorLogFields(deps.config, error),
       },
-      "Daemon heartbeat rejected, closing socket",
+      "Daemon message rejected, closing socket",
     );
     args.socket.close(1008, "inactive-session");
   }

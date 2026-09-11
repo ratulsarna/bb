@@ -222,13 +222,20 @@ export const statusSchema = z
     inFlight: z.number().int().nonnegative(),
     accepting: z.boolean(),
     hosts: z.array(hubTokenSummarySchema),
-    routedThreadsWithoutLocalLogin: z.array(routedThreadStatusSchema),
     accounts: z.array(accountSummarySchema),
     routing: z.object({ claude: z.boolean(), codex: z.boolean() }).strict(),
   })
   .strict();
 
 export type PoolStatus = z.infer<typeof statusSchema>;
+
+export const routedThreadStatusListSchema = z.array(routedThreadStatusSchema);
+
+export const statusReportSchema = statusSchema
+  .extend({ routedThreadsWithoutLocalLogin: routedThreadStatusListSchema })
+  .strict();
+
+export type PoolStatusReport = z.infer<typeof statusReportSchema>;
 
 export const accountAddInputSchema = z
   .object({
@@ -292,6 +299,13 @@ export const accountIdInputSchema = z
 
 export const accountPriorityInputSchema = z
   .object({ accountId: z.string().uuid(), priority: z.number().int() })
+  .strict();
+
+export const accountReorderInputSchema = z
+  .object({
+    provider: providerSchema,
+    accountIds: z.array(z.string().uuid()).min(1),
+  })
   .strict();
 
 export const routingSetInputSchema = z

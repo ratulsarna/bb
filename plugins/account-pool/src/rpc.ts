@@ -6,6 +6,7 @@ import {
   accountPoolConfigSetInputSchema,
   accountIdInputSchema,
   accountPriorityInputSchema,
+  accountReorderInputSchema,
   accountSchema,
   accountSummarySchema,
   bypassInputSchema,
@@ -17,6 +18,7 @@ import {
   hubTokenSummarySchema,
   loginCompleteInputSchema,
   loginStartSchema,
+  routedThreadStatusListSchema,
   statusSchema,
   tokenRotateInputSchema,
   routingSetInputSchema,
@@ -50,6 +52,10 @@ export const accountPoolRpcContract = defineRpcContract({
   "account.setPriority": {
     input: accountPriorityInputSchema,
     output: z.object({ account: accountSchema.nullable() }).strict(),
+  },
+  "account.reorder": {
+    input: accountReorderInputSchema,
+    output: z.null(),
   },
   "account.refreshUsage": {
     input: z.object({ accountId: z.string().uuid() }).strict(),
@@ -93,6 +99,10 @@ export const accountPoolRpcContract = defineRpcContract({
     input: z.null(),
     output: statusSchema,
   },
+  "status.routedThreads": {
+    input: z.null(),
+    output: routedThreadStatusListSchema,
+  },
   "token.rotate": {
     input: tokenRotateInputSchema,
     output: hubTokenSummarySchema,
@@ -134,6 +144,13 @@ export function createRpcHandlers(
     "account.refreshUsage": async ({ accountId }: { accountId: string }) => ({
       account: await operations.refreshUsage(accountId),
     }),
+    "account.reorder": async ({
+      provider,
+      accountIds,
+    }: z.infer<typeof accountReorderInputSchema>) => {
+      await operations.reorder(provider, accountIds);
+      return null;
+    },
     "routing.set": async ({
       provider,
       enabled,
@@ -156,6 +173,7 @@ export function createRpcHandlers(
       cancelled: codexLogin.cancel(input),
     }),
     "status.get": () => operations.status(),
+    "status.routedThreads": () => operations.routedThreadsWithoutLocalLogin(),
     "token.rotate": ({ machine }: { machine: string }) =>
       operations.rotateToken(machine),
     "bypass.set": ({

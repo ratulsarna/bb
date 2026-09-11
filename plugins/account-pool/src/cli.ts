@@ -3,6 +3,8 @@ import { setTimeout as wait } from "node:timers/promises";
 import {
   accountAddInputSchema,
   accountIdInputSchema,
+  accountPriorityInputSchema,
+  accountReorderInputSchema,
   accountPoolConfigSetInputSchema,
   bypassInputSchema,
   codexLoginPollInputSchema,
@@ -16,7 +18,7 @@ import {
   type FamilyQuota,
   type LimitWindow,
   type ModelFamily,
-  type PoolStatus,
+  type PoolStatusReport,
 } from "./contracts.js";
 import type { PoolOperations } from "./operations.js";
 import type { ClaudeOAuthLogin } from "./oauth-login.js";
@@ -41,12 +43,18 @@ const HELP = [
   "  bb pool account remove <id>",
   "  bb pool account enable <id>",
   "  bb pool account disable <id>",
+  "  bb pool account priority <id> <n>",
+  "  bb pool account reorder <claude|codex> <id>...",
+  "  bb pool account refresh <id>",
   "  bb pool status [--json]",
   "  bb pool routing <claude|codex> [--off]",
   "  bb pool config",
   "  bb pool config set <anthropicUpstreamBaseUrl|codexUpstreamBaseUrl|switchThreshold> <value>",
   "  bb pool token rotate --machine <id-or-name>",
   "  bb pool bypass <thread-id> [--off]",
+  "",
+  "Accounts run sequentially by priority, then order added. The current fallback stays active until unavailable.",
+  "Reorder includes every account for the provider and changes the next failover sequence; existing conversations stay pinned.",
 ].join("\n");
 
 function parseFlags(
@@ -172,7 +180,7 @@ function formatAccounts(accounts: readonly AccountSummary[]): string {
   ].join("\n");
 }
 
-function formatStatus(status: PoolStatus): string {
+function formatStatus(status: PoolStatusReport): string {
   return [
     `Route: ${status.route}`,
     `Accepting: ${status.accepting}`,
@@ -287,6 +295,21 @@ export function registerPoolCli(
         usage: "bb pool account disable <id>",
       },
       {
+        name: "account-priority",
+        summary: "Set an account's position in the failover priority order",
+        usage: "bb pool account priority <id> <n>",
+      },
+      {
+        name: "account-reorder",
+        summary: "Set the complete failover order for one provider",
+        usage: "bb pool account reorder <claude|codex> <id>...",
+      },
+      {
+        name: "account-refresh",
+        summary: "Refresh one account's observed usage",
+        usage: "bb pool account refresh <id>",
+      },
+      {
         name: "status",
         summary: "Show hub, machine token, routing, and account status",
         usage: "bb pool status [--json]",
@@ -322,6 +345,41 @@ export function registerPoolCli(
       try {
         if (argv.includes("--help") || argv.includes("-h")) {
           return { exitCode: 0, stdout: `${HELP}\n` };
+        }
+        if (argv[0] === "account" && argv[1] === "priority") {
+          if (argv.length !== 4 || argv[3]?.trim() === "")
+            throw new Error(HELP);
+          const input = accountPriorityInputSchema.parse({
+            accountId: argv[2],
+            priority: Number(argv[3]),
+          });
+          const account = await operations.setPriority(
+            input.accountId,
+            input.priority,
+          );
+          if (account === null) throw new Error("Account not found.");
+          return {
+            exitCode: 0,
+            stdout: `Set ${account.label} priority to ${account.priority}.\n`,
+          };
+        }
+        if (argv[0] === "account" && argv[1] === "reorder") {
+          const input = accountReorderInputSchema.parse({
+            provider: argv[2],
+            accountIds: argv.slice(3),
+          });
+          await operations.reorder(input.provider, input.accountIds);
+          return {
+            exitCode: 0,
+            stdout: `Updated ${input.provider} account order.\n`,
+          };
+        }
+        if (argv[0] === "account" && argv[1] === "refresh") {
+          if (argv.length !== 3) throw new Error(HELP);
+          const { id } = accountIdInputSchema.parse({ id: argv[2] });
+          if ((await operations.refreshUsage(id)) === null)
+            throw new Error("Account not found.");
+          return { exitCode: 0, stdout: `Refreshed usage for ${id}.\n` };
         }
         if (argv[0] === "account" && argv[1] === "add") {
           const flags = parseFlags(
@@ -498,7 +556,15 @@ export function registerPoolCli(
         }
         if (argv[0] === "status") {
           const flags = parseFlags(argv.slice(1), ["json"], []);
-          const status = await operations.status();
+          const [poolStatus, routedThreadsWithoutLocalLogin] =
+            await Promise.all([
+              operations.status(),
+              operations.routedThreadsWithoutLocalLogin(),
+            ]);
+          const status: PoolStatusReport = {
+            ...poolStatus,
+            routedThreadsWithoutLocalLogin,
+          };
           return {
             exitCode: 0,
             stdout: flags.booleans.has("json")

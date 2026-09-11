@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseCodexRequestBody } from "./request-body.js";
 import type {
   AccountQuota,
   AccountSecret,
@@ -12,6 +13,7 @@ import {
 } from "./credentials.js";
 import type { ProviderAdapter } from "./provider-adapter.js";
 import {
+  fetchOAuthRefresh,
   filterRequestHeaders,
   mountedUpstreamUrl,
 } from "./provider-adapter.js";
@@ -29,8 +31,11 @@ const ALLOWED_REQUEST_HEADERS = new Set([
   "content-type",
   "openai-beta",
   "originator",
+  "session-id",
   "session_id",
+  "thread-id",
   "user-agent",
+  "x-openai-internal-codex-responses-lite",
 ]);
 const ALLOWED_REQUEST_HEADER_PREFIXES = ["x-codex-", "x-stainless-"];
 
@@ -51,7 +56,7 @@ function numberHeader(headers: Headers, name: string): number | null {
 
 function resetAt(headers: Headers, prefix: string, now: number): number | null {
   const raw = numberHeader(headers, `${prefix}-reset-at`);
-  if (raw !== null)
+  if (raw !== null && raw > 0)
     return Math.round(raw < 1_000_000_000_000 ? raw * 1_000 : raw);
   const after = numberHeader(headers, `${prefix}-reset-after-seconds`);
   return after === null ? null : now + Math.round(after * 1_000);
@@ -83,20 +88,40 @@ function windowFromHeaders(
   const usedPercent = numberHeader(headers, `${prefix}-used-percent`);
   const reset = resetAt(headers, prefix, now);
   const minutes = numberHeader(headers, `${prefix}-window-minutes`);
-  if (usedPercent === null && reset === null) return previous;
+  const overLimit =
+    headers.get(`${prefix}-over-limit`)?.toLowerCase() === "true";
+  if (usedPercent === null && reset === null && !overLimit) return previous;
   const utilization =
     usedPercent === null
       ? (previous?.utilization ?? null)
       : Math.max(0, Math.min(1, usedPercent / 100));
+  const windowMinutes =
+    minutes !== null && minutes > 0
+      ? Math.round(minutes)
+      : (previous?.windowMinutes ?? null);
+  const nextReset =
+    reset ??
+    (previous?.resetAt !== null &&
+    previous?.resetAt !== undefined &&
+    previous.resetAt > now
+      ? previous.resetAt
+      : null);
+  if (
+    windowMinutes === null &&
+    nextReset === null &&
+    !overLimit &&
+    (utilization === null || utilization === 0)
+  )
+    return null;
   return {
     slot,
-    windowMinutes:
-      minutes !== null && minutes > 0
-        ? Math.round(minutes)
-        : (previous?.windowMinutes ?? null),
+    windowMinutes,
     utilization,
-    resetAt: reset ?? previous?.resetAt ?? null,
-    status: utilization !== null && utilization >= 1 ? "rejected" : null,
+    resetAt: nextReset,
+    status:
+      overLimit || (utilization !== null && utilization >= 1)
+        ? "rejected"
+        : null,
     observedAt: now,
     source: "header",
   };
@@ -256,8 +281,15 @@ export function createCodexAdapter(options: {
         },
       };
     },
-    modelFamily: () => "other",
-    prepareBody: (body) => body,
+    parseRequest(body, headers) {
+      const parsed = parseCodexRequestBody(body, headers);
+      return {
+        family: parsed.family,
+        affinityId: parsed.affinityId,
+        parentAffinityId: parsed.parentAffinityId,
+        forAccount: () => body,
+      };
+    },
     upstreamUrl: (request, settings) =>
       mountedUpstreamUrl(request, settings.codexUpstreamBaseUrl, "v1/"),
     requestHeaders(inbound, account, secret) {
@@ -291,26 +323,21 @@ export function createCodexAdapter(options: {
       const secret = context.secret;
       if (
         secret.kind !== "oauth" ||
-        secret.expiresAt === null ||
-        secret.expiresAt > context.now() + REFRESH_WINDOW_MS
+        (!context.forceRefresh &&
+          (secret.expiresAt === null ||
+            secret.expiresAt > context.now() + REFRESH_WINDOW_MS))
       ) {
         return { secret, refreshed: false };
       }
-      const response = await context.fetch(options.refreshUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json",
-        },
-        body: JSON.stringify({
-          client_id: CODEX_OAUTH_CLIENT_ID,
-          grant_type: "refresh_token",
-          refresh_token: secret.refreshToken,
-        }),
-      });
-      if (!response.ok)
-        throw new Error(`OAuth refresh failed with HTTP ${response.status}.`);
-      const parsed = refreshResponseSchema.parse(await response.json());
+      const parsed = refreshResponseSchema.parse(
+        JSON.parse(
+          await fetchOAuthRefresh(context, options.refreshUrl, {
+            client_id: CODEX_OAUTH_CLIENT_ID,
+            grant_type: "refresh_token",
+            refresh_token: secret.refreshToken,
+          }),
+        ),
+      );
       const refreshed: AccountSecret = {
         kind: "oauth",
         accessToken: parsed.access_token,

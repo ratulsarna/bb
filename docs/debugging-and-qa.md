@@ -4,6 +4,7 @@
 - `pnpm start:worktree` builds production artifacts and serves the optimized app bundle from the checkout-specific dev server URL, while keeping the same dev data directory and deterministic server/host-daemon ports. It has no Vite dev server or hot reload.
 - `pnpm start:worktree-remote` is the trusted-network variant of `pnpm start:worktree`; it binds that server to all IPv4 interfaces.
 - The packaged app defaults to server/frontend `:38886`, host daemon `:38887`, data dir `~/.bb/`, and logs under `~/.bb/logs/`.
+- `bb-app` (including `pnpm start`), `bb-server`, and `bb-host-daemon` capture service stdout and stderr directly in `logs/server-stdio.log` and `logs/host-daemon-stdio.log` under the selected data directory. These append across restarts and are separate from rotating application logs. Use `tail -F` on these files for console output and early startup errors; service output is no longer forwarded to the launcher's terminal.
 - Entity IDs in URLs (`proj_*`, `thr_*`) are primary keys. Query them directly against the active data dir: `sqlite3 <data>/bb.db "SELECT * FROM threads WHERE id = 'thr_xxx';"`.
 - API routes are under `/api/v1/`, for example `GET /api/v1/threads/:id`.
 - Use `curl` against the server API to isolate frontend issues from server behavior.
@@ -47,6 +48,84 @@ Test agents with:
 eval "$(scripts/bb-dev-app env)"
 pnpm bb:dev thread spawn --project proj_personal --provider codex --permission-mode accept-edits --title "Smoke test" --prompt "Reply only with ok." --json
 ```
+
+## Desktop Browser CDP Prototype
+
+Run the isolated Electron compatibility fixture through Turbo:
+
+```bash
+pnpm exec turbo run smoke:browser-cdp --filter=@bb/desktop > /tmp/browser-cdp-smoke.log 2>&1
+```
+
+The harness currently requires Linux x64, `xvfb-run`, and network access to
+GitHub releases. It downloads checksum-pinned DevBrowser 1.0.0-rc.2 and
+agent-browser 0.36.0 into a fresh temporary directory, bundles the fixture,
+and drives real `WebContentsView` tabs through the production CDP bridge and
+native adapter. It uses a local fixture website and a separate Electron
+profile, without starting a BB core or reading an existing BB store.
+
+The command prints its artifact directory, including screenshots, protocol
+method traces, and the result summary. Connection credentials are redacted
+from the diagnostic output. Desktop startup now registers the native broker;
+`bb browser` and `bb.sdk.experimental_desktopBrowsers` expose its public API.
+This fixture also exercises service-created hidden automation tabs and leases.
+The fixture verifies simultaneous control of a hidden thread and another
+thread, in addition to both clients’ main-page workflows. It verifies trusted
+snapshot-reference clicks in same-origin and nested iframes, scrolling,
+selector clicks in a cross-origin iframe with a native child CDP session,
+and pointer input in a hidden thread’s iframe. Site isolation is enabled
+for the fixture. Unmodified RC2 omits cross-origin iframe contents from
+snapshots; use the local-build mode below for the implemented cross-origin
+ref support. Popup control remains untested.
+
+To validate a modified DevBrowser build, run:
+
+```bash
+pnpm exec turbo run smoke:browser-cdp --filter=@bb/desktop -- --dev-browser /absolute/path/to/dev-browser > /tmp/browser-cdp-local-smoke.log 2>&1
+```
+
+The `--dev-browser` option copies that binary into the artifact directory,
+records its SHA256 and local-build provenance, and adds required cross-origin
+snapshot-ref tests. These reject old refs after same-URL reloads, origin
+changes, frame removal, and parent navigation, even after a fresh snapshot
+has allocated new refs. It checks both the stale-ref error and absence of
+click side effects. Frame origin changes are driven through the parent
+iframe’s `src`: Puppeteer’s `Frame.goto()` can lose its session on a renderer
+swap, including in ordinary Chrome. The default command continues to test the unmodified
+release. Run the task with `-- --help` for usage.
+
+The native adapter uses one viewport capture before pointer input following
+attachment or navigation, so input does not race the renderer’s readiness.
+Concurrent pointer commands share that capture and preserve their order.
+Attachment enables Chromium focus emulation and temporarily disables background
+throttling, restoring the original throttling state on detach. While a CDP
+screenshot is pending, bounded native captures request frames without revealing
+the view; they stop at completion or a five-second deadline. The original CDP
+screenshot parameters are preserved.
+The image is discarded locally; pending input is rejected if navigation
+or a replacement controller invalidates it. A failed capture can be retried,
+and detaching one virtual session cancels its pending input while other
+sessions remain usable.
+
+After library cleanup and writing the result, the runner allows five seconds
+for Electron to quit. If it remains alive, the runner terminates its fixture
+process group and records `forcedExit: true`. A successful smoke command with
+that flag proves the listed browser checks, not graceful Electron shutdown.
+
+## Desktop Browser Broker Integration
+
+```bash
+pnpm exec turbo run smoke:browser-broker --filter=@bb/desktop -- --dev-browser /absolute/path/to/dev-browser > /tmp/browser-broker-smoke.log 2>&1
+```
+
+This isolated fixture uses an in-memory migrated test server, the actual SDK
+and CLI, an authenticated host broker, the desktop broker client, and real
+Electron tabs. The test harness supplies the server-to-host RPC responder;
+it does not start a full enrolled daemon or prove remote-machine transport.
+It verifies private connection-file permissions, ownership, browser input,
+capture, revocation, and connection generations. The default downloads the
+checksum-pinned release; the optional binary path records local provenance.
+No existing BB store or browser profile is used.
 
 ## Record Provider Bridge Traffic
 
@@ -243,3 +322,76 @@ literals, regenerate the baseline with `--write` and commit it so the reduction
 is recorded. `--list` prints every hit. When the baseline reaches zero, delete
 it and the guard. This is guardrail G1 of the provider-plugin migration
 (the provider-plugin API design (docs/provider-plugin-api.md, added by the v3 contract PR; overview at https://get-bb.github.io/reports/design/provider-plugin-api.html)).
+
+## Linux AppImage Node runtime
+
+The AppImage launcher probes user namespaces and injects `--no-sandbox` when
+they are unavailable. Electron running as Node rejects that Chromium flag.
+The owned runtime supplies it after Node's `--` argument separator: AppRun sees
+the explicit flag and skips injection, while Node treats it as a script
+argument. The bridge subprocess receives only its script path. The AppImage
+lifecycle smoke exercises this launch and verifies that its runtime mount
+survives closing the GUI.
+
+## Prepared Worktree Restarts
+
+`pnpm start` and `pnpm start:worktree` always run Turbo-backed preparation before
+launching. Turbo decides which tasks need rebuilding and restores unchanged
+artifacts from cache. Native modules are checked and repaired when necessary.
+Worktree startup retains stable checkout-specific data, ports, telemetry, and
+runtime policy.
+
+Use `pnpm start --dryrun` or `pnpm start:worktree --dryrun` ahead of startup.
+The same command selects its normal dotenv settings and runtime policy, prepares
+artifacts through Turbo, prints resolved ports, bind host, data/config/log paths
+and runtime entrypoints as JSON, then exits. It does not launch services, migrate
+instance data or require ports to be free. Dry runs still write build outputs and
+may repair native modules. Install dependencies with
+`pnpm install --frozen-lockfile` beforehand when needed.
+
+Build tasks clean their own outputs when they run. Startup does not clear output
+directories before invoking Turbo. Cache hits use Turbo's normal restoration
+behavior, which restores cached files but can leave extra files from an earlier
+build. There is no custom preparation receipt or whole-checkout hashing pass.
+Do not prepare concurrently with another preparation or against build files
+still served by a live instance.
+
+Preparation writes build outputs in the checkout. If the previous process serves
+those same paths, preparation can change files it reads: this is not an atomic
+release switch. Use a separate staging checkout to warm the shared Turbo cache
+while the old instance runs, then stop the verified instance, update/install and
+prepare its stable checkout, and launch. For an already stopped, fully prepared
+checkout, normal startup restores its artifacts through Turbo cache hits. Moving
+the serving checkout changes the default instance data and ports; do not move it as a restart shortcut.
+
+The repo-level programmatic entry point is `prepareRuntime()` in
+`scripts/start-bb.mjs`. This is a source-maintenance helper, not a new
+installed `bb` command or public plugin SDK API. The source launcher accepts `--dryrun` for preparation and configuration preview.
+`pnpm start` keeps its existing production dotenv and packaged runtime policy.
+
+Turbo output ownership is separate: server `build` owns `apps/server/dist`,
+`@bb/bundled-plugins#build` assembles `packages/bundled-plugins/dist` from 33 independently
+cached `<plugin-package>#prepare:bundled` tasks. Each plugin declares
+`@bb/plugin-build` as a workspace dev dependency and runs
+`bb-plugin-build prepare-bundled` from its own directory. Turbo builds the shared
+executable through `^build` before preparation. The executable bundles the plugin
+without importing server policy or requiring a TypeScript loader. Each plugin
+task owns only its
+`plugins/<name>/.bundled-runtime` directory; regular plugin builds still own
+`plugins/<name>/dist`. Changing one plugin rebuilds its preparation and final
+assembly, while unchanged plugins restore from cache. Shared SDK/toolchain
+changes deliberately invalidate every plugin. The assembly package declares its
+plugin dependencies in `package.json`; Turbo
+uses `^prepare:bundled` to build them. Adding a bundled plugin requires its
+package script and workspace dependency, checked against the runtime registry
+by the startup test suite. Shared sources are hashed through workspace `topo`
+dependencies rather than repository-wide source globs.
+Bundled preparation uses temporary source copies and never writes the regular
+plugin `dist` directories. `bb-app#build` depends on and
+copies prepared plugins into its own package output. The plugin task hashes
+plugin sources, manifests, branding, skills, staging scripts/entries, lockfile,
+patches, workspace configuration, SDK/build-tool sources and versions, and theme;
+generated modules and SDK artifacts arrive through explicit dependency edges.
+The source preparation runner supplies `BB_BUILD_TOOLCHAIN` with Node, OS, and
+architecture to partition Turbo cache entries; callers should use the runner
+rather than set this internal build identity themselves.

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import type { ReactNode } from "react";
 import {
   cleanup,
   fireEvent,
@@ -26,7 +27,9 @@ import {
   resetPluginSlotStoreForTest,
   setPluginSlotRegistrations,
 } from "@/lib/plugin-slots";
-import { PluginDetailPaneView, ToolsView } from "./ToolsView";
+import { PluginsOverview } from "@/components/plugin/PluginsOverview";
+import { PluginDetailPaneView, PluginsView } from "./ToolsView";
+import { AppRoutes } from "../App";
 import {
   CatalogPluginDetail,
   CatalogPluginDetailBanner,
@@ -42,6 +45,10 @@ import {
   makePluginListItem,
   makePluginRegistrationSet,
 } from "@/test/fixtures/plugins";
+
+vi.mock("@/components/layout/AppLayout", () => ({
+  AppLayout: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 vi.mock("react-resizable-panels", async () => {
   const { createRequire } = await import("node:module");
@@ -94,22 +101,35 @@ const GITHUB_CATALOG_ENTRY = {
   incompatibleReason: null,
 } satisfies PluginCatalogSearchEntry;
 
-function RoutedToolsView() {
+function RoutedPluginsView() {
   const location = useLocation();
-  const isSettings = location.pathname.startsWith("/settings/plugins/");
-  const prefix = isSettings ? "/settings/plugins/" : "/extensions/plugins/";
+  const isSettings = location.pathname.startsWith("/settings/plugins");
+  const prefix = isSettings ? "/settings/plugins/" : "/plugins/";
   const pluginId = location.pathname.startsWith(prefix)
     ? decodeURIComponent(location.pathname.slice(prefix.length))
     : undefined;
   return (
     <>
       <TooltipProvider>
-        {isSettings && pluginId ? (
-          <PluginDetailPaneView pluginId={pluginId} />
+        {isSettings ? (
+          pluginId ? (
+            <PluginDetailPaneView pluginId={pluginId} />
+          ) : (
+            <PluginsOverview mode="installed" />
+          )
         ) : (
-          <ToolsView pluginId={pluginId} />
+          <PluginsView pluginId={pluginId} />
         )}
       </TooltipProvider>
+      <LocationProbe />
+    </>
+  );
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return (
+    <>
       <output data-testid="route-path">{location.pathname}</output>
       <output data-testid="route-search">{location.search}</output>
     </>
@@ -616,13 +636,13 @@ describe("BB Official plugin detail routing", () => {
 
     const { wrapper: QueryClientWrapper } = createQueryClientTestHarness();
     render(
-      <MemoryRouter initialEntries={["/extensions/plugins/github"]}>
+      <MemoryRouter initialEntries={["/plugins/github"]}>
         <Routes>
           <Route
-            path="/extensions/plugins/:pluginId"
+            path="/plugins/:pluginId"
             element={
               <TooltipProvider>
-                <ToolsView pluginId="github" />
+                <PluginsView pluginId="github" />
               </TooltipProvider>
             }
           />
@@ -641,7 +661,7 @@ describe("BB Official plugin detail routing", () => {
     expect(screen.getByTestId("full-trust-warning")).toBeTruthy();
   });
 
-  it("opens one detail tab beside Browse and restores card focus", async () => {
+  it("preserves Browse and restores card focus across the real app routes", async () => {
     const catalogEntry = {
       ...GITHUB_CATALOG_ENTRY,
       categoryId: "code-and-reviews",
@@ -676,10 +696,12 @@ describe("BB Official plugin detail routing", () => {
 
     const { wrapper: QueryClientWrapper } = createQueryClientTestHarness();
     render(
-      <MemoryRouter initialEntries={["/extensions/plugins"]}>
-        <Routes>
-          <Route path="/extensions/plugins/*" element={<RoutedToolsView />} />
-        </Routes>
+      <MemoryRouter initialEntries={["/plugins"]}>
+        <TooltipProvider>
+          <AppRoutes />
+        </TooltipProvider>
+        <LocationProbe />
+        <HistoryBackButton />
       </MemoryRouter>,
       { wrapper: QueryClientWrapper },
     );
@@ -701,23 +723,41 @@ describe("BB Official plugin detail routing", () => {
       screen.getByRole("textbox", { name: "Search plugins" }),
     ).toBeTruthy();
     expect(screen.getAllByRole("button", { name: /^Close /u })).toHaveLength(1);
-    expect(Array.from(document.querySelectorAll("[data-panel]"))).toEqual(panels);
-    expect(screen.getByRole("textbox", { name: "Search plugins" })).toBe(search);
+    expect(Array.from(document.querySelectorAll("[data-panel]"))).toEqual(
+      panels,
+    );
+    expect(screen.getByRole("textbox", { name: "Search plugins" })).toBe(
+      search,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Close GitHub" }));
     await waitFor(() => {
-      expect(screen.getByTestId("route-path").textContent).toBe(
-        "/extensions/plugins",
-      );
+      expect(screen.getByTestId("route-path").textContent).toBe("/plugins");
       expect(document.activeElement).toBe(card);
     });
-    expect(Array.from(document.querySelectorAll("[data-panel]"))).toEqual(panels);
+    expect(Array.from(document.querySelectorAll("[data-panel]"))).toEqual(
+      panels,
+    );
     expect(panels[0]?.getAttribute("data-panel-size")).toBe("100.0");
     expect(panels[1]?.getAttribute("data-panel-size")).toBe("0.0");
-    expect(screen.getByRole("textbox", { name: "Search plugins" })).toBe(search);
+    expect(screen.getByRole("textbox", { name: "Search plugins" })).toBe(
+      search,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Browser back" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("route-path").textContent).toBe(
+        "/plugins/github",
+      );
+    });
   });
 
-  it("keeps related plugin navigation in the full-page detail", async () => {
+  it.each([
+    "/settings/plugins/github?view=installed",
+    "/settings/plugins",
+    "/plugins/github?view=installed",
+    "/plugins?view=installed",
+  ])("opens installed plugin settings from %s", async (path) => {
     const author = {
       name: "BB",
       github: "get-bb",
@@ -771,25 +811,45 @@ describe("BB Official plugin detail routing", () => {
 
     const { wrapper: QueryClientWrapper } = createQueryClientTestHarness();
     render(
-      <MemoryRouter
-        initialEntries={["/extensions/plugins/github?view=installed"]}
-      >
+      <MemoryRouter initialEntries={[path]}>
         <Routes>
-          <Route path="/extensions/plugins/*" element={<RoutedToolsView />} />
-          <Route path="/settings/plugins/*" element={<RoutedToolsView />} />
+          <Route path="/plugins/*" element={<RoutedPluginsView />} />
+          <Route path="/settings/plugins/*" element={<RoutedPluginsView />} />
         </Routes>
       </MemoryRouter>,
       { wrapper: QueryClientWrapper },
     );
 
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Open Automations details",
-      }),
-    );
+    if (path === "/settings/plugins" || path === "/plugins?view=installed") {
+      expect(
+        await screen.findByRole("textbox", {
+          name: "Search installed plugins",
+        }),
+      ).toBeTruthy();
+      expect(screen.getByTestId("route-path").textContent).toBe(
+        path.split("?")[0],
+      );
+      const pluginButton = await screen.findByRole("button", {
+        name: "GitHub plugin details",
+      });
+      expect(
+        vi
+          .mocked(fetch)
+          .mock.calls.some(([input]) =>
+            String(input).startsWith("/api/v1/plugin-catalog/search"),
+          ),
+      ).toBe(false);
+      fireEvent.click(pluginButton);
+    }
+
+    const relatedPluginButton = await screen.findByRole("button", {
+      name: "Open Automations details",
+    });
+    expect(screen.getAllByText("GitHub", { selector: "h1" })).toHaveLength(1);
+    fireEvent.click(relatedPluginButton);
     await waitFor(() => {
       expect(screen.getByTestId("route-path").textContent).toBe(
-        "/settings/plugins/automations",
+        "/plugins/automations",
       );
     });
     expect(screen.getByTestId("route-search").textContent).toBe(
@@ -849,11 +909,11 @@ describe("BB Official plugin detail routing", () => {
     render(
       <MemoryRouter
         initialEntries={[
-          "/extensions/plugins?category=code-and-reviews&sort=recently-added",
+          "/plugins?category=code-and-reviews&sort=recently-added",
         ]}
       >
         <Routes>
-          <Route path="/extensions/plugins/*" element={<RoutedToolsView />} />
+          <Route path="/plugins/*" element={<RoutedPluginsView />} />
         </Routes>
         <HistoryBackButton />
       </MemoryRouter>,
@@ -933,9 +993,9 @@ describe("BB Official plugin detail routing", () => {
 
     const { wrapper: QueryClientWrapper } = createQueryClientTestHarness();
     render(
-      <MemoryRouter initialEntries={["/extensions/plugins/github"]}>
+      <MemoryRouter initialEntries={["/plugins/github"]}>
         <Routes>
-          <Route path="/extensions/plugins/*" element={<RoutedToolsView />} />
+          <Route path="/plugins/*" element={<RoutedPluginsView />} />
         </Routes>
       </MemoryRouter>,
       { wrapper: QueryClientWrapper },
@@ -947,9 +1007,7 @@ describe("BB Official plugin detail routing", () => {
     const authorLinks = screen.getAllByRole("link", { name: "BB" });
     fireEvent.click(authorLinks.at(-1)!);
     await waitFor(() => {
-      expect(screen.getByTestId("route-path").textContent).toBe(
-        "/extensions/plugins",
-      );
+      expect(screen.getByTestId("route-path").textContent).toBe("/plugins");
     });
     expect(await screen.findByRole("heading", { name: /^BB/u })).toBeTruthy();
     expect(
@@ -1007,13 +1065,13 @@ describe("plugin removal confirmation", () => {
 
     const { wrapper: QueryClientWrapper } = createQueryClientTestHarness();
     render(
-      <MemoryRouter initialEntries={["/extensions/plugins/github"]}>
+      <MemoryRouter initialEntries={["/plugins/github"]}>
         <Routes>
           <Route
-            path="/extensions/plugins/:pluginId"
+            path="/plugins/:pluginId"
             element={
               <TooltipProvider>
-                <ToolsView pluginId="github" />
+                <PluginsView pluginId="github" />
               </TooltipProvider>
             }
           />
@@ -1141,7 +1199,12 @@ describe("PluginDetail runtime health", () => {
   function renderRuntimeStatus(
     status: Extract<
       PluginListItem["status"],
-      "error" | "incompatible" | "missing" | "needs-configuration" | "degraded"
+      | "starting"
+      | "error"
+      | "incompatible"
+      | "missing"
+      | "needs-configuration"
+      | "degraded"
     >,
     overrides: Partial<PluginListItem> = {},
   ) {
@@ -1179,6 +1242,16 @@ describe("PluginDetail runtime health", () => {
     );
     return { ...result, queryClient };
   }
+
+  it("shows startup as a neutral status without failure recovery", () => {
+    renderRuntimeStatus("starting", { statusDetail: null });
+    expect(screen.getByRole("status").textContent).toContain("Starting");
+    expect(screen.getByRole("status").textContent).toContain(
+      "The plugin is starting.",
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
+  });
 
   it("lifts a failed runtime status into a destructive alert above the content", () => {
     const { container } = renderRuntimeStatus("error");
@@ -1261,7 +1334,7 @@ describe("PluginDetail runtime health", () => {
     },
   );
 
-  it("keeps needs-configuration actionless because saving Settings retries it", () => {
+  it("sends needs-configuration to the plugin settings page instead of Reload", () => {
     renderRuntimeStatus("needs-configuration", {
       statusDetail: "An API token is required.",
       hasSettings: true,
@@ -1272,6 +1345,10 @@ describe("PluginDetail runtime health", () => {
     expect(alert.textContent).toContain(
       "Complete the Configuration section; bb reloads the plugin after you save.",
     );
+    const settingsLink = within(alert).getByRole("link", {
+      name: "Open settings",
+    });
+    expect(settingsLink.getAttribute("href")).toBe("/settings/plugins/github");
     expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
   });
 
@@ -1289,6 +1366,65 @@ describe("PluginDetail runtime health", () => {
       "Add the required configuration, then reload the plugin.",
     );
     expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
+    expect(
+      within(alert).queryByRole("link", { name: "Open settings" }),
+    ).toBeNull();
+  });
+
+  it("links to a settings page contributed by the plugin frontend and keeps Reload", () => {
+    setPluginSlotRegistrations(
+      "github",
+      makePluginRegistrationSet({
+        settingsSections: [
+          { id: "accounts", title: "Accounts", component: () => null },
+        ],
+        navPanels: [],
+        threadPanelActions: [],
+        composerCustomizations: [],
+        pendingInteractions: [],
+        sidebarFooterActions: [],
+        fileOpeners: [],
+        messageDirectives: [],
+      }),
+    );
+
+    renderRuntimeStatus("needs-configuration", {
+      statusDetail: "Add and enable an account.",
+      hasSettings: false,
+    });
+
+    const alert = screen.getByRole("alert");
+    const settingsLink = within(alert).getByRole("link", {
+      name: "Open settings",
+    });
+    expect(settingsLink.getAttribute("href")).toBe("/settings/plugins/github");
+    expect(within(alert).getByRole("button", { name: "Reload" })).toBeTruthy();
+  });
+
+  it("does not offer a settings link for other runtime failures", () => {
+    setPluginSlotRegistrations(
+      "github",
+      makePluginRegistrationSet({
+        settingsSections: [
+          { id: "accounts", title: "Accounts", component: () => null },
+        ],
+        navPanels: [],
+        threadPanelActions: [],
+        composerCustomizations: [],
+        pendingInteractions: [],
+        sidebarFooterActions: [],
+        fileOpeners: [],
+        messageDirectives: [],
+      }),
+    );
+
+    renderRuntimeStatus("error");
+
+    const alert = screen.getByRole("alert");
+    expect(
+      within(alert).queryByRole("link", { name: "Open settings" }),
+    ).toBeNull();
+    expect(within(alert).getByRole("button", { name: "Reload" })).toBeTruthy();
   });
 
   it("reloads the affected plugin and reflects its pending state", async () => {

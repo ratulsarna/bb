@@ -84,6 +84,11 @@
       "types": "./src/components/ui/coarse-pointer-sizing.ts",
       "default": "./src/components/ui/coarse-pointer-sizing.ts"
     },
+    "./coarse-pointer-visibility": {
+      "source": "./src/components/ui/coarse-pointer-visibility.ts",
+      "types": "./src/components/ui/coarse-pointer-visibility.ts",
+      "default": "./src/components/ui/coarse-pointer-visibility.ts"
+    },
     "./collapsible": {
       "source": "./src/components/ui/collapsible.tsx",
       "types": "./src/components/ui/collapsible.tsx",
@@ -214,6 +219,11 @@
       "types": "./src/components/ui/progress.tsx",
       "default": "./src/components/ui/progress.tsx"
     },
+    "./resource-route-label": {
+      "source": "./src/components/ui/resource-route-label.ts",
+      "types": "./src/components/ui/resource-route-label.ts",
+      "default": "./src/components/ui/resource-route-label.ts"
+    },
     "./resource-list": {
       "source": "./src/components/ui/resource-list.tsx",
       "types": "./src/components/ui/resource-list.tsx",
@@ -343,6 +353,21 @@
       "source": "./src/lib/portal-scope.ts",
       "types": "./src/lib/portal-scope.ts",
       "default": "./src/lib/portal-scope.ts"
+    },
+    "./question-form": {
+      "source": "./src/components/ui/question-form.tsx",
+      "types": "./src/components/ui/question-form.tsx",
+      "default": "./src/components/ui/question-form.tsx"
+    },
+    "./question-form-state": {
+      "source": "./src/components/ui/question-form-state.ts",
+      "types": "./src/components/ui/question-form-state.ts",
+      "default": "./src/components/ui/question-form-state.ts"
+    },
+    "./question-form-host": {
+      "source": "./src/components/ui/question-form-host.tsx",
+      "types": "./src/components/ui/question-form-host.tsx",
+      "default": "./src/components/ui/question-form-host.tsx"
     }
   },
   "scripts": {

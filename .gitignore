@@ -91,3 +91,8 @@ provider-recordings/raw/
 **/provider-corpus/**
 !apps/server/test/provider-corpus/**
 !scripts/provider-corpus/**
+.builtin-server-test-*/
+.builtin-host-test-*/
+
+/plugins/.bundled-stage-*/
+/plugins/*/.bundled-runtime/

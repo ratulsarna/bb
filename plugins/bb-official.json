@@ -117,5 +117,25 @@
   "push-notifications": {
     "category": "notifications",
     "screenshots": []
+  },
+  "browser-automation": {
+    "category": "agents-and-providers",
+    "screenshots": []
+  },
+  "environment-project-checkout": {
+    "category": "environments",
+    "screenshots": []
+  },
+  "environment-git-worktree": {
+    "category": "environments",
+    "screenshots": []
+  },
+  "environment-personal-workspace": {
+    "category": "environments",
+    "screenshots": []
+  },
+  "bb-guide": {
+    "category": "memory-and-context",
+    "screenshots": []
   }
 }
