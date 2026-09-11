@@ -173,7 +173,23 @@ curl -fsS http://127.0.0.1:38886/health
 curl -fsS https://srv1191956.tail7af381.ts.net/health
 curl -fsS https://srv1191956.tail7af381.ts.net/install/version
 bb machine list --json
-journalctl --user -u bb.service --since '10 minutes ago' --no-pager -p warning
+```
+
+Application logs go to `~/.bb/logs/`, not the systemd journal. `journalctl -u
+bb.service` shows only systemd and startup lines, so read the current log files
+instead. They rotate with an increasing index, so pick the newest of each:
+
+```bash
+grep -E '"level":(50|60)' "$(ls -t ~/.bb/logs/server.*.log | head -1)" | tail -20
+grep -E '"level":(50|60)' "$(ls -t ~/.bb/logs/host-daemon.*.log | head -1)" | tail -20
+```
+
+After a release that bumps the protocol, the server log is also where you
+confirm the daemons updated. Expect one rejection per remote machine, then a
+reconnect within a couple of minutes:
+
+```bash
+grep "protocol version mismatch" "$(ls -t ~/.bb/logs/server.*.log | head -1)" | tail
 ```
 
 The Mac and RDLEGION daemons use `--auto-update`. When the server protocol is
