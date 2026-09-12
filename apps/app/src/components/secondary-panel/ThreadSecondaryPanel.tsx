@@ -1,3 +1,4 @@
+import { usePluginDetailPanelProps } from "@/components/plugin/plugin-detail-navigation";
 import {
   type CSSProperties,
   type FocusEvent,
@@ -37,11 +38,13 @@ import {
   THREAD_SECONDARY_PANEL_MIN_SIZE_PERCENT,
 } from "./secondaryPanelSizing";
 import {
+  getCompactPanelPresentation,
   RIGHT_PANEL_TOGGLE_ICON_NAME,
   resolveConversationCollapseControl,
 } from "./panelToggleControlState";
 import { SecondaryPanelHostLayoutContext } from "./SecondaryPanelHostLayoutContext";
 import { SecondaryPanelTabStrip } from "./SecondaryPanelTabStrip";
+import { ImageTabLightboxProvider } from "./ImageTabLightboxContext";
 import type {
   MarketplacePluginDetailPanelTab,
   SecondaryPanelPaneRenderContext,
@@ -210,7 +213,12 @@ export interface ThreadSecondaryPanelProps {
   renderAsDrawer: boolean;
 }
 
-export function ThreadSecondaryPanel({
+export function ThreadSecondaryPanel(props: ThreadSecondaryPanelProps) {
+  const panelProps = usePluginDetailPanelProps(props);
+  return <ThreadSecondaryPanelContent {...panelProps} />;
+}
+
+function ThreadSecondaryPanelContent({
   activeTab,
   canUseGitUi,
   gitDiffTabStatus,
@@ -252,6 +260,12 @@ export function ThreadSecondaryPanel({
     () => tabs.filter((tab) => tab.isHidden !== true),
     [tabs],
   );
+  const reservesCompactSidebarToggle =
+    renderAsDrawer &&
+    getCompactPanelPresentation(
+      activeTab?.kind,
+      fixedTabs[0]?.tab.kind ?? visibleTabs[0]?.tab.kind,
+    ) === "full";
   const activeRenderableTab =
     tabs.find((tab) => tab.tab.id === activeTab?.id) ??
     (activeTab === null && fixedTabs.length === 0 ? visibleTabs[0] : undefined);
@@ -700,7 +714,10 @@ export function ThreadSecondaryPanel({
       activeSurfaceModel?.kind === "terminal" && hasActiveSurfaceTab;
 
     return (
-      <>
+      <ImageTabLightboxProvider
+        activeTabId={activeSurfaceTabId}
+        tabs={surfaceTabs}
+      >
         <div
           className={getSecondaryPanelChromeStackClassName(
             showsSurfaceDiffToolbar,
@@ -711,6 +728,7 @@ export function ThreadSecondaryPanel({
             className={cn(
               CHROME_ROW_CLASS,
               "min-w-0 justify-between gap-2 px-4",
+              reservesCompactSidebarToggle && "pl-14",
               usesDesktopChrome && usesWindowChrome && MACOS_WINDOW_DRAG_CLASS,
               usesDesktopChrome &&
                 usesWindowChrome &&
@@ -872,7 +890,7 @@ export function ThreadSecondaryPanel({
             </EmptyStatePanel>
           )}
         </div>
-      </>
+      </ImageTabLightboxProvider>
     );
   };
 

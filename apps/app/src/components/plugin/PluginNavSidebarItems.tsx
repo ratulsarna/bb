@@ -13,7 +13,10 @@ import {
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAtom } from "jotai";
 import { DndContext, type DragEndEvent } from "@dnd-kit/core";
-import { FilterHorizontalIcon } from "@hugeicons/core-free-icons";
+import {
+  FilterHorizontalIcon,
+  UnavailableIcon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   SortableContext,
@@ -48,6 +51,7 @@ import { PluginSlotMount } from "@/components/plugin/PluginSlotMount";
 import { PROJECT_LIST_ACTION_BUTTON_CLASS } from "@/components/sidebar/ProjectList";
 import {
   AUTOMATIONS_PLUGIN_ID,
+  getPluginDetailRoutePath,
   getPluginPanelRoutePath,
 } from "@/lib/route-paths";
 import {
@@ -77,6 +81,10 @@ import {
 import { useSidebarSortable } from "@/components/sidebar/sortableMotion";
 import { useSidebarReorderDnd } from "@/components/sidebar/useSidebarReorderDnd";
 import type { SidebarSortableDragBindings } from "@/components/sidebar/sortableMotion";
+import { appToast } from "@/components/ui/app-toast";
+import { invalidatePluginList } from "@/hooks/cache-owners/plugin-cache-owner";
+import { useSetPluginEnabled } from "./useSetPluginEnabled";
+import { appQueryClient } from "@/lib/app-query-client";
 import {
   pluginNavPanelOrderAtom,
   pluginNavVisiblePanelKeysAtom,
@@ -89,6 +97,7 @@ import {
   togglePluginNavPanelVisibility,
 } from "./pluginNavSidebarOrder";
 import { haveSameOrder, reorderStoredOrder } from "@/lib/stored-order";
+import { openPluginDetailsInWorkspace } from "./plugin-detail-opener";
 
 const MORE_TRIGGER_TEST_ID = "sidebar-navigation-more-trigger";
 
@@ -203,6 +212,7 @@ function PluginNavSidebarItemList({
 }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const setEnabled = useSetPluginEnabled();
   const isCompactViewport = useIsCompactViewport();
   const splitActions = usePaneContentSplitActions();
   const [storedOrder, setStoredOrder] = useAtom(pluginNavPanelOrderAtom);
@@ -231,6 +241,25 @@ function PluginNavSidebarItemList({
   const seededPreferences = useMemo(
     () => seedSkillsNavigationPreference(storedOrder, storedVisibleKeys),
     [storedOrder, storedVisibleKeys],
+  );
+  const [disablePending, setDisablePending] = useState(false);
+  const handleDisable = useCallback(
+    async (row: PluginSidebarNavRow) => {
+      const pluginId = row.chrome.pluginId;
+      setDisablePending(true);
+      try {
+        await setEnabled(pluginId, false, onNavigate);
+        appToast.success(`${row.title} disabled`);
+      } catch (error) {
+        appToast.error(`Failed to disable ${row.title}`, {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        await invalidatePluginList({ queryClient: appQueryClient });
+        setDisablePending(false);
+      }
+    },
+    [onNavigate, setEnabled],
   );
   const newLeadingKeys = useMemo(
     () =>
@@ -366,7 +395,8 @@ function PluginNavSidebarItemList({
     pathname: location.pathname,
     splitEnabled,
     onHide: (key: string) => setPanelVisible(key, false),
-    onCustomize: openCustomize,
+    disablePending,
+    onDisable: (row: PluginSidebarNavRow) => void handleDisable(row),
   };
 
   const handleActivate = useCallback(
@@ -929,8 +959,9 @@ interface SidebarNavRowItemProps {
   pathname: string;
   onNavigate?: () => void;
   splitEnabled: boolean;
-  onHide?: (key: string) => void;
-  onCustomize?: () => void;
+  disablePending: boolean;
+  onHide: (key: string) => void;
+  onDisable: (row: PluginSidebarNavRow) => void;
   dragBindings?: SidebarSortableDragBindings;
   rowRef?: (element: HTMLElement | null) => void;
   rowStyle?: CSSProperties;
@@ -948,23 +979,50 @@ function SidebarNavRowItem({
 
 type PluginNavRowMenuSurface = "context" | "dropdown";
 
-function PluginNavRowVisibilityMenuItem({
-  onSelect,
+function PluginNavRowMenuItems({
+  disablePending,
+  onDisable,
+  onHide,
+  onOpenInSplit,
+  onOpenDetails,
   surface,
 }: {
-  onSelect: () => void;
+  disablePending: boolean;
+  onDisable: () => void;
+  onHide: () => void;
+  onOpenInSplit?: () => void;
+  onOpenDetails: () => void;
   surface: PluginNavRowMenuSurface;
 }) {
-  const content = (
+  const Item = surface === "context" ? ContextMenuItem : DropdownMenuItem;
+  const Separator =
+    surface === "context" ? ContextMenuSeparator : DropdownMenuSeparator;
+  return (
     <>
-      <Icon name="EyeOff" aria-hidden="true" />
-      Hide from sidebar
+      {onOpenInSplit !== undefined ? (
+        <Item onSelect={onOpenInSplit}>
+          <Icon name="Columns2" aria-hidden="true" />
+          Open in split
+        </Item>
+      ) : null}
+      <Item onSelect={onOpenDetails}>
+        <Icon name="Info" aria-hidden="true" />
+        View details
+      </Item>
+      <Item onSelect={onHide}>
+        <Icon name="EyeOff" aria-hidden="true" />
+        Hide from sidebar
+      </Item>
+      <Separator />
+      <Item disabled={disablePending} onSelect={onDisable}>
+        <HugeiconsIcon
+          icon={UnavailableIcon}
+          aria-hidden="true"
+          data-icon="Unavailable"
+        />
+        Disable
+      </Item>
     </>
-  );
-  return surface === "context" ? (
-    <ContextMenuItem onSelect={onSelect}>{content}</ContextMenuItem>
-  ) : (
-    <DropdownMenuItem onSelect={onSelect}>{content}</DropdownMenuItem>
   );
 }
 
@@ -1001,6 +1059,7 @@ function PluginNavSidebarItem({
   row,
   pathname,
   onNavigate,
+  onDisable,
   splitEnabled,
   ...props
 }: SidebarNavRowItemProps) {
@@ -1049,6 +1108,21 @@ function PluginNavSidebarItem({
       splitMiniMap={splitIndicator.miniMap}
       accessory={sidebarAccessory}
       onPointerDown={onPointerDown}
+      onOpenInSplit={
+        splitEnabled && !isCompactViewport ? openInSplit : undefined
+      }
+      onOpenDetails={() => {
+        onNavigate?.();
+        if (
+          openPluginDetailsInWorkspace({
+            pluginId: chrome.pluginId,
+            title: chrome.title,
+          })
+        )
+          return;
+        void navigate(getPluginDetailRoutePath({ pluginId: chrome.pluginId }));
+      }}
+      onDisable={() => onDisable(row)}
       onSelect={(event) => {
         onNavigate?.();
         if (event.metaKey || event.ctrlKey) {
@@ -1069,8 +1143,11 @@ interface SidebarNavRowChromeProps {
   isActive: boolean;
   onSelect: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   onPointerDown?: PointerEventHandler<HTMLElement>;
-  onHide?: (key: string) => void;
-  onCustomize?: () => void;
+  onOpenInSplit?: () => void;
+  onOpenDetails: () => void;
+  onDisable: () => void;
+  onHide: (key: string) => void;
+  disablePending: boolean;
   splitMiniMap?: MiniMapSlot[] | null;
   accessory?: ReactNode;
   dragBindings?: SidebarSortableDragBindings;
@@ -1086,8 +1163,11 @@ function SidebarNavRowChrome({
   isActive,
   onSelect,
   onPointerDown,
+  onOpenInSplit,
+  onOpenDetails,
+  onDisable,
   onHide,
-  onCustomize,
+  disablePending,
   splitMiniMap = null,
   accessory,
   dragBindings,
@@ -1098,27 +1178,14 @@ function SidebarNavRowChrome({
   const { onKeyDown: _keyboardDragActivator, ...pointerDragListeners } =
     dragBindings?.listeners ?? {};
   const menuItems = (surface: PluginNavRowMenuSurface): ReactNode => (
-    <>
-      <PluginNavRowVisibilityMenuItem
-        surface={surface}
-        onSelect={() => onHide?.(rowKey)}
-      />
-      {onCustomize === undefined ? null : surface === "context" ? (
-        <>
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={onCustomize}>
-            <CustomizeMenuItemContent />
-          </ContextMenuItem>
-        </>
-      ) : (
-        <>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={onCustomize}>
-            <CustomizeMenuItemContent />
-          </DropdownMenuItem>
-        </>
-      )}
-    </>
+    <PluginNavRowMenuItems
+      surface={surface}
+      disablePending={disablePending}
+      onDisable={onDisable}
+      onHide={() => onHide(rowKey)}
+      onOpenInSplit={onOpenInSplit}
+      onOpenDetails={onOpenDetails}
+    />
   );
 
   return (

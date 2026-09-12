@@ -44,6 +44,10 @@ import type { WorkspaceOpenTarget } from "@bb/host-daemon-contract";
 import { appToast } from "@/components/ui/app-toast";
 import { copyToClipboardWithToast } from "@/lib/clipboard";
 import type { ThreadSecondaryPanel as ThreadSecondaryPanelTab } from "@/lib/thread-secondary-panel";
+import {
+  PluginDetailPanelContext,
+  usePluginDetailPanelState,
+} from "@/components/plugin/plugin-detail-navigation";
 import { useForkThreadFromMessage } from "@/hooks/useForkThreadFromMessage";
 import { isThreadForkable } from "@bb/client-core";
 import { useRequestEnvironmentAction } from "../../hooks/mutations/environment-mutations";
@@ -100,7 +104,7 @@ import { assertNever } from "@bb/thread-view";
 import { useCreateThreadInEnvironment } from "@/hooks/useCreateThreadInEnvironment";
 import { useHostDaemon } from "@/hooks/useHostDaemon";
 import { useLocalOpenTargets } from "@/hooks/useLocalOpenTargets";
-import { selectPersistentHosts, useHosts } from "@/hooks/queries/host-queries";
+import { selectHosts, useHosts } from "@/hooks/queries/host-queries";
 import { useSystemConfig } from "@/hooks/queries/system-queries";
 import { useConnectionAwareQueryState } from "@/hooks/queries/connection-aware-query-state";
 import {
@@ -114,6 +118,7 @@ import {
   shouldShowEnvironmentHostIdentity,
 } from "@/lib/environment-workspace-display";
 import { useSystemEnvironmentProviders } from "@/hooks/queries/environment-provider-queries";
+import { useSystemMachineProviders } from "@/hooks/queries/machine-provider-queries";
 import { formatWorkspaceCheckoutDisplay } from "@/lib/workspace-checkout-display";
 import {
   getAbsoluteDirname,
@@ -586,9 +591,12 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
       isCompactViewport: renderSecondaryPanelAsDrawer,
       threadId,
     });
-  const isSecondaryPanelOpen = renderSecondaryPanelAsDrawer
+  const pluginDetails = usePluginDetailPanelState(threadId, isFocused);
+  const isWorkspacePanelOpen = renderSecondaryPanelAsDrawer
     ? secondaryPanelDrawerVisibility.isDrawerVisible
     : isPersistedSecondaryPanelOpen;
+  const isSecondaryPanelOpen =
+    isWorkspacePanelOpen || pluginDetails.activePluginId !== null;
   const touchFixedPanelTabsState = useTouchFixedPanelTabsState(
     threadId,
     threadId,
@@ -939,10 +947,12 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
     if (!environmentHostId) return null;
     return hosts.find((host) => host.id === environmentHostId) ?? null;
   }, [environment?.hostId, hostsQuery.data]);
-  const hasMultipleMachines = selectPersistentHosts(hostsQuery.data).length > 1;
+  const hasMultipleMachines =
+    selectHosts(hostsQuery.data, "persistent").length > 1;
   const threadEnvironmentHost = shouldShowEnvironmentHostIdentity(
     hasMultipleMachines,
     thread?.projectId === PERSONAL_PROJECT_ID,
+    resolvedThreadEnvironmentHost?.type ?? null,
   )
     ? resolvedThreadEnvironmentHost
     : null;
@@ -1222,6 +1232,7 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
   });
   const { providers: registeredEnvironmentProviders } =
     useSystemEnvironmentProviders();
+  const { providers: registeredMachineProviders } = useSystemMachineProviders();
   const environmentMergeBaseBranch =
     resolveEnvironmentMergeBaseBranch(environment);
   const {
@@ -1252,7 +1263,7 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
     threadId,
   });
   const {
-    closePanel: closeSecondaryPanel,
+    closePanel: closeWorkspacePanel,
     openCommitDiff: openGitDiffCommitDestination,
     openCompactDrawer,
     openDiffFile: openGitDiffFileDestination,
@@ -1261,7 +1272,7 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
     openPanel: openFixedViewDestination,
     openStorageFile,
     openWorkspaceFile,
-    togglePanel: toggleSecondaryPanel,
+    togglePanel: toggleWorkspacePanel,
   } = useThreadSecondaryPanelVisibility({
     closePersistedPanel: closeThreadSecondaryPanel,
     drawerVisibility: secondaryPanelDrawerVisibility,
@@ -1276,6 +1287,15 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
     openPersistedWorkspaceFile,
     togglePersistedPanel: toggleDefaultPersistedSecondaryPanel,
   });
+  const dismissPluginDetails = pluginDetails.dismiss;
+  const closeSecondaryPanel = useCallback(() => {
+    dismissPluginDetails();
+    closeWorkspacePanel();
+  }, [dismissPluginDetails, closeWorkspacePanel]);
+  const toggleSecondaryPanel = useCallback(() => {
+    if (pluginDetails.activePluginId !== null) closeSecondaryPanel();
+    else toggleWorkspacePanel();
+  }, [pluginDetails.activePluginId, closeSecondaryPanel, toggleWorkspacePanel]);
   const fixedTabDestinations = useMemo(
     () => [
       createThreadInfoFixedTabDestination(() =>
@@ -1670,6 +1690,10 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
     [closeTerminal, removeFixedTerminalTab, threadId],
   );
   const handleCloseWindowRequest = useCallback(() => {
+    if (pluginDetails.activePluginId !== null) {
+      pluginDetails.close(pluginDetails.activePluginId);
+      return true;
+    }
     if (!isSecondaryPanelOpen) {
       return false;
     }
@@ -1692,6 +1716,7 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
     closeTab,
     handleCloseTerminalTab,
     isSecondaryPanelOpen,
+    pluginDetails,
   ]);
   useAppCommandHandler("panel.toggle", () => {
     if (!isFocused) return false;
@@ -2152,13 +2177,17 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
     [openSecondaryPanelDiffFile, handleOpenTimelinePluginPanel, threadId],
   );
   const metadataStorage = useMemo(
-    () => ({
-      controller: storageBrowserController,
-      filesError: threadStorageFilesError,
-      isFilesLoading: isThreadStorageFilesLoading,
-    }),
+    () =>
+      resolvedThreadEnvironmentHost?.status === "connected"
+        ? {
+            controller: storageBrowserController,
+            filesError: threadStorageFilesError,
+            isFilesLoading: isThreadStorageFilesLoading,
+          }
+        : undefined,
     [
       isThreadStorageFilesLoading,
+      resolvedThreadEnvironmentHost?.status,
       storageBrowserController,
       threadStorageFilesError,
     ],
@@ -2383,9 +2412,19 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
         environmentName: environment?.name ?? null,
         hasMultipleMachines,
         hostName: resolvedThreadEnvironmentHost?.name ?? null,
+        hostType: resolvedThreadEnvironmentHost?.type ?? null,
         isProjectless: thread.projectId === PERSONAL_PROJECT_ID,
       })
     : undefined;
+  const composerEnvironmentHost =
+    resolvedThreadEnvironmentHost !== null &&
+    environment?.name === null &&
+    composerEnvironmentSummary?.label === resolvedThreadEnvironmentHost?.name
+      ? resolvedThreadEnvironmentHost
+      : undefined;
+  const composerEnvironmentMachineProvider = registeredMachineProviders?.find(
+    (provider) => provider.id === composerEnvironmentHost?.machineProviderId,
+  );
   const isThreadOnReusableEnvironment =
     environment !== undefined &&
     environment.status === "ready" &&
@@ -2507,8 +2546,10 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
       contextWindowUsage={contextWindowUsage}
       environmentCheckout={threadCheckoutDisplay}
       environmentCompactLabel={composerEnvironmentSummary?.compactLabel}
+      environmentHost={composerEnvironmentHost}
       environmentIcon={composerEnvironmentSummary?.icon}
       environmentLabel={composerEnvironmentSummary?.label}
+      environmentMachineProvider={composerEnvironmentMachineProvider}
       environmentTypeLabel={composerEnvironmentSummary?.typeLabel}
       environmentGoneStatus={threadEnvironmentGoneStatus}
       environmentHostId={environment?.hostId}
@@ -3001,7 +3042,9 @@ function ThreadDetailViewInternal(props: ThreadRoutePathArgs) {
         <PluginThreadPanelNavigationProvider
           openThreadPanel={handleOpenTimelinePluginPanel}
         >
-          {threadDetailContent}
+          <PluginDetailPanelContext.Provider value={pluginDetails}>
+            {threadDetailContent}
+          </PluginDetailPanelContext.Provider>
         </PluginThreadPanelNavigationProvider>
       </ThreadProviderContext.Provider>
     </>
