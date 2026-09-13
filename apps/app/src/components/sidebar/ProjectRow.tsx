@@ -77,7 +77,6 @@ import {
 import {
   SIDEBAR_HOVER_ACTIONS_CLASS,
   SIDEBAR_HOVER_ACTIONS_FADE_CLASS,
-  SIDEBAR_HOVER_ACTIONS_GAP_CLASS,
   SIDEBAR_HOVER_ACTIONS_MOBILE_ALWAYS_VALUE,
   SIDEBAR_HOVER_ACTIONS_ROW_CLASS,
 } from "@/components/ui/sidebar-hover-actions.js";
@@ -156,11 +155,8 @@ import {
 } from "./sidebarDropPreviewPlacement";
 import { useRenderedSectionThreadDnd } from "./useRenderedSectionThreadDnd";
 import { useChronologicalSectionThreadDnd } from "./SectionThreadDndContext";
-export { shouldSuppressPinnedThreadDropPreview } from "./useRenderedSectionThreadDnd";
 import {
-  getBuiltInSidebarSectionNode,
   renderBuiltInSidebarSection,
-  type BuiltInSidebarSectionNodes,
   type BuiltInSidebarSectionOptions,
   type BuiltInSidebarSectionOptionsById,
 } from "./BuiltInSidebarSection";
@@ -242,7 +238,7 @@ interface ChronologicalBuiltInSidebarSections {
 }
 
 interface ChronologicalSectionThreadSectionsProps extends SectionThreadTreeProps {
-  builtInSections?: ChronologicalBuiltInSidebarSections;
+  builtInSections: ChronologicalBuiltInSidebarSections;
   topLevelSectionOrder: readonly SidebarSectionId[];
   onTopLevelSectionOrderChange: (order: SidebarSectionId[]) => void;
   pinnedReorderPending: boolean;
@@ -252,13 +248,6 @@ interface ChronologicalSectionThreadSectionsProps extends SectionThreadTreeProps
     request: NeighborReorderRequest,
     callbacks: { onSettled: () => void },
   ) => void;
-  renderPinnedSection?: (
-    consumeClickSuppression?: ConsumeDragClickSuppression,
-  ) => ReactNode;
-  renderThreadsSection?: (
-    content: ReactNode,
-    consumeClickSuppression?: ConsumeDragClickSuppression,
-  ) => ReactNode;
 }
 
 type ProjectThreadTreeVariant = "project" | "section";
@@ -466,11 +455,7 @@ function getProjectThreadTreeEmptyStateIcon(
 function getProjectThreadTreeEmptyStateClassName(
   variant: ProjectThreadTreeVariant,
 ): string {
-  return cn(
-    "py-0.5",
-    variant === "section" ? "px-2" : "pl-8 pr-2",
-    "group-data-[collapsible=icon]:hidden",
-  );
+  return cn("py-0.5", variant === "section" ? "px-2" : "pl-8 pr-2");
 }
 
 function getProjectThreadTreeEmptyStateMessageClassName(): string {
@@ -604,7 +589,7 @@ function ProjectThreadTreeGroup({
     <div
       data-sidebar-sticky-section={variant === "section" ? "" : undefined}
       className={cn(
-        "relative space-y-0.5 group-data-[collapsible=icon]:hidden",
+        "relative space-y-0.5",
         getProjectThreadTreeGroupLineClassName(variant),
       )}
       onClickCapture={onClickCapture}
@@ -1000,6 +985,7 @@ function EnvironmentThreadGroupHeader({
             SIDEBAR_HOVER_ACTIONS_CLASS,
             SIDEBAR_CONTROL_PAIR_SIZE_CLASS,
             "relative flex items-center justify-end",
+            isCollapsed && "max-md:pointer-coarse:hidden",
           )}
         >
           <EnvironmentThreadGroupHeaderActions
@@ -1725,7 +1711,7 @@ export const ThreadTreeNodeRow = memo(function ThreadTreeNodeRow({
 
 function ThreadTreeLoadingSkeleton() {
   return (
-    <div className="group-data-[collapsible=icon]:hidden">
+    <div>
       <SidebarMenuSkeleton />
     </div>
   );
@@ -2086,8 +2072,6 @@ export const ChronologicalSectionThreadSections = memo(
     pinnedRootNodes = EMPTY_PINNED_ROOT_NODES,
     pinnedThreads,
     onReorderPinnedThread,
-    renderPinnedSection,
-    renderThreadsSection,
   }: ChronologicalSectionThreadSectionsProps) {
     const threads =
       threadListState.status === "ready"
@@ -2235,46 +2219,31 @@ export const ChronologicalSectionThreadSections = memo(
       ]),
     );
     const consumeClickSuppression = renderedSectionDnd?.consumeClickSuppression;
-    const configuredBuiltInSections:
-      | BuiltInSidebarSectionOptionsById
-      | undefined = builtInSections
-      ? {
-          pinned: {
-            ...builtInSections.pinned,
-            isDropTargetActive:
-              renderedSectionDnd?.dragOverParentKey ===
-              PINNED_THREAD_PARENT_KEY,
-          },
-          threads: {
-            ...builtInSections.threads,
-            activity: getCollapsedChildActivity(looseThreads, draftThreadIds),
-            collapsedThreads: looseThreads,
-            content: threadsContent,
-          },
-        }
-      : undefined;
-    const legacyBuiltInSectionNodes: BuiltInSidebarSectionNodes = {
-      pinned: renderPinnedSection?.(consumeClickSuppression),
-      threads: renderThreadsSection?.(threadsContent, consumeClickSuppression),
+    const configuredBuiltInSections: BuiltInSidebarSectionOptionsById = {
+      pinned: {
+        ...builtInSections.pinned,
+        isDropTargetActive:
+          renderedSectionDnd?.dragOverParentKey === PINNED_THREAD_PARENT_KEY,
+      },
+      threads: {
+        ...builtInSections.threads,
+        activity: getCollapsedChildActivity(looseThreads, draftThreadIds),
+        collapsedThreads: looseThreads,
+        content: threadsContent,
+      },
     };
     const orderedSections = (
       <SidebarSectionOrderList order={topLevelSectionOrder}>
         {(sectionId) => {
-          const builtInSection =
-            builtInSections && configuredBuiltInSections
-              ? renderBuiltInSidebarSection({
-                  sectionId,
-                  sections: configuredBuiltInSections,
-                  disabled: topLevelSectionOrder.length < 2,
-                  collapsedSectionIds: builtInSections.collapsedSectionIds,
-                  onToggleCollapsed: builtInSections.onToggleCollapsed,
-                  consumeClickSuppression,
-                  showPinnedSection: topLevelSectionOrder.includes("pinned"),
-                })
-              : getBuiltInSidebarSectionNode(
-                  sectionId,
-                  legacyBuiltInSectionNodes,
-                );
+          const builtInSection = renderBuiltInSidebarSection({
+            sectionId,
+            sections: configuredBuiltInSections,
+            disabled: topLevelSectionOrder.length < 2,
+            collapsedSectionIds: builtInSections.collapsedSectionIds,
+            onToggleCollapsed: builtInSections.onToggleCollapsed,
+            consumeClickSuppression,
+            showPinnedSection: topLevelSectionOrder.includes("pinned"),
+          });
           if (builtInSection !== undefined) {
             return <div key={sectionId}>{builtInSection}</div>;
           }
@@ -2345,49 +2314,31 @@ function ProjectRowComponent({
     }
     return getCollapsedChildActivity(projectThreads, draftThreadIds);
   }, [draftThreadIds, isCollapsed, projectThreads, threadListState.status]);
+  const projectStatus = isLocalPathInvalid ? (
+    <NavLink
+      to={getSettingsProjectRoutePath(project.id)}
+      onClick={(event) => {
+        event.stopPropagation();
+        onProjectSelect?.();
+      }}
+      aria-label="Project folder not found"
+      className={cn(
+        "relative z-10 inline-flex shrink-0 items-center justify-center rounded-md text-destructive outline-none ring-sidebar-ring transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2",
+        COARSE_POINTER_ROW_ACTION_SIZE_CLASS,
+      )}
+    >
+      <Icon name="AlertTriangle" className={COARSE_POINTER_ICON_SIZE_CLASS} />
+    </NavLink>
+  ) : null;
   const projectActions = (
-    <>
-      {isLocalPathInvalid ? (
-        <NavLink
-          to={getSettingsProjectRoutePath(project.id)}
-          onClick={(event) => {
-            event.stopPropagation();
-            onProjectSelect?.();
-          }}
-          aria-label="Project folder not found"
-          className={cn(
-            "relative z-10 inline-flex shrink-0 items-center justify-center rounded-md text-destructive outline-none ring-sidebar-ring transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2",
-            COARSE_POINTER_ROW_ACTION_SIZE_CLASS,
-          )}
-        >
-          <Icon
-            name="AlertTriangle"
-            className={COARSE_POINTER_ICON_SIZE_CLASS}
-          />
-        </NavLink>
-      ) : null}
-      <span className="relative z-10 inline-flex shrink-0 items-center">
-        <span
-          data-sidebar-hover-actions-open={isActionsOpen ? "true" : undefined}
-          data-sidebar-hover-actions-mobile={
-            SIDEBAR_HOVER_ACTIONS_MOBILE_ALWAYS_VALUE
-          }
-          className={cn(
-            SIDEBAR_HOVER_ACTIONS_CLASS,
-            "relative z-10 inline-flex shrink-0 items-center",
-            SIDEBAR_HOVER_ACTIONS_GAP_CLASS,
-          )}
-        >
-          <SidebarHeaderControls
-            label={project.name}
-            onNewThread={onCreateProjectThread ? handleCreateThread : undefined}
-            onOpenChange={setIsDropdownActionsOpen}
-          >
-            <ProjectActionsMenuItems project={project} surface="dropdown" />
-          </SidebarHeaderControls>
-        </span>
-      </span>
-    </>
+    <SidebarHeaderControls
+      label={project.name}
+      showNewThread={!isLocalPathInvalid}
+      onNewThread={onCreateProjectThread ? handleCreateThread : undefined}
+      onOpenChange={setIsDropdownActionsOpen}
+    >
+      <ProjectActionsMenuItems project={project} surface="dropdown" />
+    </SidebarHeaderControls>
   );
 
   return (
@@ -2401,8 +2352,11 @@ function ProjectRowComponent({
       >
         <TopLevelSidebarSection
           label={project.name}
-          actions={projectActions}
-          actionsAlwaysVisible
+          status={projectStatus}
+          actions={
+            isLocalPathInvalid && isCollapsed ? undefined : projectActions
+          }
+          actionsAlwaysVisible={isLocalPathInvalid}
           actionsMobileAlways
           actionsOpen={isActionsOpen}
           collapseControl={{

@@ -22,6 +22,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
+import { ThreadTitleMentionResourcesProvider } from "@/components/thread/ThreadTitleMentions";
 import {
   EMPTY_ORDERED_MENTION_SUGGESTIONS,
   emptyPromptDraftState,
@@ -69,7 +70,10 @@ import {
   type PromptVoiceConfig,
   type TypeaheadConfig,
 } from "./PromptBoxInternal";
-import { promptMentionClipboardContent } from "./mentions/prompt-mention-clipboard";
+import {
+  promptMentionClipboardDataAttributes,
+  serializedTextForPromptMentionResource,
+} from "./mentions/prompt-mention-clipboard";
 import { orderPromptMentionSuggestions } from "@/hooks/promptMentionCandidates";
 import type {
   PromptMentionSuggestion,
@@ -3529,6 +3533,54 @@ describe("PromptBoxInternal mention triggers", () => {
     rectSpy.mockRestore();
   });
 
+  it("resolves title mentions inside an existing thread chip without changing its target", async () => {
+    const value = "Continue from @thread:thr_handoff";
+    render(
+      <ThreadTitleMentionResourcesProvider
+        sectionNamesById={new Map()}
+        projectNamesById={new Map()}
+        threadById={
+          new Map([
+            [
+              "thr_source",
+              {
+                id: "thr_source",
+                projectId: "proj_test",
+                title: "test",
+                titleFallback: null,
+              },
+            ],
+          ])
+        }
+      >
+        <PromptBoxInternal
+          {...createPromptBoxProps({
+            value,
+            mentionRanges: [
+              {
+                start: "Continue from ".length,
+                end: value.length,
+                resource: {
+                  kind: "thread",
+                  projectId: "proj_test",
+                  threadId: "thr_handoff",
+                  label: "Continue from @thread:thr_source",
+                },
+              },
+            ],
+          })}
+        />
+      </ThreadTitleMentionResourcesProvider>,
+    );
+
+    await waitFor(() => {
+      const chip = getPromptEditorElement().querySelector(
+        '[data-prompt-mention-serialized-text="@thread:thr_handoff"]',
+      );
+      expect(chip?.textContent).toBe("Continue from test");
+    });
+  });
+
   it("renders a plugin mention's named icon hint", async () => {
     const suggestion = { ...githubIssueSuggestion, icon: "FileText" };
     const { promptBoxRef } = renderPromptBox("@fix", {
@@ -3929,16 +3981,24 @@ describe("PromptBoxInternal prompt actions", () => {
   it("keeps multiple pasted plugin references as distinct pills", async () => {
     const { changes, promptBoxRef } = renderPromptBox("");
     const reference = (id: string, label: string) => {
-      const pill = promptMentionClipboardContent({
-        kind: "plugin",
+      const resource = {
+        kind: "plugin" as const,
         pluginId: "plugin-api-docs",
         icon: null,
         itemId: `surface:${id}`,
         label,
-      });
+      };
+      const serializedText = serializedTextForPromptMentionResource(resource);
+      const pill = document.createElement("span");
+      for (const [name, value] of Object.entries(
+        promptMentionClipboardDataAttributes({ resource, serializedText }),
+      )) {
+        pill.setAttribute(name, value);
+      }
+      pill.textContent = serializedText;
       return {
-        text: `Build a plugin capability like ${pill.text.trimEnd()} using bb's Plugin Guide. `,
-        html: `Build a plugin capability like ${pill.html.trimEnd()} using bb's Plugin Guide. `,
+        text: `Build a plugin capability like ${serializedText} using bb's Plugin Guide. `,
+        html: `Build a plugin capability like ${pill.outerHTML} using bb's Plugin Guide. `,
       };
     };
 
