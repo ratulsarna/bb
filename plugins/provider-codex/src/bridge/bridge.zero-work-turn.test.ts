@@ -200,7 +200,7 @@ it("settles a response-proved turn as failed when codex dies before turn/started
     providerThreadId,
     input: [{ type: "text", text: "/respond-then-exit", mentions: [] }],
     clientRequestId: "creq_dies234567",
-    options: { ...sessionOptions },
+    options: { ...FULL_ACCESS_SESSION_OPTIONS },
   });
   await harness.waitForResponse(2);
 
@@ -235,7 +235,7 @@ it("settles a turn the turn/start response reports as already completed", async 
     providerThreadId,
     input: [{ type: "text", text: "/respond-completed", mentions: [] }],
     clientRequestId: "creq_instdn2345",
-    options: { ...sessionOptions },
+    options: { ...FULL_ACCESS_SESSION_OPTIONS },
   });
   await harness.waitForResponse(2);
 
@@ -271,7 +271,7 @@ it("acknowledges a dispatch codex steers into the already-running turn", async (
     providerThreadId,
     input: [{ type: "text", text: "/wait-for-interrupt", mentions: [] }],
     clientRequestId: "creq_first23456",
-    options: { ...sessionOptions },
+    options: { ...FULL_ACCESS_SESSION_OPTIONS },
   });
   await harness.waitForResponse(2);
   await waitForEvents((events) =>
@@ -283,7 +283,7 @@ it("acknowledges a dispatch codex steers into the already-running turn", async (
     providerThreadId,
     input: [{ type: "text", text: "/steer-into-active", mentions: [] }],
     clientRequestId: "creq_steer23456",
-    options: { ...sessionOptions },
+    options: { ...FULL_ACCESS_SESSION_OPTIONS },
   });
   await harness.waitForResponse(3);
   const events = await waitForEvents(
@@ -332,7 +332,7 @@ it("does not resurrect a response-opened turn settled before its turn/started ar
     providerThreadId,
     input: [{ type: "text", text: "/interrupt-before-start", mentions: [] }],
     clientRequestId: "creq_prestart23",
-    options: { ...sessionOptions },
+    options: { ...FULL_ACCESS_SESSION_OPTIONS },
   });
   await harness.waitForResponse(2);
   await waitForEvents((events) =>
