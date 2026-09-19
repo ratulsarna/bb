@@ -656,10 +656,13 @@ describe("retrying a failed turn", () => {
             pluginId: "concurrency-limit",
             handler: (context) => {
               dispatchCalls += 1;
+              if (context.queuedMessages.length === 0) {
+                return { action: "proceed" };
+              }
               // The re-attempt must look like a re-decision about an existing
               // queued row, not a fresh send, or a limiter would double-count
               // it — and the row it names is the retry, not a user message.
-              expect(context.queuedMessage?.payload.kind).toBe("retry");
+              expect(context.queuedMessages[0]?.payload.kind).toBe("retry");
               return { action: "wait", reason: "At capacity" };
             },
           },
@@ -678,7 +681,7 @@ describe("retrying a failed turn", () => {
 
       await sweepPastResume(harness);
 
-      expect(dispatchCalls).toBe(1);
+      expect(dispatchCalls).toBe(2);
       // The turn did not dispatch; the same row is queued again, this time by
       // the limiter, and its schedule is cleared because the limiter named no
       // instant of its own.

@@ -46,6 +46,7 @@ import {
   dispatchTurnDuringReprovision,
   requireReadyThreadEnvironment,
 } from "./thread-turn-dispatch.js";
+import { resolveDispatchAuthor } from "./dispatch-author.js";
 import { resolvePermissionEscalation } from "./thread-runtime-config.js";
 import {
   buildThreadStatusChangeMetadata,
@@ -167,7 +168,7 @@ export function ensureThreadIsNotAwaitingUserInteraction(
   deps: Pick<AppDeps, "pendingInteractions">,
   threadId: string,
 ): void {
-  if (!deps.pendingInteractions.hasPendingThreadInteraction(threadId)) {
+  if (!deps.pendingInteractions.hasTurnBoundPendingThreadInteraction(threadId)) {
     return;
   }
 
@@ -191,6 +192,20 @@ export function ensureThreadIsWritable(
   if (thread.deletedAt !== null) {
     throwThreadNotWritable(thread, "deleted", "Thread is deleted");
   }
+}
+
+/**
+ * The queue's own writability, which a requested stop does not revoke.
+ *
+ * Everything else a stopping thread rejects is work against the run that is
+ * being torn down. The queue is the opposite: it holds what the user wants to
+ * happen NEXT, and the seconds a stop takes to land are exactly when they
+ * reach for it. Rows still cannot dispatch mid-stop — the dispatch checkpoint
+ * queues them on a `stopping` wait — but composing, editing, reordering and
+ * asking for one to go first all stay available.
+ */
+export function ensureThreadQueueIsWritable(thread: Thread): void {
+  ensureThreadIsWritable(thread, true);
 }
 
 function resolveSendMode(
@@ -518,6 +533,7 @@ async function sendThreadMessageWithoutContextClear(
     }
   };
   await validatePromptAttachmentReferences({
+    db: deps.db,
     dataDir: deps.config.dataDir,
     input,
     projectId: thread.projectId,
@@ -527,8 +543,11 @@ async function sendThreadMessageWithoutContextClear(
   // `system` whatever the original was: nobody asked for it a second time, and
   // counting it as a user message would inflate every "messages sent" figure by
   // however many times the provider happened to be rate limited.
-  const initiator: ThreadTurnInitiator =
-    args.retryOf !== undefined ? "system" : senderThreadId ? "agent" : "user";
+  const { initiator } = resolveDispatchAuthor({
+    retrying: args.retryOf !== undefined,
+    senderThreadId,
+    startedOnBehalfOf: null,
+  });
   const shouldCaptureUserMessageSent =
     args.trigger === "user" && initiator === "user" && input.length > 0;
   const expectedSteerTurnId =

@@ -60,11 +60,13 @@ import {
   getAutomationDetailRoutePath,
   getAutomationEditRoutePath,
   getAutomationsRoutePath,
+  getPluginConfigurationRoutePath,
   getSettingsRoutePath,
   getSettingsProjectRoutePath,
 } from "./lib/route-paths";
 import { AppCommandProvider } from "./components/commands/AppCommandProvider";
 import { ProviderCliInstallLogDialogHost } from "./components/provider-cli/provider-cli-install";
+import { ServerMoveOverlay } from "./components/machines/ServerMoveOverlay";
 import { RouteLoadingSkeleton } from "./components/ui/route-loading-skeleton";
 
 const SettingsView = lazy(() =>
@@ -264,6 +266,17 @@ export function AppRoutes() {
     <AppLayout>
       <Suspense fallback={null}>
         <Routes>
+          <Route
+            path="/settings/usage"
+            element={
+              <Navigate
+                to={getPluginConfigurationRoutePath({
+                  pluginId: "provider-usage",
+                })}
+                replace
+              />
+            }
+          />
           <Route path={SETTINGS_ROUTE_PATH} element={<SettingsView />} />
           <Route
             path={SETTINGS_SECTION_ROUTE_PATH}
@@ -428,6 +441,7 @@ export function App() {
                 <Route path="*" element={<AppRoutes />} />
               </Routes>
               <ProviderCliInstallLogDialogHost />
+              <ServerMoveOverlay />
             </AppFileExternalNavigationHost>
           </AppNavigationUrlHost>
         </RouteNavigationProvider>

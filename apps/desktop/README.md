@@ -6,14 +6,8 @@ lifecycle.
 
 ## Development
 
-From the repo root, the full source dev loop is:
-
-```bash
-pnpm dev:desktop
-```
-
-That starts the source dev server and the Electron shell through
-`scripts/bb-dev-app`. To run only the desktop package task directly:
+From the repo root, run `pnpm dev` in one terminal for the source server and
+live UI updates. In a second terminal, start the Electron shell:
 
 ```bash
 pnpm exec turbo run dev --filter=@bb/desktop
@@ -22,7 +16,7 @@ pnpm exec turbo run dev --filter=@bb/desktop
 The dev script builds `bb-app`, compiles the Electron main/preload files, and
 opens Electron directly. By default it uses the same checkout-scoped
 `~/.bb-dev/<checkout-instance>` data directory and deterministic high ports as
-the main repo dev launcher; it prints the resolved data dir, server URL, and
+`pnpm dev`; it prints the resolved data dir, server URL, and
 Electron user-data dir at startup. It intentionally overwrites inherited
 `BB_DATA_DIR`, `BB_SERVER_PORT`, `BB_SERVER_URL`, and `BB_HOST_DAEMON_PORT` so a
 desktop dev run launched from an existing bb session still targets the current
@@ -52,10 +46,11 @@ Node runtime:
 pnpm exec turbo run start --filter=@bb/desktop
 ```
 
-Electron is pinned to `41.7.0`, the highest stable line verified to rebuild the
-packaged native modules with the current dependency set. Electron 42.2.0 was
-tested, but `better-sqlite3@12.10.0` does not compile against Electron ABI 146.
-Revisit the pin when `better-sqlite3` ships support or prebuilds for that ABI.
+Electron is pinned to `44.3.0`. macOS builds require macOS 13 (Ventura) or
+newer. The bundled `bb-app` runtime uses `better-sqlite3@13.0.3`, whose N-API
+binaries work with Electron without an ABI-specific rebuild. The packaging
+hook opens an in-memory database with Electron before accepting the packaged
+SQLite module; older ABI-specific modules still use the prebuild fallback.
 
 ## Validation
 
@@ -365,3 +360,44 @@ writes a PID file so the next launch can reap a stale Electron-owned `bb-app`
 launcher. Hard crashes such as process aborts, segfaults, or kernel-level kills
 cannot run cleanup in the crashing process; the startup PID-file reap is the
 recovery path for those cases.
+
+### Saved servers
+
+Use **Window → Server → Add Server…** to save and switch to another machine's
+HTTP(S) bb server URL. Saved URLs remain in the menu across restarts; adding an
+existing URL selects it without creating a duplicate. **This Mac** switches back
+to the built-in server without removing saved entries.
+
+**Set Server URL…** edits the last selected custom server. Clearing its URL removes
+that entry and switches an active custom target to This Mac. Other saved servers
+and Connect discovery remain available. Existing single-server preferences are
+loaded automatically into the saved list in `<userData>/server-target.json`.
+
+### Server moves
+
+After `bb server move`, the old computer's data dir (`~/.bb` or
+`$BB_DATA_DIR`) contains `server-moved.json`. The desktop app reads it at
+startup, whenever the "This Mac" target loads, and while that target is active.
+While the target is active, the app watches the data dir. If `fs.watch` fails,
+for example with `ENOSPC`, the app checks the file every 2 seconds instead
+(`src/server-moved.ts`). The server writes the lock before the new machine
+takes over and removes it if the move is rolled back, so the app acts only on a
+committed move. A move is committed when the local server address answers
+`/health` with 410 `code: "server_moved"`, or when nothing listens there and no
+launcher process is alive. The app checks once when it starts or loads "This
+Mac". When a move finishes while the app is open, the app checks every second
+for up to 120 seconds. It stops if the lock disappears. A committed lock
+switches the server target:
+
+- `mode: "connect"` selects `connectHandle` with `serverUrl`.
+- `mode: "direct"` sets the custom server URL. When a move finishes while
+  the app is open, the app waits up to 60 seconds for the new `/health`
+  endpoint before it switches the window.
+
+The app shows "Your bb server moved to <toHostName>" once for each `moveId`
+(`<userData>/server-move-notice.json`). It still starts its own `bb-app`
+launcher unless another bb process answers the local server port. The launcher
+runs this computer as a regular machine, and quitting the app stops it. If the
+app has no stored bb Connect credential, it signs in to a connect target with
+the `x-bb-connect-machine` header that the move wrote to the data dir's
+`config.json`. The app logs a warning and ignores an invalid lock.

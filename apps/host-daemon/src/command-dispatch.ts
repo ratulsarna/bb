@@ -69,6 +69,7 @@ import type {
 } from "@bb/provider-bridge-protocol";
 import {
   discardThreadRewind,
+  deleteThreadStorage,
   ensureThreadRuntime,
   prepareThreadRewind,
   startThread,
@@ -86,8 +87,52 @@ import {
   workspaceResolutionFailureFromError,
 } from "./workspace-resolution.js";
 import { userExecutableProcessOptions } from "./user-executable-env.js";
+import type { ServerMoveService } from "./server-move/service.js";
 
 const THREAD_STOP_ACTIVE_TURN_WAIT_MS = 5_000;
+
+type RuntimeStopCommand =
+  | CommandOf<"thread.stop">
+  | CommandOf<"thread.storage.delete">;
+
+async function stopThreadRuntime(
+  command: RuntimeStopCommand,
+  options: CommandDispatchOptions,
+): Promise<HostDaemonCommandResult<"thread.stop">> {
+  const released =
+    await options.runtimeManager.releaseThreadFromOtherEnvironments({
+      activeTurn: "interrupt",
+      environmentId: command.environmentId,
+      threadId: command.threadId,
+    });
+  const entry = await options.runtimeManager.getOrAwait(command.environmentId);
+  if (!entry) {
+    await options.eventSink.flush();
+    return { providerCheckpointId: released.providerCheckpointId };
+  }
+  let providerCheckpointId = released.providerCheckpointId;
+  if (entry.runtime.hasThread(command.threadId)) {
+    if (
+      command.type === "thread.stop" &&
+      command.intent === "release" &&
+      entry.runtime.getActiveTurnId(command.threadId) !== null
+    ) {
+      await options.eventSink.flush();
+      return { providerCheckpointId, activeTurnRetained: true };
+    }
+    if (command.type !== "thread.stop" || command.intent !== "release") {
+      await entry.runtime.waitForActiveTurn(command.threadId, {
+        timeoutMs: THREAD_STOP_ACTIVE_TURN_WAIT_MS,
+      });
+    }
+    const result = await entry.runtime.stopThread({
+      threadId: command.threadId,
+    });
+    providerCheckpointId = result.providerCheckpointId ?? providerCheckpointId;
+  }
+  await options.eventSink.flush();
+  return { providerCheckpointId };
+}
 
 export {
   CommandDispatchError,
@@ -321,6 +366,13 @@ async function withRetainedThreadEnvironment<TResult>(
   }
 }
 
+function requireServerMove(options: CommandDispatchOptions): ServerMoveService {
+  if (!options.serverMove) {
+    throw new Error("Server move is unavailable on this daemon");
+  }
+  return options.serverMove;
+}
+
 async function forwardDesktopBrowserCommand<
   TCommand extends DesktopBrowserCommand,
 >(
@@ -410,42 +462,11 @@ const commandHandlers: CommandHandlerMap = {
       const entry = await ensureThreadRuntime(command, options);
       return submitTurn(command, entry, options);
     }),
-  "thread.stop": async (command, options) => {
-    const released =
-      await options.runtimeManager.releaseThreadFromOtherEnvironments({
-        activeTurn: "interrupt",
-        environmentId: command.environmentId,
-        threadId: command.threadId,
-      });
-    const entry = await options.runtimeManager.getOrAwait(
-      command.environmentId,
-    );
-    if (!entry) {
-      await options.eventSink.flush();
-      return {
-        providerCheckpointId: released.providerCheckpointId,
-      };
-    }
-    let providerCheckpointId = released.providerCheckpointId;
-    if (entry.runtime.hasThread(command.threadId)) {
-      if (command.intent === "release") {
-        if (entry.runtime.getActiveTurnId(command.threadId) !== null) {
-          await options.eventSink.flush();
-          return { providerCheckpointId };
-        }
-      } else {
-        await entry.runtime.waitForActiveTurn(command.threadId, {
-          timeoutMs: THREAD_STOP_ACTIVE_TURN_WAIT_MS,
-        });
-      }
-      const result = await entry.runtime.stopThread({
-        threadId: command.threadId,
-      });
-      providerCheckpointId =
-        result.providerCheckpointId ?? providerCheckpointId;
-    }
-    await options.eventSink.flush();
-    return { providerCheckpointId };
+  "thread.stop": stopThreadRuntime,
+  "thread.storage.delete": async (command, options) => {
+    const result = await stopThreadRuntime(command, options);
+    await deleteThreadStorage(command, options);
+    return result;
   },
   "thread.goal.clear": async (command, options) => {
     const entry = await ensureThreadRuntime(command, options);
@@ -722,6 +743,18 @@ const onlineRpcHandlers: OnlineRpcHandlerMap = {
         return { outcome: "unavailable", message: lookup.message };
     }
   },
+  "server_move.inspect": (command, options) =>
+    requireServerMove(options).inspect(command),
+  "server_move.probe": (command, options) =>
+    requireServerMove(options).probe(command),
+  "server_move.prepare": (command, options) =>
+    requireServerMove(options).prepare(command),
+  "server_move.activate": (command, options) =>
+    requireServerMove(options).activate(command),
+  "server_move.abort": (command, options) =>
+    requireServerMove(options).abort(command),
+  "server_move.delete_old_copy": (_command, options) =>
+    requireServerMove(options).deleteOldCopy(),
 };
 
 export async function dispatchCommand<

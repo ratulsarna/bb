@@ -15,12 +15,15 @@ import { Provider, createStore } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   ChronologicalSectionThreadSections,
+  DropPreviewRow,
   ProjectRow,
+  SectionThreadDragOverlay,
   type ProjectThreadListState,
 } from "./ProjectRow";
 import { buildSidebarEntitySectionId } from "@bb/client-core";
 import { makeThreadListEntry } from "@bb/test-helpers/domain-fixtures";
 import { makeProjectResponse } from "@/test/fixtures/projects";
+import { sidebarOrganizationModeAtom } from "./sidebarCollapsedAtoms";
 
 const mockUpdateEnvironment = vi.hoisted(() => ({
   mutate: vi.fn(),
@@ -99,26 +102,30 @@ function renderProjectRow(
   isCollapsed = false,
 ) {
   const onToggleEnvironmentCollapsed = vi.fn();
+  const store = createStore();
+  store.set(sidebarOrganizationModeAtom, "project");
   const result = render(
     <TooltipProvider>
-      <QueryClientProvider client={new QueryClient()}>
-        <MemoryRouter>
-          <ProjectRow
-            project={makeProjectResponse()}
-            threadListState={threadListState}
-            isActive={isActive}
-            isCollapsed={isCollapsed}
-            compareThreads={() => 0}
-            progressiveDisclosureEnabled
-            collapsedThreadIds={new Set()}
-            collapsedEnvironmentIds={collapsedEnvironmentIds}
-            isLocalPathInvalid={false}
-            onToggleProjectCollapsed={onToggleProjectCollapsed}
-            onToggleThreadCollapsed={vi.fn()}
-            onToggleEnvironmentCollapsed={onToggleEnvironmentCollapsed}
-          />
-        </MemoryRouter>
-      </QueryClientProvider>
+      <Provider store={store}>
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter>
+            <ProjectRow
+              project={makeProjectResponse()}
+              threadListState={threadListState}
+              isActive={isActive}
+              isCollapsed={isCollapsed}
+              compareThreads={() => 0}
+              progressiveDisclosureEnabled
+              collapsedThreadIds={new Set()}
+              collapsedEnvironmentIds={collapsedEnvironmentIds}
+              isLocalPathInvalid={false}
+              onToggleProjectCollapsed={onToggleProjectCollapsed}
+              onToggleThreadCollapsed={vi.fn()}
+              onToggleEnvironmentCollapsed={onToggleEnvironmentCollapsed}
+            />
+          </MemoryRouter>
+        </QueryClientProvider>
+      </Provider>
     </TooltipProvider>,
   );
   return { ...result, onToggleEnvironmentCollapsed, onToggleProjectCollapsed };
@@ -136,6 +143,28 @@ function expectCollapsedActivityAtSidebarEdge(label: string) {
 }
 
 describe("ProjectRow interactions", () => {
+  it("renders the destination gap as a muted copy of the dragged row", () => {
+    render(<DropPreviewRow depth={0} thread={makeThread()} />);
+
+    const preview = document.querySelector(
+      '[data-sidebar-section-drop-preview="true"]',
+    );
+    expect(preview?.textContent).toBe("Test thread");
+    expect(preview?.className).toContain("opacity-50");
+    expect(preview?.className).not.toContain("border-dashed");
+  });
+
+  it("renders the dragged copy as a compact opaque chip", () => {
+    render(<SectionThreadDragOverlay thread={makeThread()} />);
+
+    const overlay = document.querySelector(
+      '[data-sidebar-section-drag-overlay="true"]',
+    );
+    expect(overlay?.className).toContain("w-fit");
+    expect(overlay?.className).toContain("max-w-56");
+    expect(overlay?.className).not.toContain("opacity-");
+  });
+
   afterEach(() => {
     cleanup();
     mockDraftThreadIds.current = new Set();
@@ -471,9 +500,9 @@ describe("ProjectRow interactions", () => {
       true,
     );
 
-    expect(screen.getAllByLabelText("Unread thread succeeded")).not.toHaveLength(
-      0,
-    );
+    expect(
+      screen.getAllByLabelText("Unread thread succeeded"),
+    ).not.toHaveLength(0);
     expect(screen.queryByLabelText("Thread has unsubmitted draft")).toBeNull();
   });
 

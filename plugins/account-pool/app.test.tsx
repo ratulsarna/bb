@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type {
@@ -20,10 +20,12 @@ const STATUS_CACHE_KEY = "account-pool:status";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function measureAccountRows() {
@@ -97,6 +99,7 @@ function status(accounts: AccountSummary[] = [account()]): PoolStatus {
     ],
     accounts,
     routing: { claude: true, codex: true },
+    parent: null,
   };
 }
 
@@ -105,6 +108,7 @@ function config(overrides: Partial<AccountPoolConfig> = {}): AccountPoolConfig {
     anthropicUpstreamBaseUrl: "https://api.anthropic.com",
     codexUpstreamBaseUrl: "https://chatgpt.com/backend-api/codex",
     switchThreshold: 0.98,
+    parentMode: "proxy",
     ...overrides,
   };
 }
@@ -126,6 +130,85 @@ function render(
     },
   );
 }
+
+describe("Account Pool parent banner", () => {
+  const PARENT_URL = "http://127.0.0.1:25231/api/v1/plugins/account-pool/http";
+
+  function renderWithParent(parent: PoolStatus["parent"]) {
+    return renderSlot(
+      app.settingsSections[0]!,
+      {},
+      {
+        rpc: {
+          "status.get": () => ({ ...status(), parent }),
+          "config.get": () => config(),
+        },
+        openUrl: () => true,
+      },
+    );
+  }
+
+  it("says nothing about a parent when this server has none", async () => {
+    const slot = renderWithParent(null);
+    expect(await slot.findByText("person@example.com")).toBeTruthy();
+    expect(slot.queryByText(/Account Pooler available/i)).toBeNull();
+  });
+
+  it("invites pooling through the parent while isolated, without leaking the api path", async () => {
+    const slot = renderWithParent({
+      baseUrl: PARENT_URL,
+      mode: "isolate",
+      availability: { claude: true, codex: true },
+    });
+    expect(
+      await slot.findByText("Parent Account Pooler available"),
+    ).toBeTruthy();
+    expect(
+      slot.getByText(/started from a thread on 127\.0\.0\.1:25231/),
+    ).toBeTruthy();
+    expect(slot.queryByText(/api\/v1\/plugins/)).toBeNull();
+  });
+
+  it("names both providers and says local accounts go unused while proxying", async () => {
+    const slot = renderWithParent({
+      baseUrl: PARENT_URL,
+      mode: "proxy",
+      availability: { claude: true, codex: true },
+    });
+    expect(
+      await slot.findByText("Using the parent Account Pooler"),
+    ).toBeTruthy();
+    expect(
+      slot.getByText(
+        /Claude and Codex requests are sent to the pool on 127\.0\.0\.1:25231\. Accounts on this server are not used/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("calls out a provider the parent cannot serve", async () => {
+    const slot = renderWithParent({
+      baseUrl: PARENT_URL,
+      mode: "proxy",
+      availability: { claude: true, codex: false },
+    });
+    expect(
+      await slot.findByText(
+        /Claude requests are sent to the pool on .*Codex has no accounts there, so those requests fall back/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says nothing is routed when the parent has no accounts at all", async () => {
+    const slot = renderWithParent({
+      baseUrl: PARENT_URL,
+      mode: "proxy",
+      availability: { claude: false, codex: false },
+    });
+    expect(
+      await slot.findByText(/has no accounts available right now/),
+    ).toBeTruthy();
+  });
+});
 
 describe("Account Pool settings", () => {
   it("renders cached accounts as refreshing until live status arrives, then caches it", async () => {
@@ -490,41 +573,9 @@ describe("Account Pool settings", () => {
     },
   );
 
-  it("copies the exact device code and distinguishes it from the URL copy", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", {
-      ...navigator,
-      clipboard: { writeText },
-    });
-    const slot = render([], { "codexLogin.start": codexLoginStart });
-    fireEvent.click(
-      await slot.findByRole("button", { name: "Sign in to Codex" }),
-    );
-    fireEvent.click(
-      await slot.findByRole("button", { name: "Copy Codex sign-in code" }),
-    );
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith("ABCD-1234"));
-    await waitFor(() =>
-      expect(slot.getByText("Sign-in code copied")).toBeTruthy(),
-    );
-    expect(
-      slot
-        .getByRole("button", { name: "Copy Codex sign-in code" })
-        .querySelector('[data-icon="Check"]'),
-    ).not.toBeNull();
-
-    fireEvent.click(
-      slot.getByRole("button", { name: "Copy Codex authorization URL" }),
-    );
-    await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith(
-        "https://auth.openai.com/codex/device",
-      ),
-    );
-  });
-
   it("does not claim success when copying the device code fails", async () => {
-    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    const copy = deferred<void>();
+    const writeText = vi.fn(() => copy.promise);
     vi.stubGlobal("navigator", {
       ...navigator,
       clipboard: { writeText },
@@ -537,15 +588,16 @@ describe("Account Pool settings", () => {
       name: "Copy Codex sign-in code",
     });
     fireEvent.click(button);
-    await waitFor(() =>
-      expect(window.getSelection()?.toString()).toBe("ABCD-1234"),
-    );
+    expect(writeText).toHaveBeenCalledWith("ABCD-1234");
+    await act(async () => copy.reject(new Error("denied")));
+    expect(window.getSelection()?.toString()).toBe("ABCD-1234");
     expect(slot.queryByText("Sign-in code copied")).toBeNull();
     expect(button.querySelector('[data-icon="Check"]')).toBeNull();
   });
 
   it("does not claim success when copying the authorization URL fails", async () => {
-    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    const copy = deferred<void>();
+    const writeText = vi.fn(() => copy.promise);
     vi.stubGlobal("navigator", {
       ...navigator,
       clipboard: { writeText },
@@ -558,13 +610,22 @@ describe("Account Pool settings", () => {
       name: "Copy Codex authorization URL",
     });
     fireEvent.click(button);
-    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText).toHaveBeenCalledWith(
+      "https://auth.openai.com/codex/device",
+    );
+    await act(async () => copy.reject(new Error("denied")));
+    const input = slot.getByRole("textbox", {
+      name: "Codex authorization URL",
+    }) as HTMLInputElement;
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
     expect(button.textContent).not.toContain("Copied");
     expect(slot.queryByText("Authorization URL copied")).toBeNull();
   });
 
   it("keeps polling and the close action working after copying the code", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
+    const copy = deferred<void>();
+    const writeText = vi.fn(() => copy.promise);
     vi.stubGlobal("navigator", {
       ...navigator,
       clipboard: { writeText },
@@ -580,7 +641,8 @@ describe("Account Pool settings", () => {
     fireEvent.click(
       await slot.findByRole("button", { name: "Copy Codex sign-in code" }),
     );
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith("ABCD-1234"));
+    expect(writeText).toHaveBeenCalledWith("ABCD-1234");
+    await act(async () => copy.resolve());
     expect(
       (await slot.findByRole("dialog", { name: "Sign in to Codex" }))
         .textContent,

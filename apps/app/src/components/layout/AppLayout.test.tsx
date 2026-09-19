@@ -10,11 +10,7 @@ import {
 } from "@testing-library/react";
 import { defaultAppSettings } from "@bb/domain";
 import { Popover, PopoverContent, PopoverTrigger } from "@bb/shared-ui/popover";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@bb/shared-ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@bb/shared-ui/tooltip";
 import { createPortal } from "react-dom";
 import {
   resetPluginSlotStoreForTest,
@@ -29,6 +25,16 @@ import { AppCommandProvider } from "@/components/commands/AppCommandProvider";
 import { AppLayout } from "./AppLayout";
 import { CompactViewportOverrideProvider } from "@bb/shared-ui/hooks/use-compact-viewport";
 import { setCompactSecondaryPanelPresentation } from "@/components/ui/secondary-panel-shelf-visibility";
+
+const useThreadDetailBootstrapMock = vi.hoisted(() =>
+  vi.fn(
+    (): {
+      data?: { projectId: string };
+      isError: boolean;
+      isSuccess: boolean;
+    } => ({ isError: false, isSuccess: false }),
+  ),
+);
 
 const SIDEBAR_WIDTH_STORAGE_KEY = "bb.sidebar.width";
 const APP_ROUTE = "/projects/proj_one/threads/thr_one?message=12#event-12";
@@ -57,8 +63,7 @@ vi.mock("./AppLayoutSidebar", async () => {
 vi.mock("@/hooks/queries/system-queries", () => ({
   useSystemConfig: () => ({
     data: {
-      experiments: {
-      },
+      experiments: {},
       generalSettings: defaultAppSettings,
       keybindings: [
         {
@@ -158,7 +163,7 @@ vi.mock("@/hooks/queries/sidebar-navigation-query", () => ({
 vi.mock("@/hooks/queries/thread-queries", () => ({
   didThreadDetailBootstrapRefreshAfterMount: () => true,
   useThread: () => ({ data: undefined }),
-  useThreadDetailBootstrap: () => ({ isError: false, isSuccess: false }),
+  useThreadDetailBootstrap: useThreadDetailBootstrapMock,
   useThreadPendingInteractions: () => ({ data: undefined }),
   getLatestPendingInteraction: () => null,
 }));
@@ -207,6 +212,11 @@ function renderLayout(initialPath = "/", children: ReactNode = null) {
 
 beforeEach(() => {
   window.localStorage.clear();
+  useThreadDetailBootstrapMock.mockReset();
+  useThreadDetailBootstrapMock.mockReturnValue({
+    isError: false,
+    isSuccess: false,
+  });
 });
 
 afterEach(() => {
@@ -216,6 +226,43 @@ afterEach(() => {
   setCompactSecondaryPanelPresentation("closed");
   vi.restoreAllMocks();
   window.localStorage.clear();
+});
+
+describe("canonical thread routes", () => {
+  it.each([
+    [
+      "/threads/thr_one?message=12#event-12",
+      "/projects/proj_actual/threads/thr_one?message=12#event-12",
+    ],
+    [
+      "/projects/proj_wrong/threads/thr_one?panel=files#diff",
+      "/projects/proj_actual/threads/thr_one?panel=files#diff",
+    ],
+  ])("redirects %s to the thread's project route", async (route, expected) => {
+    useThreadDetailBootstrapMock.mockReturnValue({
+      data: { projectId: "proj_actual" },
+      isError: false,
+      isSuccess: true,
+    });
+
+    renderLayout(route);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("location").textContent).toBe(expected),
+    );
+  });
+
+  it("keeps an already canonical thread route", () => {
+    useThreadDetailBootstrapMock.mockReturnValue({
+      data: { projectId: "proj_one" },
+      isError: false,
+      isSuccess: true,
+    });
+
+    renderLayout(APP_ROUTE);
+
+    expect(screen.getByTestId("location").textContent).toBe(APP_ROUTE);
+  });
 });
 
 describe("mobile workspace sidebar access", () => {
@@ -499,17 +546,23 @@ describe("AppLayout plugin overlay contexts", () => {
       );
 
       expect(screen.getByRole("button", { name: "Page action" })).toBeDefined();
-      const overlayHost = document.querySelector("[data-bb-plugin-app-overlays]");
+      const overlayHost = document.querySelector(
+        "[data-bb-plugin-app-overlays]",
+      );
       expect(overlayHost).not.toBeNull();
       expect(overlayHost?.parentElement).toBe(getRoot().parentElement);
       expect(getRoot().contains(overlayHost)).toBe(false);
       expect(errors).not.toHaveBeenCalled();
-      expect(screen.getByRole("button", { name: "Overlay action" })).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: "Overlay action" }),
+      ).toBeDefined();
       expect((await screen.findByRole("tooltip")).textContent).toBe(
         "Overlay tooltip",
       );
       fireEvent.click(screen.getByRole("link", { name: SETTINGS_ROUTE }));
-      expect(screen.getByRole("button", { name: "Overlay action" })).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: "Overlay action" }),
+      ).toBeDefined();
       expect(screen.getByRole("tooltip").textContent).toBe("Overlay tooltip");
       expect(errors).not.toHaveBeenCalled();
       expect(warnings).not.toHaveBeenCalled();

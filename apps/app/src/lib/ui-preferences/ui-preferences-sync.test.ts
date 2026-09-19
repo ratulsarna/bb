@@ -106,6 +106,69 @@ describe("ui preferences sync", () => {
     resetUiPreferencesSyncForTest();
   });
 
+  it("retains a local section order when the initial cache lacks its entry", () => {
+    const { orderAtom, queryClient, store } = createHarness();
+    const localOrder = ["threads", "projects", "pinned"];
+    store.set(orderAtom, localOrder);
+    const response = serverResponse();
+    response.preferences = Object.fromEntries(
+      Object.entries(response.preferences).filter(
+        ([key]) => key !== "sidebar.sectionOrder",
+      ),
+    ) as UiPreferencesResponse["preferences"];
+    setCachedUiPreferences(queryClient, response);
+
+    startUiPreferencesSync({ queryClient, store });
+
+    expect(store.get(orderAtom)).toEqual(localOrder);
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+
+  it("keeps edits local without an error notification when the server lacks the entry", async () => {
+    const { orderAtom, queryClient, store } = createHarness();
+    startUiPreferencesSync({ queryClient, store });
+    const response = serverResponse();
+    response.preferences = Object.fromEntries(
+      Object.entries(response.preferences).filter(
+        ([key]) => key !== "sidebar.sectionOrder",
+      ),
+    ) as UiPreferencesResponse["preferences"];
+    setCachedUiPreferences(queryClient, response);
+
+    store.set(orderAtom, ["threads"]);
+    await waitForUiPreferenceWrites();
+
+    expect(store.get(orderAtom)).toEqual(["threads"]);
+    expect(mocks.set).not.toHaveBeenCalled();
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(hasPendingUiPreferenceWrite("sidebar.sectionOrder")).toBe(false);
+  });
+
+  it("records an acknowledged write after its cached entry disappears", async () => {
+    const { orderAtom, queryClient, store } = createHarness();
+    startUiPreferencesSync({ queryClient, store });
+    setCachedUiPreferences(queryClient, serverResponse());
+    const response = serverResponse();
+    response.preferences = Object.fromEntries(
+      Object.entries(response.preferences).filter(
+        ([key]) => key !== "sidebar.sectionOrder",
+      ),
+    ) as UiPreferencesResponse["preferences"];
+    mocks.set.mockImplementationOnce(async (input) => {
+      setCachedUiPreferences(queryClient, response);
+      return { key: input.key, revision: 1, value: input.value };
+    });
+
+    store.set(orderAtom, ["threads"]);
+    await waitForUiPreferenceWrites();
+
+    expect(
+      getCachedUiPreferences(queryClient)?.preferences["sidebar.sectionOrder"],
+    ).toEqual({ revision: 1, value: ["threads"] });
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(store.get(orderAtom)).toEqual(["threads"]);
+  });
+
   it("keeps writes local when no sync context has started", () => {
     const { modeAtom, store } = createHarness();
     store.set(modeAtom, "machine");
@@ -128,10 +191,7 @@ describe("ui preferences sync", () => {
   });
 
   it("uploads a legacy browser value once when the server has no revision yet", async () => {
-    window.localStorage.setItem(
-      "bb.sidebar.organizationMode",
-      '"chronological"',
-    );
+    window.localStorage.setItem("bb.sidebar.organizationMode", '"project"');
     const { modeAtom, queryClient, store } = createHarness();
     startUiPreferencesSync({ queryClient, store });
     const response = serverResponse();
@@ -142,14 +202,14 @@ describe("ui preferences sync", () => {
     expect(mocks.set).toHaveBeenCalledWith({
       expectedRevision: 0,
       key: "sidebar.organizationMode",
-      value: "chronological",
+      value: "project",
     });
     expect(
       getCachedUiPreferences(queryClient)?.preferences[
         "sidebar.organizationMode"
       ],
-    ).toEqual({ revision: 1, value: "chronological" });
-    expect(store.get(modeAtom)).toBe("chronological");
+    ).toEqual({ revision: 1, value: "project" });
+    expect(store.get(modeAtom)).toBe("project");
     expect(
       window.localStorage.getItem("bb.sidebar.organizationMode"),
     ).toBeNull();
@@ -160,7 +220,10 @@ describe("ui preferences sync", () => {
   });
 
   it("does not upload a legacy value that equals the default", async () => {
-    window.localStorage.setItem("bb.sidebar.organizationMode", '"project"');
+    window.localStorage.setItem(
+      "bb.sidebar.organizationMode",
+      '"chronological"',
+    );
     const { queryClient, store } = createHarness();
     startUiPreferencesSync({ queryClient, store });
     reconcileUiPreferences(serverResponse());
@@ -418,10 +481,7 @@ describe("ui preferences sync", () => {
   });
 
   it("never retries a migration against a newer revision", async () => {
-    window.localStorage.setItem(
-      "bb.sidebar.organizationMode",
-      '"chronological"',
-    );
+    window.localStorage.setItem("bb.sidebar.organizationMode", '"project"');
     const { modeAtom, queryClient, store } = createHarness();
     startUiPreferencesSync({ queryClient, store });
     const response = serverResponse();
@@ -438,7 +498,7 @@ describe("ui preferences sync", () => {
     expect(mocks.set).toHaveBeenCalledWith({
       expectedRevision: 0,
       key: "sidebar.organizationMode",
-      value: "chronological",
+      value: "project",
     });
     expect(store.get(modeAtom)).toBe("machine");
   });

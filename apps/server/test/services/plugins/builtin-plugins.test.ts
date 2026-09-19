@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import {
   cp,
   mkdir,
@@ -24,10 +25,12 @@ import { createAiServiceRegistry } from "../../../src/services/ai/ai-service-reg
 import {
   createPluginService,
   dispatchPluginSourceWatchChange,
+  superviseBuiltinPluginSourceWatcher,
   type PluginService,
 } from "../../../src/services/plugins/plugin-service.js";
 import { readPluginManifest } from "../../../src/services/plugins/manifest.js";
 import {
+  accountPoolDefaultEnabled,
   BUILTIN_PLUGINS,
   OFFICIAL_PLUGINS,
   resolveBuiltinPluginRootPath,
@@ -214,6 +217,35 @@ describe("builtin plugin reconciliation", () => {
     expect(changes).toEqual(["."]);
   });
 
+  it("reports and closes a builtin source watcher that fails instead of throwing", () => {
+    class FakeSourceWatcher extends EventEmitter {
+      close(): void {
+        this.emit("close");
+      }
+    }
+    const watcher = new FakeSourceWatcher();
+    const errors: string[] = [];
+    let loopDisposals = 0;
+    superviseBuiltinPluginSourceWatcher({
+      watcher,
+      onClose: () => {
+        loopDisposals += 1;
+      },
+      onError: (error) => errors.push(error.message),
+    });
+
+    const failure = Object.assign(
+      new Error(
+        "ENOSPC: System limit for number of file watchers reached, watch '/plugin/src'",
+      ),
+      { code: "ENOSPC" },
+    );
+    expect(() => watcher.emit("error", failure)).not.toThrow();
+
+    expect(errors).toEqual([failure.message]);
+    expect(loopDisposals).toBe(1);
+  });
+
   beforeEach(async () => {
     delete globals.__builtinFixtureLoads;
     delete globals.__packagedBuiltinLoads;
@@ -240,6 +272,19 @@ describe("builtin plugin reconciliation", () => {
     expect(OFFICIAL_PLUGINS.every((plugin) => !plugin.autoInstall)).toBe(true);
   });
 
+  it("enables the account pooler only when a parent bb server pool is present", () => {
+    expect(accountPoolDefaultEnabled({})).toBe(false);
+    expect(accountPoolDefaultEnabled({ BB_ACCOUNT_POOL_PARENT_URL: "" })).toBe(
+      false,
+    );
+    expect(
+      accountPoolDefaultEnabled({
+        BB_ACCOUNT_POOL_PARENT_URL:
+          "http://127.0.0.1:38886/api/v1/plugins/account-pool/http",
+      }),
+    ).toBe(true);
+  });
+
   it("gives every builtin plugin a deliberate settings icon", async () => {
     const expectedIcons = new Map([
       ["bb-guide", "Explore"],
@@ -264,7 +309,9 @@ describe("builtin plugin reconciliation", () => {
       ["provider-retry", "ArrowReloadHorizontal"],
       ["provider-usage", "ChartColumn"],
       ["push-notifications", "BellDot"],
+      ["drafts", "EditFile"],
       ["scheduled-send", "Calendar"],
+      ["agent-annotations", "MessageSquarePlus"],
       ["secrets", "Lock"],
       ["side-chat", "SideChat"],
       ["workflows", "Workflow"],
@@ -551,11 +598,11 @@ describe("builtin plugin reconciliation", () => {
     ]);
   });
 
-  it("ships Provider usage disabled on a fresh database", async () => {
+  it("ships Provider usage enabled on a fresh database", async () => {
     const providerUsage = BUILTIN_PLUGINS.find(
       (builtin) => builtin.name === "provider-usage",
     );
-    expect(providerUsage?.defaultEnabled).toBe(false);
+    expect(providerUsage?.defaultEnabled).toBe(true);
 
     service = createService({
       db,
@@ -570,8 +617,8 @@ describe("builtin plugin reconciliation", () => {
       {
         id: "provider-usage",
         source: "builtin:provider-usage",
-        enabled: false,
-        status: "disabled",
+        enabled: true,
+        status: "running",
       },
     ]);
   });
@@ -590,6 +637,12 @@ describe("builtin plugin reconciliation", () => {
     );
     expect(scheduledSend).toBeDefined();
     expect(scheduledSend?.defaultEnabled).toBe(true);
+  });
+
+  it("ships Drafts enabled on a fresh database", () => {
+    const drafts = BUILTIN_PLUGINS.find((builtin) => builtin.name === "drafts");
+    expect(drafts).toBeDefined();
+    expect(drafts?.defaultEnabled).toBe(true);
   });
 
   it("ships Provider retry enabled on a fresh database", async () => {

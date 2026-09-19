@@ -17,6 +17,8 @@ import {
 } from "@bb/provider-bridge-protocol";
 import {
   JsonRpcResponseError,
+  PROVIDER_TOOL_CALL_CANCELLED_METHOD,
+  providerToolCallCancellationSchema,
   getJsonRpcStringParam,
   ignoredJsonRpcResultSchema,
   parseJsonRpcLine,
@@ -36,6 +38,7 @@ import {
 } from "./execution-options.js";
 import {
   handleRuntimeProviderRequest,
+  RuntimeToolCalls,
   type ResolveRuntimeProviderRequestThreadIdArgs,
   type RuntimeProviderRequestKind,
 } from "./runtime-provider-requests.js";
@@ -133,6 +136,15 @@ interface RequestRecoveryArgs {
   providerId: string;
   providerThreadId: string;
   threadId: string;
+}
+
+export class CompetingTurnError extends Error {
+  constructor(threadId: string) {
+    super(
+      `Refusing to start a competing turn for thread "${threadId}" while another turn is active or starting`,
+    );
+    this.name = "CompetingTurnError";
+  }
 }
 
 export class AgentRuntimeRecoveryError extends Error {
@@ -291,6 +303,7 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
   const suppressedThreadEventIds = new Set<string>();
   const threadGoalState = new RuntimeThreadGoalState();
   const turnState = new RuntimeTurnState();
+  const toolCalls = new RuntimeToolCalls();
   const backgroundWorkState = new RuntimeBackgroundWorkState();
   const threadEventGrammar = new ThreadEventGrammar();
   const bridgeNodeEnv = defaultBridgeNodeEnv();
@@ -315,6 +328,7 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
       handleStdoutLine(args.line, args.providerProcess),
     onProcessExit: options.onProcessExit,
     onProviderThreadDetached: (threadId) => {
+      toolCalls.cancelThread(threadId);
       threadIdentityRegistry.clearThread(threadId);
       clearThreadRuntimeConfig(threadId);
       turnState.clearThread(threadId);
@@ -760,9 +774,7 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
       turnState.getActiveTurnId(threadId) !== null ||
       pendingTurnStarts.has(threadId)
     ) {
-      throw new Error(
-        `Refusing to start a competing turn for thread "${threadId}" while another turn is active or starting`,
-      );
+      throw new CompetingTurnError(threadId);
     }
   }
 
@@ -1225,6 +1237,12 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
       }
 
       const normalizedEvent = normalizeProviderThreadNameEvent(stampedEvent);
+      if (
+        normalizedEvent.type === "turn/completed" &&
+        normalizedEvent.scope.kind === "turn"
+      ) {
+        toolCalls.cancelThread(targetThreadId, normalizedEvent.scope.turnId);
+      }
       turnState.observe(normalizedEvent);
       backgroundWorkState.observe(normalizedEvent);
       observeProviderSessionIdleState(normalizedEvent);
@@ -1234,6 +1252,18 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
   }
 
   function handleProviderNotification(args: RuntimeParsedMessageArgs): void {
+    if (args.parsed.method === PROVIDER_TOOL_CALL_CANCELLED_METHOD) {
+      const cancellation = providerToolCallCancellationSchema.safeParse(
+        args.parsed.params,
+      );
+      if (cancellation.success) {
+        toolCalls.cancel(
+          args.proc.interactiveRequestScope,
+          cancellation.data.requestId,
+        );
+      }
+      return;
+    }
     const sourceThreadId = getJsonRpcStringParam(args.parsed, "threadId");
     if (
       sourceThreadId !== undefined &&
@@ -1292,6 +1322,7 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
           threadRuntimeConfigs.get(threadId)?.options,
         onInteractiveRequest: options.onInteractiveRequest,
         onToolCall: options.onToolCall,
+        toolCalls,
         parsedId: parsedLine.parsedId,
         parsedMethod: parsedLine.parsedMethod,
         providerProcess: proc,
@@ -2124,6 +2155,7 @@ export function createAgentRuntime(options: AgentRuntimeOptions): AgentRuntime {
     },
 
     async stopThread({ threadId }) {
+      toolCalls.cancelThread(threadId);
       return runThreadOperation({
         threadId,
         work: async () => {

@@ -3,6 +3,10 @@
     "category": "agents-and-providers",
     "screenshots": []
   },
+  "agent-annotations": {
+    "category": "code-and-reviews",
+    "screenshots": []
+  },
   "ask-user-question": {
     "category": "thread-content",
     "screenshots": []
@@ -79,6 +83,10 @@
     "screenshots": []
   },
   "scheduled-send": {
+    "category": "tasks-and-workflows",
+    "screenshots": []
+  },
+  "drafts": {
     "category": "tasks-and-workflows",
     "screenshots": []
   },

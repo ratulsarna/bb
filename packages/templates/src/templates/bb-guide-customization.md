@@ -1,17 +1,18 @@
 ---
 kind: instruction
 title: bb Guide — Customization
-summary: Command reference for customizing the bb app color palette, keyboard shortcuts, and mobile push notifications.
+summary: Command reference for customizing the bb app color palette, typography, keyboard shortcuts, and mobile push notifications.
 intent: Explain the CLI theme surface, server-backed app customization, and push-notification device registration.
 editingNotes: Keep flags accurate against the CLI implementation. Theme details live in the bb-cli skill's references/theming.md.
 ---
 Customization commands
 
-Theming — the app-wide color palette
+Theming — the app-wide palette and typography
 
-`bb theme` controls a set of CSS-variable overrides, persisted server-side and
-applied live to every open window. This is the palette only; light/dark mode is a
-separate per-client setting the palette layers on top of. Custom themes live on
+`bb theme` controls a set of CSS-variable overrides for the app palette and
+typography, persisted server-side and applied live to every open window.
+Light/dark mode is a separate per-client setting the theme layers on top of.
+Custom themes live on
 disk, one folder per theme, at <bb-data-dir>/theme/<name>/theme.css (the packaged
 app uses ~/.bb/theme/…). The folder name is the theme id.
 
@@ -31,6 +32,10 @@ then `bb theme set <name>`. Optional `pierre-dark.json` / `pierre-light.json`
 (or a `theme.json` `codeTheme` field) ship the matching code colors. Built-in
 palettes use the matching Shiki pair. The full design-token reference is in
 the bb-cli skill (references/theming.md).
+
+Theme CSS can override typography as well as colors. `--font-terminal` controls
+the integrated terminal's font family independently of `--font-mono`; set it in
+the theme's `:root, .light` block and end the stack with a generic fallback.
 
 Favicon colors are `default`, `red`, `orange`, `yellow`, `green`, `teal`,
 `blue`, `purple`, and `pink`. Theme and favicon-only commands carry the other
@@ -116,6 +121,7 @@ branches bb creates after the change.
   bb settings show
   bb settings ai-services
   bb settings general <key> <value>
+  bb settings completed-turns [provider-id] [collapse|flat|default]
   bb settings experiment <key> <value>
   bb settings usage [--machine <id-or-name>]
   bb settings version [--force]
@@ -129,6 +135,14 @@ settings (`BB_INFERENCE`, `BB_INFERENCE_FALLBACK`, `BB_TRANSCRIPTION`, set with
 `bb settings general` accepts any key from `generalSettings` in
 `bb settings show`. Boolean preferences take `true`, `false`, `on`, or `off`,
 and `null` clears a preference that can be unset.
+
+`bb settings completed-turns` lists how each provider shows a finished turn:
+`collapse` folds the turn's work into one "Worked for" row and keeps the final
+answer visible, and `flat` keeps every step visible. Each provider has a
+default (Claude Code is `flat`, the other first-party providers `collapse`).
+`bb settings completed-turns <provider-id> <collapse|flat>` overrides it for
+that provider, and `default` removes the override. Settings → Providers has
+the same per-provider switch.
 
 The default-off `changelogPreview` experiment shows the latest release notes
 as a compact, dismissible card on Settings → Updates.
@@ -150,9 +164,18 @@ groups stay visible through activity and sort-order changes.
 **Manually** is unchanged. Enable it with `bb settings experiment
 sidebarProgressiveDisclosure true`.
 
+The default-off `serverMove` experiment enables Move server here in Settings →
+Machines and the server-backed `bb server move` and `bb server export`
+commands. Enable it with `bb settings experiment serverMove true`.
+
 The default-off `timelineWindowing` experiment mounts only nearby rows in long
 timelines and large expanded timeline details. Enable it with
 `bb settings experiment timelineWindowing true`.
+
+The default-off `multiMachinePicker` experiment uses a searchable, target-first
+environment picker for projects with at least three machines and adds search to
+machine-only pickers with more than five machines. Enable it with
+`bb settings experiment multiMachinePicker true`.
 
 Thread timeline pages select complete conversation groups using
 `BB_FF_TIMELINE_WINDOW_EVENT_BUDGET` (default 1500) as a selection budget.
@@ -177,6 +200,20 @@ same resolved bindings. The complete default table is in docs/configuration.md.
   bb settings keyboard hints <true|false>
   bb settings keyboard set <command> <shortcut|disabled>
   bb settings keyboard reset [command]
+
+Plugin commands use `plugin:<plugin-id>/<command-id>` as their stable binding
+ID. For example: `bb settings keyboard set plugin:example/open-issue Mod+Shift+I`.
+`bb settings keyboard reset plugin:example/open-issue` restores the plugin's
+default; `set ... disabled` explicitly unbinds it. The SDK supports the same IDs
+through `system.updateKeyboardSettings` and `system.config`.
+Overrides survive plugin disable/re-enable and reload. Every active plugin
+command appears in Keyboard Settings; commands without defaults start unbound.
+Conflicting plugin defaults stay unbound and display the conflicting command.
+The UI offers Replace binding or Cancel when assigning an occupied shortcut.
+`keyboard list` includes all saved overrides and core effective bindings;
+plugin defaults and availability are resolved in each app window, where the
+plugin frontend runs. CLI/SDK callers should clear conflicting explicit
+bindings in the same update; plugin defaults yield to explicit bindings.
 
 Push notifications
 
@@ -209,7 +246,10 @@ Host files and voice transcription
 
 Voice transcription uses the `BB_TRANSCRIPTION` model, which defaults to
 `codex/gpt-transcribe`. Override it with
-`bb-app config set BB_TRANSCRIPTION <provider/model>`.
+`bb-app config set BB_TRANSCRIPTION <provider/model>`. Plugin-served audio
+uploads accept up to 20 MB; direct OpenAI uploads accept up to 25 MB. These
+limits apply to the app, SDK, and CLI. If transcription fails in the app,
+the error toast offers a download of the original recording until dismissed.
 
 `bb file` supports `--host` for remote machines and `--root` on mutating
 commands to confine access beneath an absolute directory. `bb file list` and
@@ -240,8 +280,16 @@ lists and `null`; it reads the current revision, writes with it, and retries
 once on a conflict. `reset` writes the default. The SDK offers
 `sdk.system.uiPreferences.list()`, `.set()`, and `.reset()`.
 
+Custom (`chronological`) is the default for `sidebar.organizationMode` when no
+value is saved. Existing server and legacy browser choices are preserved.
+
 Every thread-list header's actions menu offers New project, New section,
-Organize, and Sort by. Organize selects By project, By machine, or Custom;
+Organize, and Sort by. Organize selects By project, By machine, or Custom, and
+its By environment toggle decides whether sibling threads sharing one worktree
+collapse into a single worktree row inside their section, in every organization
+mode. `sidebar.threadGrouping.environment` defaults to `auto`, which groups them
+everywhere except Custom: `bb settings ui set sidebar.threadGrouping.environment
+false` keeps every thread on its own row, and `true` groups them in every mode.
 Sort by selects a field, and selecting it again reverses its arrow/direction.
 `sidebar.sortDirection` accepts `ascending`, `descending`, or `default`.
 The default preserves each field's original order (newest first for dates,
@@ -268,3 +316,9 @@ and open state stay local because they depend on the window size. The Voice Inpu
 microphone picker stores the selected browser MediaDevices device id in
 localStorage as `bb.voiceInput.audioInputDeviceId`; it does not have a `bb`
 command and does not change the server-side transcription model.
+
+Anonymous usage telemetry can be disabled in Settings → General → Privacy & diagnostics → Share anonymous usage data,
+or with `bb settings general telemetryEnabled false`. The saved server-wide preference
+takes effect immediately and persists across restarts. SDK callers can use
+`system.updateGeneralSettings` with `telemetryEnabled`. `BB_TELEMETRY=false`
+always disables telemetry, even when the saved preference is enabled.

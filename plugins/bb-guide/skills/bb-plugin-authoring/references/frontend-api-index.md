@@ -80,6 +80,10 @@ Read the installed SDK declarations for the exact current signatures.
 - `ExperimentalSidebarNavigationProps`
 - `PluginThreadListProps`
 - `PluginThreadHeaderActionProps`
+- `ExperimentalPluginBrowserToolbarActionProps`
+- `ExperimentalPluginBrowserPage`
+- `ExperimentalPluginBrowserPageEvaluateOptions`
+- `ExperimentalPluginBrowserPageWorld`
 - `PluginFileOpenerSource`
 - `PluginFileOpenerProps`
 - `CodeOverflowMode`
@@ -131,6 +135,7 @@ Read the installed SDK declarations for the exact current signatures.
 - `PluginCodeThemeState`
 - `PluginSidebarThreadActions`
 - `PluginThreadHeaderActionRegistration`
+- `ExperimentalPluginBrowserToolbarActionRegistration`
 - `PluginSidebarSplitPane`
 - `PluginSidebarThreadSplit`
 - `PluginThreadListRegistration`
@@ -142,8 +147,10 @@ Read the installed SDK declarations for the exact current signatures.
 - `PluginTargetedPanelActionOpenOptions`
 - `PluginMessageActionContext`
 - `PluginMessageActionRegistration`
-- `PluginCommandPaletteActionContext`
-- `PluginCommandPaletteActionRegistration`
+- `PluginAppCommands`
+- `PluginCommandContext`
+- `PluginCommandShortcut`
+- `PluginCommandRegistration`
 - `PluginProviderIconRegistration`
 - `PluginTimelineRowPresentation`
 - `PluginTimelineRowStatus`
@@ -167,6 +174,7 @@ Read the installed SDK declarations for the exact current signatures.
 - `ComposerPlusMenuItem`
 - `ComposerView`
 - `ExperimentalComposerSubmitOptions`
+- `ExperimentalComposerSelection`
 - `ComposerRichTextSpec`
 - `ComposerStructuredDraft`
 - `PluginComposerTextEffect`

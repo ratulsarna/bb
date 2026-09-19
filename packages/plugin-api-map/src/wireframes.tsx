@@ -11,34 +11,32 @@ import {
 } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { IconSvgElement } from "@hugeicons/react";
-import {
-  ArrowLeft01Icon,
-  ArrowMoveDownLeftIcon,
-  ArrowUp01Icon,
-  ArrowRight01Icon,
-  Bug01Icon,
-  Copy01Icon,
-  File01Icon,
-  Folder01Icon,
-  GitBranchIcon,
-  InformationCircleIcon,
-  MessageAdd01Icon,
-  Mic01Icon,
-  Plug02Icon,
-  ZapIcon,
-  MoreHorizontalIcon,
-  PencilEdit01Icon,
-  PlusSignIcon,
-  ElectricPlugsIcon,
-  Search01Icon,
-  Settings02Icon,
-  SparklesIcon,
-  PlusMinusSquare01Icon,
-  SidebarLeftIcon,
-  SidebarRightIcon,
-  ToolboxIcon,
-  TerminalIcon,
-} from "@hugeicons/core-free-icons";
+import ArrowLeft01Icon from "@hugeicons/core-free-icons/ArrowLeft01Icon";
+import ArrowMoveDownLeftIcon from "@hugeicons/core-free-icons/ArrowMoveDownLeftIcon";
+import ArrowUp01Icon from "@hugeicons/core-free-icons/ArrowUp01Icon";
+import ArrowRight01Icon from "@hugeicons/core-free-icons/ArrowRight01Icon";
+import Bug01Icon from "@hugeicons/core-free-icons/Bug01Icon";
+import Copy01Icon from "@hugeicons/core-free-icons/Copy01Icon";
+import File01Icon from "@hugeicons/core-free-icons/File01Icon";
+import Folder01Icon from "@hugeicons/core-free-icons/Folder01Icon";
+import GitBranchIcon from "@hugeicons/core-free-icons/GitBranchIcon";
+import InformationCircleIcon from "@hugeicons/core-free-icons/InformationCircleIcon";
+import MessageAdd02Icon from "@hugeicons/core-free-icons/MessageAdd02Icon";
+import Mic02Icon from "@hugeicons/core-free-icons/Mic02Icon";
+import Plug02Icon from "@hugeicons/core-free-icons/Plug02Icon";
+import ZapIcon from "@hugeicons/core-free-icons/ZapIcon";
+import MoreHorizontalIcon from "@hugeicons/core-free-icons/MoreHorizontalIcon";
+import Edit02Icon from "@hugeicons/core-free-icons/Edit02Icon";
+import PlusSignIcon from "@hugeicons/core-free-icons/PlusSignIcon";
+import ElectricPlugsIcon from "@hugeicons/core-free-icons/ElectricPlugsIcon";
+import Search01Icon from "@hugeicons/core-free-icons/Search01Icon";
+import Settings01Icon from "@hugeicons/core-free-icons/Settings01Icon";
+import SparklesIcon from "@hugeicons/core-free-icons/SparklesIcon";
+import PlusMinusSquare01Icon from "@hugeicons/core-free-icons/PlusMinusSquare01Icon";
+import SidebarLeftIcon from "@hugeicons/core-free-icons/SidebarLeftIcon";
+import SidebarRightIcon from "@hugeicons/core-free-icons/SidebarRightIcon";
+import ToolboxIcon from "@hugeicons/core-free-icons/ToolboxIcon";
+import ComputerTerminal01Icon from "@hugeicons/core-free-icons/ComputerTerminal01Icon";
 
 import { cn } from "./cn";
 import {
@@ -78,6 +76,7 @@ export const APP_SHELL_MARKS = [
   "thread-list",
   "sidebar-footer",
   "thread-header",
+  "browser-toolbar",
   "timeline-renderers",
   "message-directives",
   "message-actions",
@@ -514,7 +513,7 @@ const SIDEBAR_THREADS: readonly { title: string; glyph?: "spin" | "dot" }[] = [
 ];
 
 const FOOTER_ITEM_RENDERERS: Record<string, () => ReactNode> = {
-  settings: () => <MiniIcon icon={Settings02Icon} className="size-4" />,
+  settings: () => <MiniIcon icon={Settings01Icon} className="size-4" />,
   "plugin-footer-items": () => (
     <span className="flex items-center gap-1.5">
       <span className="flex size-5.5 items-center justify-center rounded-md">
@@ -659,7 +658,7 @@ const SIDEBAR_SECTION_RENDERERS: Record<string, () => ReactNode> = {
 
 const MESSAGE_ACTION_RENDERERS: Record<string, () => ReactNode> = {
   copy: () => <MiniIcon icon={Copy01Icon} className="size-3.5" />,
-  edit: () => <MiniIcon icon={PencilEdit01Icon} className="size-3.5" />,
+  edit: () => <MiniIcon icon={Edit02Icon} className="size-3.5" />,
   "add-to-chat": () => <MiniIcon icon={PlusSignIcon} className="size-3.5" />,
   "send-to-main-thread": () => (
     <MiniIcon icon={ArrowLeft01Icon} className="size-3.5" />
@@ -675,6 +674,7 @@ export const ANATOMY_RENDERER_KEYS = {
 };
 
 export type AppShellRightPanelTab =
+  | "browser-toolbar"
   | "thread-panel"
   | "file-opener"
   | "code-renderers";
@@ -686,6 +686,13 @@ function RightPanelTabLaneBadges({
 }) {
   return (
     <>
+      <MeasuredBadge
+        id="browser-toolbar"
+        label="Plugin controls beside the Browser address bar"
+        anchor='[data-guide-region="browser-toolbar"]'
+        at="lane"
+        onActivate={() => onTabSelect("browser-toolbar")}
+      />
       <MeasuredBadge
         id="code-renderers"
         label="Plugin code and diff renderers on bb's Diff tab"
@@ -763,7 +770,7 @@ export function CommandPaletteWireframe() {
               <div className="px-2 py-2">Fix flaky checkout tests</div>
               <div className="px-2 py-2">Update onboarding copy</div>
               <div className="mt-auto flex items-center gap-2 border-t border-border-hairline px-2 pt-3">
-                <MiniIcon icon={Settings02Icon} className="size-3.5" />
+                <MiniIcon icon={Settings01Icon} className="size-3.5" />
                 Settings
               </div>
             </aside>
@@ -930,10 +937,11 @@ export function CommandPaletteWireframe() {
 export function AppShellWireframe() {
   const { expandedId } = useSurfaceMap();
   const [rightPanelTab, setRightPanelTab] =
-    useState<AppShellRightPanelTab>("thread-panel");
+    useState<AppShellRightPanelTab>("browser-toolbar");
 
   useEffect(() => {
     if (
+      expandedId === "browser-toolbar" ||
       expandedId === "thread-panel" ||
       expandedId === "file-opener" ||
       expandedId === "code-renderers"
@@ -1105,7 +1113,7 @@ function AppShellWireframeBody({
                     className="inline-flex items-center gap-0.5 rounded-md border border-border bg-popover p-0.5 text-2xs text-foreground shadow-md"
                   >
                     <span className="flex items-center gap-1 rounded px-1.5 py-0.5">
-                      <MiniIcon icon={MessageAdd01Icon} className="size-3.5" />
+                      <MiniIcon icon={MessageAdd02Icon} className="size-3.5" />
                       Add to chat
                     </span>
                     <span className="mx-0.5 h-4 w-px bg-border" />
@@ -1249,6 +1257,17 @@ export function AppShellRightPanel({
           data-guide-fixture="right-panel-content-tabs"
           className="flex min-w-0 items-center gap-1.5"
         >
+          <button
+            type="button"
+            data-guide-tab="browser-toolbar"
+            className={cn(
+              tabClass("browser-toolbar"),
+              "gap-1.5 whitespace-nowrap px-2 text-foreground",
+            )}
+            onClick={() => onTabSelect("browser-toolbar")}
+          >
+            Browser
+          </button>
           <Mark
             id="thread-panel"
             label="A plugin tab in the thread side panel"
@@ -1285,7 +1304,29 @@ export function AppShellRightPanel({
         <MiniIcon icon={SidebarRightIcon} className="size-3.5" />
       </div>
       <div data-guide-tab-body={activeTab} className="min-h-0 flex-1 p-4">
-        {activeTab === "thread-panel" ? (
+        {activeTab === "browser-toolbar" ? (
+          <div data-guide-fixture="browser-toolbar" className="space-y-4">
+            <div className="flex items-center gap-2 border-b border-border-hairline pb-3">
+              <MiniIcon icon={ArrowLeft01Icon} className="size-3.5" />
+              <div className="min-w-0 flex-1 truncate rounded-md bg-surface-recessed px-2 py-1.5 text-subtle-foreground">
+                https://example.com
+              </div>
+              <Mark
+                id="browser-toolbar"
+                label="Plugin controls beside the Browser address bar"
+                className="flex size-7 items-center justify-center"
+                showChip={false}
+              >
+                <PluginGlyph className="size-3.5" />
+              </Mark>
+            </div>
+            <div className="space-y-3 rounded-md border border-border-hairline bg-background p-4">
+              <span className="block h-2 w-2/5 rounded-sm bg-foreground/50" />
+              <span className="block h-2 w-4/5 rounded-sm bg-muted/60" />
+              <span className="block h-2 w-3/5 rounded-sm bg-muted/60" />
+            </div>
+          </div>
+        ) : activeTab === "thread-panel" ? (
           <div data-guide-fixture="thread-panel" className="space-y-2">
             <div className="flex items-center gap-1.5 text-foreground">
               <PluginGlyph className="size-3.5" />
@@ -1579,7 +1620,7 @@ function StaticEmbeddedComposer() {
             <PluginGlyph className="size-3.5" />
           </span>
           <span className="flex size-9 items-center justify-center">
-            <MiniIcon icon={Mic01Icon} className="size-4" />
+            <MiniIcon icon={Mic02Icon} className="size-4" />
           </span>
           <span
             data-guide-icon="CornerDownLeft"
@@ -1656,7 +1697,7 @@ export function ComposeScreenWireframe() {
                 Open browser
               </span>
               <span className="flex h-6.5 items-center gap-2 rounded-md px-2">
-                <MiniIcon icon={TerminalIcon} className="size-3.5" />
+                <MiniIcon icon={ComputerTerminal01Icon} className="size-3.5" />
                 Start terminal
               </span>
               <Mark
@@ -1823,7 +1864,7 @@ export function ExtensionsPluginPageWireframe() {
           chip="corner-inset"
         >
           <MiniIcon
-            icon={Settings02Icon}
+            icon={Settings01Icon}
             className="mt-0.5 size-4 text-warning"
           />
           <span className="min-w-0 flex-1">
@@ -1920,7 +1961,7 @@ function MockHomeComposer() {
             Fable 5 · High
           </span>
           <span className="flex-1" />
-          <MiniIcon icon={Mic01Icon} className="size-3.5" />
+          <MiniIcon icon={Mic02Icon} className="size-3.5" />
           <span className="flex size-6 items-center justify-center rounded-md bg-foreground">
             <MiniIcon icon={ArrowUp01Icon} className="size-3 text-background" />
           </span>

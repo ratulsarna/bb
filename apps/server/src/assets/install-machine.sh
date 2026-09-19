@@ -25,6 +25,7 @@ requested_data_dir=
 
 CURL_CONNECT_TIMEOUT_SECONDS=10
 PACKAGE_DOWNLOAD_TIMEOUT_SECONDS=300
+PACKAGE_DOWNLOAD_RETRIES=3
 MACHINE_CODE_REDEEM_TIMEOUT_SECONDS=30
 DAEMON_WAIT_ATTEMPTS=60
 WAIT_PROGRESS_EVERY_ATTEMPTS=5
@@ -161,17 +162,59 @@ run_lifecycle() {
   if [ "$platform" = darwin ]; then
     service_name="app.getbb.host-daemon.$lifecycle_slug"
     service_file="$HOME/Library/LaunchAgents/$service_name.plist"
+    system_service_file=
   else
     service_name="bb-host-daemon-$lifecycle_slug.service"
     service_file="$HOME/.config/systemd/user/$service_name"
     system_service_file="$data_dir/systemd/$service_name"
-    if [ -f "$system_service_file" ]; then
-      [ "$(id -u)" -eq 0 ] || { fail_step "Machine system service requires root."; exit 1; }
-      [ ! -e "$service_file" ] || { fail_step "Machine has both user and system services."; exit 1; }
-      [ ! -L "${system_service_file%/*}" ] || { fail_step "Refusing a symlinked machine system service directory."; exit 1; }
-      service_file=$system_service_file
-      systemd_scope=--system
+  fi
+  if [ ! -e "$service_file" ] && { [ -z "$system_service_file" ] || [ ! -e "$system_service_file" ]; }; then
+    discovered_service_file=$(BB_LIFECYCLE_DATA_DIR="$data_dir" node -e '
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const [platform, home] = process.argv.slice(1);
+      const dataDir = process.env.BB_LIFECYCLE_DATA_DIR;
+      const escaped = dataDir.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\"", "&quot;").replaceAll("'"'"'", "&apos;");
+      const systemd = dataDir.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("%", "%%");
+      const directories = platform === "darwin"
+        ? [[path.join(home, "Library", "LaunchAgents"), "app.getbb.host-daemon.", ".plist"]]
+        : [[path.join(home, ".config", "systemd", "user"), "bb-host-daemon-", ".service"], [path.join(dataDir, "systemd"), "bb-host-daemon-", ".service"]];
+      const matches = [];
+      for (const [directory, prefix, suffix] of directories) {
+        let names;
+        try { names = fs.readdirSync(directory); }
+        catch (error) { if (error.code === "ENOENT") continue; throw error; }
+        for (const name of names.sort()) {
+          if (!name.startsWith(prefix) || !name.endsWith(suffix)) continue;
+          const candidate = path.join(directory, name);
+          if (!fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) continue;
+          const service = fs.readFileSync(candidate, "utf8");
+          if (service.includes(`<key>BB_DATA_DIR</key><string>${escaped}</string>`) || service.includes(`Environment="BB_DATA_DIR=${systemd}"`)) matches.push(candidate);
+        }
+      }
+      if (matches.length > 1) {
+        process.stderr.write(`Machine data directory ${dataDir} is referenced by several services: ${matches.join(", ")}\n`);
+        process.exit(1);
+      }
+      if (matches.length === 1) process.stdout.write(matches[0]);
+    ' "$platform" "$HOME") || { fail_step "Machine data directory is referenced by several services."; exit 1; }
+    if [ -n "$discovered_service_file" ]; then
+      service_name=${discovered_service_file##*/}
+      if [ "$platform" = darwin ]; then
+        service_name=${service_name%.plist}
+        service_file=$discovered_service_file
+      else
+        service_file="$HOME/.config/systemd/user/$service_name"
+        system_service_file="$data_dir/systemd/$service_name"
+      fi
     fi
+  fi
+  if [ -n "$system_service_file" ] && [ -f "$system_service_file" ]; then
+    [ "$(id -u)" -eq 0 ] || { fail_step "Machine system service requires root."; exit 1; }
+    [ ! -e "$service_file" ] || { fail_step "Machine has both user and system services."; exit 1; }
+    [ ! -L "${system_service_file%/*}" ] || { fail_step "Refusing a symlinked machine system service directory."; exit 1; }
+    service_file=$system_service_file
+    systemd_scope=--system
   fi
   if [ -e "$service_file" ]; then
     [ ! -L "$service_file" ] || { fail_step "Machine service belongs to another installation."; exit 1; }
@@ -578,6 +621,7 @@ if [ -n "$installed_artifact_digest" ]; then
   package_status=$(curl --config "$access_config" "$curl_output_mode" --show-error --location \
     --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
     --max-time "$PACKAGE_DOWNLOAD_TIMEOUT_SECONDS" \
+    --retry "$PACKAGE_DOWNLOAD_RETRIES" \
     --header "If-None-Match: \"sha256-$installed_artifact_digest\"" \
     --dump-header "$package_headers" \
     --output "$package_file" \
@@ -587,6 +631,7 @@ else
   package_status=$(curl --config "$access_config" "$curl_output_mode" --show-error --location \
     --connect-timeout "$CURL_CONNECT_TIMEOUT_SECONDS" \
     --max-time "$PACKAGE_DOWNLOAD_TIMEOUT_SECONDS" \
+    --retry "$PACKAGE_DOWNLOAD_RETRIES" \
     --dump-header "$package_headers" \
     --output "$package_file" \
     --write-out '%{http_code}' \

@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { mergeConfig, type ViteUserConfig } from "vitest/config";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 
@@ -9,7 +10,7 @@ const GLOBAL_TARGET = String.raw`(?:${GLOBAL_OBJECT}|\(\s*${GLOBAL_OBJECT}\s+as\
 
 const ISOLATION_REQUIRING_API = new RegExp(
   [
-    String.raw`\bvi\.(mock|doMock|unmock|doUnmock|resetModules|stubGlobal|stubEnv)\(`,
+    String.raw`\bvi\.(mock|doMock|unmock|doUnmock|resetModules|stubGlobal|stubEnv|useFakeTimers|setSystemTime)\(`,
     String.raw`\bprocess\.chdir\(`,
     String.raw`\bprocess\.env(\.[A-Za-z_$][\w$]*|\[[^\]]+\])\s*=[^=]`,
     String.raw`\bdelete\s+process\.env\b`,
@@ -340,6 +341,9 @@ export function defineWorkspaceTestConfig(
         conditions: ["source"],
       },
       test: {
+        globalSetup: [
+          fileURLToPath(new URL("./vitest.global-tmpdir.ts", import.meta.url)),
+        ],
         sequence: { sequencer: SharedWorkerSequencer },
         coverage: {
           provider: "v8",

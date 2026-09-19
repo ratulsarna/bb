@@ -18,6 +18,9 @@ import {
 } from "@/components/promptbox/follow-up-placeholder";
 import { PERSONAL_PROJECT_ID } from "@bb/domain";
 import type {
+  PermissionMode,
+  ReasoningLevel,
+  ServiceTier,
   PendingInteraction,
   PromptInput,
   ThreadQueuedMessage,
@@ -30,10 +33,23 @@ import type {
 } from "@bb/domain";
 import type {
   PullRequestMergeMethod,
+  SendMessageRequest,
   ThreadTimelineResponse,
   TimelineWorkflowWorkRow,
 } from "@bb/server-contract";
+import type {
+  ExperimentalComposerSelection,
+  ExperimentalComposerSubmitOptions,
+} from "@get-bb/plugin-sdk";
 import type { ChildThreadPendingAttention } from "@/hooks/queries/child-thread-pending-interactions";
+import {
+  readExecutionSelection,
+  resolveComposerSelectionDeadline,
+  useCommittedComposerState,
+  waitForSettledComposerState,
+  waitUntilComposerStateSettled,
+  type CommittedComposerState,
+} from "@/components/promptbox/composer-selection-settle";
 import { ThreadPendingInteractionBanner } from "@/components/thread/pending-interactions/ThreadPendingInteractionBanner";
 import {
   type PluginComposerHost,
@@ -167,7 +183,7 @@ interface ThreadDetailPromptAreaProps {
   environmentMachineProvider?: MachineProviderPresentation | null;
   environmentIcon?: IconName;
   environmentLabel?: string;
-  environmentTypeLabel?: string;
+  environmentProviderName?: string;
   onCreateNewThreadInEnvironment?: () => void;
   onPullRequestDraft?: () => void;
   onPullRequestMerge?: (method: PullRequestMergeMethod) => void;
@@ -278,6 +294,23 @@ function buildInlineDraftComposer(options: InlineDraftComposerOptions) {
   );
 }
 
+interface ThreadComposerSelectionState extends CommittedComposerState {
+  selectedProviderId: string;
+  selectedThreadModel: string;
+  reasoningLevel: ReasoningLevel;
+  serviceTier: ServiceTier | undefined;
+  supportsServiceTier: boolean;
+  permissionMode: PermissionMode;
+  providerIds: readonly string[];
+  isHandoffSelection: boolean;
+  changeProvider: (providerId: string) => void;
+  changeModel: (model: string) => void;
+  handoffSelect: (selection: ModelReasoningPickerHandoffSelection) => void;
+  changeReasoning: (level: ReasoningLevel) => void;
+  changeServiceTier: (tier: ServiceTier | undefined) => void;
+  changePermissionMode: (mode: PermissionMode) => void;
+}
+
 type InlineQueuedMessageEditSession = Pick<
   InlineQueuedMessageEditState,
   "editSessionId" | "queuedMessageId"
@@ -362,7 +395,7 @@ export function ThreadDetailPromptArea({
   environmentMachineProvider,
   environmentIcon,
   environmentLabel,
-  environmentTypeLabel,
+  environmentProviderName,
   onCreateNewThreadInEnvironment,
   onPullRequestDraft,
   onPullRequestMerge,
@@ -631,6 +664,7 @@ export function ThreadDetailPromptArea({
     modelOptions,
     moreModelOptions,
     isLoadingModels,
+    modelCatalogIsSettled,
     modelLoadFailed,
     modelLoadError,
     reasoningOptions,
@@ -660,7 +694,16 @@ export function ThreadDetailPromptArea({
   const [overriddenFallbackIdentity, setOverriddenFallbackIdentity] = useState<
     string | null
   >(null);
+  const [handoffSourceSelection, setHandoffSourceSelection] = useState<{
+    threadId: string;
+    execution: ModelReasoningPickerHandoffSelection;
+    serviceTier: ServiceTier | undefined;
+    permissionMode: PermissionMode;
+    overriddenFallbackIdentity: string | null;
+  } | null>(null);
+  const isHandoffSelection = handoffSourceSelection?.threadId === thread.id;
   const isFallbackModelActive =
+    !isHandoffSelection &&
     selectedProviderId === thread.providerId &&
     modelFallback !== null &&
     overriddenFallbackIdentity !== fallbackIdentity;
@@ -676,14 +719,6 @@ export function ThreadDetailPromptArea({
     },
     [fallbackIdentity, setSelectedModel],
   );
-  const isHandoffProviderId = useCallback(
-    (providerId: string) =>
-      providerId.length > 0 &&
-      providerId !== thread.providerId &&
-      providerOptions.some((option) => option.value === thread.providerId),
-    [providerOptions, thread.providerId],
-  );
-  const isHandoffSelection = isHandoffProviderId(selectedProviderId);
   const sourceThreadDisplayTitle = getThreadDisplayTitle({
     id: thread.id,
     title: thread.title,
@@ -703,26 +738,66 @@ export function ThreadDetailPromptArea({
       thread.projectId,
     ],
   );
-  const syncHandoffDraft = useCallback(
-    (nextProviderId: string) => {
-      const currentDraft = promptDraft.getCurrent();
-      if (isHandoffProviderId(nextProviderId)) {
-        const seededDraft = buildThreadHandoffFollowUpDraft(
-          handoffSeed,
-          currentDraft,
-        );
-        if (seededDraft !== currentDraft) {
-          promptDraft.setDraft(seededDraft);
-        }
-        return;
-      }
-      const restoredDraft = stripThreadHandoffPrefix(handoffSeed, currentDraft);
-      if (restoredDraft !== null) {
-        promptDraft.setDraft(restoredDraft);
-      }
-    },
-    [handoffSeed, isHandoffProviderId, promptDraft],
-  );
+  const beginHandoff = useCallback(() => {
+    setHandoffSourceSelection((current) =>
+      current?.threadId === thread.id
+        ? current
+        : {
+            threadId: thread.id,
+            execution: {
+              providerId: thread.providerId,
+              model: effectiveSelectedModel,
+              reasoningLevel,
+            },
+            serviceTier,
+            permissionMode,
+            overriddenFallbackIdentity,
+          },
+    );
+    const currentDraft = promptDraft.getCurrent();
+    const seededDraft = buildThreadHandoffFollowUpDraft(
+      handoffSeed,
+      currentDraft,
+    );
+    if (seededDraft !== currentDraft) {
+      promptDraft.setDraft(seededDraft);
+    }
+  }, [
+    effectiveSelectedModel,
+    handoffSeed,
+    overriddenFallbackIdentity,
+    permissionMode,
+    promptDraft,
+    reasoningLevel,
+    serviceTier,
+    thread.id,
+    thread.providerId,
+  ]);
+  const exitHandoff = useCallback(() => {
+    if (handoffSourceSelection?.threadId !== thread.id) return;
+    setProviderModelReasoning(handoffSourceSelection.execution);
+    setServiceTier(handoffSourceSelection.serviceTier);
+    setPermissionMode(handoffSourceSelection.permissionMode);
+    setOverriddenFallbackIdentity(
+      handoffSourceSelection.overriddenFallbackIdentity,
+    );
+    setHandoffSourceSelection(null);
+    const restoredDraft = stripThreadHandoffPrefix(
+      handoffSeed,
+      promptDraft.getCurrent(),
+    );
+    if (restoredDraft !== null) {
+      promptDraft.setDraft(restoredDraft);
+    }
+  }, [
+    handoffSeed,
+    handoffSourceSelection,
+    promptDraft,
+    setPermissionMode,
+    setProviderModelReasoning,
+    setServiceTier,
+    thread.id,
+  ]);
   const handleProviderChange = useCallback(
     (providerId: string) => {
       if (providerId === selectedProviderId) {
@@ -731,25 +806,20 @@ export function ThreadDetailPromptArea({
       if (fallbackIdentity !== null) {
         setOverriddenFallbackIdentity(fallbackIdentity);
       }
+      beginHandoff();
       setSelectedProviderId(providerId);
-      syncHandoffDraft(providerId);
     },
-    [
-      fallbackIdentity,
-      selectedProviderId,
-      setSelectedProviderId,
-      syncHandoffDraft,
-    ],
+    [fallbackIdentity, selectedProviderId, setSelectedProviderId, beginHandoff],
   );
   const handleHandoffSelect = useCallback(
     (selection: ModelReasoningPickerHandoffSelection) => {
       if (fallbackIdentity !== null) {
         setOverriddenFallbackIdentity(fallbackIdentity);
       }
+      beginHandoff();
       setProviderModelReasoning(selection);
-      syncHandoffDraft(selection.providerId);
     },
-    [fallbackIdentity, setProviderModelReasoning, syncHandoffDraft],
+    [beginHandoff, fallbackIdentity, setProviderModelReasoning],
   );
   useEffect(() => {
     if (isHandoffSelection) {
@@ -766,16 +836,9 @@ export function ThreadDetailPromptArea({
   const hasSentMessageEdit = sentMessageEdit !== undefined;
   useEffect(() => {
     if (hasSentMessageEdit && isHandoffSelection) {
-      setSelectedProviderId(thread.providerId);
-      syncHandoffDraft(thread.providerId);
+      exitHandoff();
     }
-  }, [
-    hasSentMessageEdit,
-    isHandoffSelection,
-    setSelectedProviderId,
-    syncHandoffDraft,
-    thread.providerId,
-  ]);
+  }, [hasSentMessageEdit, isHandoffSelection, exitHandoff]);
   const { typeaheadConfig, promptActions } = useComposerTypeahead({
     projectId: thread.projectId,
     mentionsProjectId: projectId,
@@ -878,18 +941,120 @@ export function ThreadDetailPromptArea({
     isStopRequested,
     runtimeDisplayStatus,
   ]);
-  const promptPlaceholder = isStopRequested
-    ? "Stopping thread..."
-    : getFollowUpPromptPlaceholder(runtimeDisplayStatus);
-  const compactPromptPlaceholder = isStopRequested
-    ? "Stopping thread..."
-    : getCompactFollowUpPromptPlaceholder(runtimeDisplayStatus);
-  const submitScheduledRef = useRef<
-    (options: { sendAt: number }) => Promise<void>
+  const promptPlaceholder = getFollowUpPromptPlaceholder(
+    isStopRequested ? "stopping" : runtimeDisplayStatus,
+  );
+  const compactPromptPlaceholder = getCompactFollowUpPromptPlaceholder(
+    isStopRequested ? "stopping" : runtimeDisplayStatus,
+  );
+  const submitProgrammaticallyRef = useRef<
+    (
+      options: ExperimentalComposerSubmitOptions,
+      pluginSubmission: SendMessageRequest["pluginSubmission"],
+    ) => Promise<void>
   >(async () => {});
-  const submitScheduledThroughRef = useCallback(
-    (options: { sendAt: number }) => submitScheduledRef.current(options),
+  const submitProgrammaticallyThroughRef = useCallback(
+    (
+      options: ExperimentalComposerSubmitOptions,
+      pluginSubmission: SendMessageRequest["pluginSubmission"],
+    ) => submitProgrammaticallyRef.current(options, pluginSubmission),
     [],
+  );
+  const providerIds = useMemo(
+    () => providerOptions.map((option) => option.value),
+    [providerOptions],
+  );
+  const selectionState =
+    useCommittedComposerState<ThreadComposerSelectionState>((version) => ({
+      version,
+      isSettled: modelCatalogIsSettled,
+      selectedProviderId,
+      selectedThreadModel: effectiveSelectedModel,
+      reasoningLevel,
+      serviceTier,
+      supportsServiceTier,
+      permissionMode,
+      providerIds,
+      isHandoffSelection,
+      changeProvider: handleProviderChange,
+      changeModel: handleModelChange,
+      handoffSelect: handleHandoffSelect,
+      changeReasoning: setReasoningLevel,
+      changeServiceTier: setServiceTier,
+      changePermissionMode: setPermissionMode,
+    }));
+  const pendingSelectionRef = useRef<Promise<unknown>>(Promise.resolve());
+  const applySelection = useCallback(
+    async (
+      selection: ExperimentalComposerSelection,
+    ): Promise<ExperimentalComposerSelection> => {
+      const deadline = resolveComposerSelectionDeadline();
+      const { observer } = selectionState;
+      let state = await observer.waitUntil(() => true, deadline);
+      const settle = async (requireSettled: boolean) => {
+        state = await waitForSettledComposerState(
+          selectionState,
+          deadline,
+          requireSettled,
+        );
+      };
+      const ensureSettled = async () => {
+        if (state.isSettled) return;
+        state = await waitUntilComposerStateSettled(selectionState, deadline);
+      };
+      if (selection.providerId !== undefined) await ensureSettled();
+      if (
+        selection.providerId !== undefined &&
+        selection.providerId !== state.selectedProviderId &&
+        state.providerIds.includes(selection.providerId)
+      ) {
+        state.changeProvider(selection.providerId);
+        await settle(true);
+      }
+      const providerMatches =
+        selection.providerId === undefined ||
+        state.selectedProviderId === selection.providerId;
+      if (providerMatches && selection.model !== undefined) {
+        await ensureSettled();
+        if (state.isHandoffSelection) {
+          state.handoffSelect({
+            providerId: state.selectedProviderId,
+            model: selection.model,
+            reasoningLevel: selection.reasoningLevel ?? state.reasoningLevel,
+          });
+        } else {
+          state.changeModel(selection.model);
+        }
+        await settle(false);
+      }
+      if (providerMatches && selection.reasoningLevel !== undefined) {
+        await ensureSettled();
+        state.changeReasoning(selection.reasoningLevel);
+        await settle(false);
+      }
+      if (selection.serviceTier !== undefined && state.supportsServiceTier) {
+        state.changeServiceTier(selection.serviceTier);
+        await settle(false);
+      }
+      if (selection.permissionMode !== undefined) {
+        state.changePermissionMode(selection.permissionMode);
+        await settle(false);
+      }
+      await settle(true);
+      return readExecutionSelection(state);
+    },
+    [selectionState],
+  );
+  const setSelection = useCallback(
+    (selection: ExperimentalComposerSelection) => {
+      const run = pendingSelectionRef.current.then(
+        () => applySelection(selection),
+        () => applySelection(selection),
+      );
+      pendingSelectionRef.current = run;
+      return run;
+    },
+    [applySelection],
   );
   const normalPluginComposerHost = useMemo<PluginComposerHost>(
     () => ({
@@ -899,7 +1064,8 @@ export function ThreadDetailPromptArea({
       subscribeDraft: promptDraft.subscribe,
       setDraft: promptDraft.setDraft,
       focus: focusBottomPluginComposer,
-      submit: submitScheduledThroughRef,
+      submit: submitProgrammaticallyThroughRef,
+      setSelection,
     }),
     [
       focusBottomPluginComposer,
@@ -907,7 +1073,8 @@ export function ThreadDetailPromptArea({
       promptDraft.setDraft,
       promptDraft.storageKey,
       promptDraft.subscribe,
-      submitScheduledThroughRef,
+      setSelection,
+      submitProgrammaticallyThroughRef,
       thread.id,
     ],
   );
@@ -943,8 +1110,12 @@ export function ThreadDetailPromptArea({
   ]);
 
   const createHandoffThread = useCallback(
-    async (submittedDraft: PromptDraftState, sendAt?: number) => {
-      const request = buildThreadHandoffCreateRequest({
+    async (
+      submittedDraft: PromptDraftState,
+      sendAt?: number,
+      pluginSubmission?: SendMessageRequest["pluginSubmission"],
+    ) => {
+      const baseRequest = buildThreadHandoffCreateRequest({
         execution: {
           providerId: selectedProviderId,
           model: effectiveSelectedModel,
@@ -952,15 +1123,18 @@ export function ThreadDetailPromptArea({
           serviceTier,
           supportsServiceTier,
           permissionMode,
-          executionInputSources,
         },
         draft: submittedDraft,
         seed: handoffSeed,
         ...(sendAt === undefined ? {} : { sendAt }),
       });
-      if (request === null) {
+      if (baseRequest === null) {
         return false;
       }
+      const request = {
+        ...baseRequest,
+        ...(pluginSubmission === undefined ? {} : { pluginSubmission }),
+      };
       const clearedSubmittedDraft =
         promptDraft.clearIfCurrentMatches(submittedDraft);
       setBottomAttachmentError(null);
@@ -983,7 +1157,6 @@ export function ThreadDetailPromptArea({
     [
       createThread,
       effectiveSelectedModel,
-      executionInputSources,
       handoffSeed,
       navigate,
       permissionMode,
@@ -1060,26 +1233,33 @@ export function ThreadDetailPromptArea({
     thread.id,
     runtimeDisplayStatus,
   ]);
-  const submitScheduled = useCallback(
-    async ({ sendAt }: { sendAt: number }) => {
+  const submitProgrammatically = useCallback(
+    async (
+      submitOptions: ExperimentalComposerSubmitOptions,
+      pluginSubmission: SendMessageRequest["pluginSubmission"],
+    ) => {
       if (isHandoffSelection) {
         if (effectiveSelectedModel.length === 0) {
           throw new Error("The selected model is still loading.");
         }
         let created = false;
         try {
-          created = await createHandoffThread(promptDraft.getCurrent(), sendAt);
-        } catch (scheduleError) {
+          created = await createHandoffThread(
+            promptDraft.getCurrent(),
+            submitOptions.sendAt,
+            pluginSubmission,
+          );
+        } catch (submitError) {
           throw new Error(
             getMutationErrorMessage({
-              error: scheduleError,
+              error: submitError,
               fallbackMessage: "Failed to create thread",
               lifecycleOperation: "create_thread",
             }),
           );
         }
         if (!created) {
-          throw new Error("Type a message before scheduling it.");
+          throw new Error("Type a message before submitting it.");
         }
         return;
       }
@@ -1093,13 +1273,19 @@ export function ThreadDetailPromptArea({
         execution: followUpExecutionSelection,
       });
       if (request === null) {
-        throw new Error("Type a message before scheduling it.");
+        throw new Error("Type a message before submitting it.");
       }
       const clearedSubmittedDraft =
         promptDraft.clearIfCurrentMatches(submittedDraft);
       setBottomAttachmentError(null);
       try {
-        await sendMessage.mutateAsync({ ...request, sendAt });
+        await sendMessage.mutateAsync({
+          ...request,
+          ...(submitOptions.sendAt === undefined
+            ? {}
+            : { sendAt: submitOptions.sendAt }),
+          ...(pluginSubmission === undefined ? {} : { pluginSubmission }),
+        });
       } catch (scheduleError) {
         if (clearedSubmittedDraft) {
           promptDraft.restoreIfEmpty(submittedDraft);
@@ -1107,7 +1293,7 @@ export function ThreadDetailPromptArea({
         throw new Error(
           getMutationErrorMessage({
             error: scheduleError,
-            fallbackMessage: "Failed to schedule message",
+            fallbackMessage: "Failed to submit message",
             lifecycleOperation: "send_message",
           }),
         );
@@ -1126,8 +1312,8 @@ export function ThreadDetailPromptArea({
     ],
   );
   useEffect(() => {
-    submitScheduledRef.current = submitScheduled;
-  }, [submitScheduled]);
+    submitProgrammaticallyRef.current = submitProgrammatically;
+  }, [submitProgrammatically]);
 
   const handleModifierSubmit = useCallback(async () => {
     if (!canSubmitModifierShortcut) {
@@ -1374,6 +1560,9 @@ export function ThreadDetailPromptArea({
       },
       handoff: {
         sourceProviderId: thread.providerId,
+        active: isHandoffSelection,
+        onStart: beginHandoff,
+        onExit: exitHandoff,
         onSelect: handleHandoffSelect,
       },
     }),
@@ -1382,6 +1571,9 @@ export function ThreadDetailPromptArea({
       executionOptionsRouting,
       hasMultipleProviders,
       handleHandoffSelect,
+      beginHandoff,
+      isHandoffSelection,
+      exitHandoff,
       handleModelChange,
       handleProviderChange,
       isLoadingModels,
@@ -1471,7 +1663,7 @@ export function ThreadDetailPromptArea({
           environmentCompactLabel={environmentCompactLabel}
           environmentHost={environmentHost}
           environmentIcon={environmentIcon}
-          environmentTypeLabel={environmentTypeLabel}
+          environmentProviderName={environmentProviderName}
           environmentMachineProvider={environmentMachineProvider}
           environmentCheckout={environmentCheckout}
           onCreateNewThreadInEnvironment={onCreateNewThreadInEnvironment}
@@ -1484,7 +1676,7 @@ export function ThreadDetailPromptArea({
       environmentIcon,
       environmentLabel,
       environmentMachineProvider,
-      environmentTypeLabel,
+      environmentProviderName,
       onCreateNewThreadInEnvironment,
       projectName,
       thread.environmentId,
@@ -1846,7 +2038,7 @@ export function ThreadDetailPromptArea({
             inlineEditor={queuedMessageEditor ?? undefined}
             sendAction={shouldSteerWhenReady ? "steer-when-ready" : "send-now"}
             sendDisabled={
-              !(submitMode.kind === "ready" || submitMode.kind === "queue") ||
+              submitMode.kind === "blocked" ||
               runtimeDisplayStatus === "waiting-for-host" ||
               isFollowUpSubmitting ||
               isQueueMutationPending

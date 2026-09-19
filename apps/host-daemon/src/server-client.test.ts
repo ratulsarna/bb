@@ -79,6 +79,80 @@ describe("createServerClient", () => {
 
   it.each([
     {
+      name: "with headers",
+      details: {
+        serverUrl: "https://studio.example.test",
+        toHostName: "studio",
+        movedAt: 1_700_000_000_000,
+        headers: { "x-bb-connect-machine": "bbcm_new" },
+      },
+      expected: {
+        serverUrl: "https://studio.example.test",
+        toHostName: "studio",
+        movedAt: 1_700_000_000_000,
+        headers: { "x-bb-connect-machine": "bbcm_new" },
+      },
+    },
+    {
+      name: "from the moved responder",
+      details: {
+        serverUrl: "http://192.168.1.20:38886",
+        toHostName: "studio",
+        movedAt: 1_700_000_000_000,
+      },
+      expected: {
+        serverUrl: "http://192.168.1.20:38886",
+        toHostName: "studio",
+        movedAt: 1_700_000_000_000,
+      },
+    },
+    {
+      name: "without a server URL",
+      details: { toHostName: "studio", movedAt: 1_700_000_000_000 },
+      expected: null,
+    },
+  ])(
+    "preserves 410 server_moved details $name",
+    async ({ details, expected }) => {
+      const fetchFn = vi.fn<FetchFn>(async () =>
+        Response.json(
+          {
+            code: "server_moved",
+            message: "This bb server moved to studio",
+            details,
+          },
+          { status: 410 },
+        ),
+      );
+      const client = createServerClient({
+        fetchFn,
+        getSessionId: () => "session-1",
+        hostKey: "host-key",
+        logger: createLogger(),
+        serverUrl: "http://old-server.example.test:38886",
+      });
+
+      await expect(
+        client.openSession({
+          hostId: "host-1",
+          hostName: "Host",
+          dataDir: "/tmp/bb",
+          instanceId: "instance-1",
+          localApiPort: null,
+          activeThreads: [],
+          loadedEnvironments: [],
+        }),
+      ).rejects.toMatchObject({
+        status: 410,
+        code: "server_moved",
+        retryable: false,
+        serverMoved: expected,
+      });
+    },
+  );
+
+  it.each([
+    {
       serverHeaders: { "x-bb-connect-machine": "bbcm_machine" },
       hasMachineCredential: true,
     },
@@ -529,5 +603,39 @@ describe("createServerClient", () => {
     });
     expect(fetchFn).toHaveBeenCalledTimes(1);
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("dynamic tool cancellation", () => {
+  it("passes cancellation to the tool-call HTTP transport", async () => {
+    const controller = new AbortController();
+    let transportSignal: AbortSignal | null | undefined;
+    const fetchFn = vi.fn<FetchFn>(async (_input, init) => {
+      transportSignal = init?.signal;
+      return Response.json({ success: true, contentItems: [] });
+    });
+    const client = createServerClient({
+      fetchFn,
+      getSessionId: () => "session-1",
+      hostKey: "key",
+      logger: createLogger(),
+      serverUrl: "http://localhost",
+    });
+    await client.callTool(
+      {
+        requestId: 1,
+        threadId: "thread",
+        providerThreadId: "provider-thread",
+        turnId: "turn",
+        callId: "call",
+        tool: "question",
+      },
+      controller.signal,
+    );
+    controller.abort();
+    expect(transportSignal?.aborted).toBe(true);
+    expect(
+      JSON.parse(String(fetchFn.mock.calls[0]?.[1]?.body)),
+    ).not.toHaveProperty("signal");
   });
 });

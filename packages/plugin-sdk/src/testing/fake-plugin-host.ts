@@ -34,6 +34,7 @@ import {
   normalizeRealtimePayload,
   normalizeRpcJsonResult,
   normalizeRpcRegistration,
+  publishRpcMethod,
   normalizeWebSocketRouteRegistration,
   pluginCliCollisionWarning,
   providerAlreadyRegisteredMessage,
@@ -57,7 +58,7 @@ import type {
   PluginAgentConfiguration,
   PluginAgentConfigurationContext,
   PluginAgentToolContext,
-  PluginAgentToolPresentation,
+  PluginRowPresentation,
   PluginAgentToolResult,
   PluginAgents,
   PluginBackground,
@@ -82,6 +83,7 @@ import type {
   PluginKvStorage,
   PluginLogger,
   PluginMentionItem,
+  PluginMentionProviderRegistration,
   PluginMentionSearchContext,
   PluginMentionTrigger,
   PluginAiServiceDeclaration,
@@ -215,11 +217,11 @@ export interface FakeAgentToolRecord {
   instructions: string | null;
   /**
    * The plugin's declared row presentation, null when it declared none.
-   * Parsed by the shared `parsePluginAgentToolPresentation`, so the record
+   * Parsed by the shared `parsePluginRowPresentation`, so the record
    * holds exactly what the production host stores and a presentation bb
    * rejects is rejected here with the same message.
    */
-  presentation: PluginAgentToolPresentation | null;
+  presentation: PluginRowPresentation | null;
   /** JSON-schema object the host would send providers. */
   inputSchema: unknown;
   parse(
@@ -238,9 +240,7 @@ export interface FakeMentionProviderRecord {
   search: (
     ctx: PluginMentionSearchContext,
   ) => PluginMentionItem[] | Promise<PluginMentionItem[]>;
-  resolve: (
-    itemId: string,
-  ) => { context: string } | Promise<{ context: string }>;
+  resolve: PluginMentionProviderRegistration["resolve"];
 }
 
 export interface FakeRealtimeSignal {
@@ -261,6 +261,9 @@ export interface FakePluginRegistrations {
   settingsDescriptors: PluginSettingDescriptors;
   httpRoutes: FakeHttpRouteRecord[];
   websocketRoutes: ExperimentalFakeWebSocketRouteRecord[];
+  experimental_publishedRpcMethods: Array<
+    NonNullable<ReturnType<typeof publishRpcMethod>>
+  >;
   rpcMethods: string[];
   services: FakeServiceRecord[];
   schedules: FakeScheduleRecord[];
@@ -582,6 +585,7 @@ function jsonRoundTrip(value: unknown, what: string): unknown {
 }
 
 interface FakeRpcRecord {
+  publication: ReturnType<typeof publishRpcMethod>;
   inputSchema: StandardSchemaV1;
   outputSchema: StandardSchemaV1;
   handler: (input: never) => unknown;
@@ -835,12 +839,13 @@ function createFakePluginHostInternal(
   // --- rpc ---
   const rpcHandlers = new Map<string, FakeRpcRecord>();
   const rpc: PluginRpc = {
-    register(contract, handlers) {
+    register(contract, handlers, registrationOptions) {
       assertLive();
       for (const [name, record] of normalizeRpcRegistration(
         contract,
         handlers,
         rpcHandlers,
+        registrationOptions,
       )) {
         rpcHandlers.set(name, record);
       }
@@ -1025,7 +1030,7 @@ function createFakePluginHostInternal(
       name: string;
       description: string;
       instructions?: string;
-      presentation?: PluginAgentToolPresentation;
+      presentation?: PluginRowPresentation;
       parameters: unknown;
       execute(
         params: never,
@@ -1154,8 +1159,17 @@ function createFakePluginHostInternal(
     assertLive();
     const normalized = normalizeInteractionRequest(request);
     const normalizedRequest: PluginInteractionRequest = {
-      ...request,
-      ...normalized,
+      threadId: normalized.threadId,
+      rendererId: normalized.rendererId,
+      title: normalized.title,
+      payload: normalized.payload,
+      timeoutMs: normalized.timeoutMs,
+      ...(normalized.presentation === null
+        ? {}
+        : { presentation: normalized.presentation }),
+      ...(normalized.describeSubmission === null
+        ? {}
+        : { describeSubmission: normalized.describeSubmission }),
     };
     const id = `fake-interaction-${nextInteractionId++}`;
     return new Promise<PluginInteractionResult>((resolve) => {
@@ -1568,6 +1582,11 @@ function createFakePluginHostInternal(
       settingsDescriptors,
       httpRoutes,
       websocketRoutes,
+      get experimental_publishedRpcMethods() {
+        return [...rpcHandlers.values()].flatMap((record) =>
+          record.publication === null ? [] : [record.publication],
+        );
+      },
       get rpcMethods() {
         return [...rpcHandlers.keys()];
       },

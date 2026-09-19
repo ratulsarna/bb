@@ -22,6 +22,9 @@ export type SidebarChronologicalSort = z.infer<
   typeof sidebarChronologicalSortSchema
 >;
 
+const sidebarThreadGroupingSchema = z.union([z.literal("auto"), z.boolean()]);
+export type SidebarThreadGrouping = z.infer<typeof sidebarThreadGroupingSchema>;
+
 const collapsibleSidebarSectionIdSchema = z.enum(["pinned", "threads"]);
 
 const uiPreferenceStringSchema = z
@@ -34,6 +37,7 @@ const uiPreferenceStringListSchema = z
 
 export const UI_PREFERENCE_KEYS = [
   "sidebar.organizationMode",
+  "sidebar.threadGrouping.environment",
   "sidebar.chronologicalSort",
   "sidebar.sortDirection",
   "sidebar.sectionOrder",
@@ -76,8 +80,13 @@ function defineUiPreference<Schema extends z.ZodTypeAny>(
 export const uiPreferenceDefinitions = {
   "sidebar.organizationMode": defineUiPreference(
     sidebarOrganizationModeSchema,
-    "project",
-    "How the sidebar groups threads: by project, chronologically, or by machine.",
+    "chronological",
+    "How the sidebar groups threads: by project, Custom (chronological), or by machine. Defaults to Custom when unset.",
+  ),
+  "sidebar.threadGrouping.environment": defineUiPreference(
+    sidebarThreadGroupingSchema,
+    "auto",
+    "Whether sibling threads sharing a worktree environment collapse into one row. auto groups them in every organization mode except Custom.",
   ),
   "sidebar.chronologicalSort": defineUiPreference(
     sidebarChronologicalSortSchema,

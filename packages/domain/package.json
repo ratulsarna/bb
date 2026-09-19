@@ -14,6 +14,16 @@
       "types": "./src/thread-status.ts",
       "default": "./src/thread-status.ts"
     },
+    "./started-on-behalf-of": {
+      "source": "./src/started-on-behalf-of.ts",
+      "types": "./src/started-on-behalf-of.ts",
+      "default": "./src/started-on-behalf-of.ts"
+    },
+    "./thread-create-origin": {
+      "source": "./src/thread-create-origin.ts",
+      "types": "./src/thread-create-origin.ts",
+      "default": "./src/thread-create-origin.ts"
+    },
     "./thread-origin-kind": {
       "source": "./src/thread-origin-kind.ts",
       "types": "./src/thread-origin-kind.ts",
@@ -48,6 +58,11 @@
       "source": "./src/provider-fork.ts",
       "types": "./src/provider-fork.ts",
       "default": "./src/provider-fork.ts"
+    },
+    "./completed-turn-display": {
+      "source": "./src/completed-turn-display.ts",
+      "types": "./src/completed-turn-display.ts",
+      "default": "./src/completed-turn-display.ts"
     },
     "./plugin-interaction-limits": {
       "source": "./src/plugin-interaction-limits.ts",
