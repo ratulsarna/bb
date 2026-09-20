@@ -10,6 +10,7 @@ import type {
 } from "@bb/domain";
 import {
   THREAD_CONTEXT_CLEAR_OPERATION,
+  THREAD_RUNTIME_STOPPED_OPERATION,
   isApprovalInteractionLifecycle,
   isPluginInteractionLifecycle,
   isUserQuestionInteractionLifecycle,
@@ -658,6 +659,8 @@ export function parseOperationMessage(
 
   if (decoded.type === "system/operation") {
     if (
+      (decoded.operation === THREAD_RUNTIME_STOPPED_OPERATION &&
+        options?.includeDiagnosticOperations !== true) ||
       decoded.operation === "plugin_interaction" ||
       decoded.operation === "edit_message"
     ) {

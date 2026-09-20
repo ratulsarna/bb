@@ -1,3 +1,4 @@
+import { withStrictDispatchAdmission } from "./dispatch-operation.js";
 import {
   getEnvironment,
   getThread,
@@ -87,6 +88,7 @@ type SendThreadMessagePayload = SendMessageRequest & {
 };
 
 interface SendThreadMessageArgs {
+  dispatchAdmissionChecked?: boolean;
   beforeAppendInTransaction?: SendThreadMessageTransactionPreflight;
   /**
    * Present only when this send re-submits a failed turn. Marks the turn event
@@ -168,7 +170,9 @@ export function ensureThreadIsNotAwaitingUserInteraction(
   deps: Pick<AppDeps, "pendingInteractions">,
   threadId: string,
 ): void {
-  if (!deps.pendingInteractions.hasTurnBoundPendingThreadInteraction(threadId)) {
+  if (
+    !deps.pendingInteractions.hasTurnBoundPendingThreadInteraction(threadId)
+  ) {
     return;
   }
 
@@ -467,9 +471,13 @@ export async function sendThreadMessage(
     });
     return;
   }
-  return withThreadSendGuard(args.thread.id, () =>
-    sendThreadMessageWithoutContextClear(deps, args),
-  );
+  const send = () =>
+    withThreadSendGuard(args.thread.id, () =>
+      sendThreadMessageWithoutContextClear(deps, args),
+    );
+  return args.dispatchAdmissionChecked
+    ? send()
+    : withStrictDispatchAdmission(deps, args, send);
 }
 
 async function sendThreadMessageWithoutContextClear(
@@ -575,11 +583,6 @@ async function sendThreadMessageWithoutContextClear(
   const execution = await buildExecutionOptions(deps, payload, {
     threadId: thread.id,
   });
-  // No hook pass here. User messages are decided ONCE, at the dispatch
-  // checkpoint in `attemptDispatch`, before they reach this function. The two
-  // other callers bypass the checkpoint deliberately: a manual compaction turn
-  // and an edited message's re-send are operations on the thread's existing
-  // conversation, not new work a limiter admits.
   const permissionEscalation = resolvePermissionEscalation({
     initiator,
   });

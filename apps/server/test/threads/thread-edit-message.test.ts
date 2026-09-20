@@ -1,4 +1,9 @@
 import {
+  invokePluginInline,
+  setPluginHookProvider,
+} from "../../src/services/plugins/plugin-hook-registry.js";
+import { listRunningThreadsWithIntendedHosts } from "../../src/services/threads/dispatch-attempt.js";
+import {
   claimQueuedThreadMessage,
   createPendingInteraction,
   createPromptHistoryEntry,
@@ -1198,7 +1203,10 @@ describe("editThreadMessage", () => {
           harness.deps.pendingInteractions,
         );
       const pendingInteractionSpy = vi
-        .spyOn(harness.deps.pendingInteractions, "hasTurnBoundPendingThreadInteraction")
+        .spyOn(
+          harness.deps.pendingInteractions,
+          "hasTurnBoundPendingThreadInteraction",
+        )
         .mockImplementation((threadId) => {
           pendingInteractionChecks += 1;
           if (pendingInteractionChecks === 2) {
@@ -1640,5 +1648,61 @@ describe("editThreadMessage", () => {
         }),
       ).rejects.toThrow("Editing messages is not supported for acp-cursor");
     });
+  });
+});
+
+it("rejects a strict capacity wait before stopping or rewinding an edited message", async () => {
+  await withTestHarness(async (harness) => {
+    const { environment, thread } = seedEditableThread(harness, {
+      threadStatus: "active",
+    });
+    const before = listEvents(harness.db, { threadId: thread.id });
+    const attempts: string[] = [];
+    setPluginHookProvider({
+      decisionTimeoutMs: 10_000,
+      invokeHook: (_id, _label, run) => invokePluginInline(run),
+      listHooks: () => [
+        {
+          pluginId: "capacity",
+          experimental_enforcement: "strict",
+          handler: (context) => {
+            attempts.push(context.attempt);
+            return context.attempt === "start-turn"
+              ? { action: "wait", reason: "Capacity" }
+              : { action: "proceed" };
+          },
+        },
+      ],
+    });
+    try {
+      await expect(
+        editThreadMessage(harness.deps, {
+          environment,
+          thread,
+          payload: {
+            operationId: "strict-edit",
+            expectedRequestSequence: 7,
+            input: [{ type: "text", text: "Replacement", mentions: [] }],
+          },
+        }),
+      ).rejects.toMatchObject({
+        status: 409,
+        body: { code: "dispatch_rejected" },
+      });
+      expect(getThread(harness.db, thread.id)?.status).toBe("active");
+      expect(attempts).toEqual(["start-turn"]);
+      expect(listEvents(harness.db, { threadId: thread.id })).toEqual(before);
+      expect(
+        listQueuedThreadCommands(harness, "thread.stop", thread.id),
+      ).toEqual([]);
+      expect(
+        listQueuedThreadCommands(harness, "thread.rewind.prepare", thread.id),
+      ).toEqual([]);
+      expect(
+        listRunningThreadsWithIntendedHosts(harness.deps, true),
+      ).toHaveLength(1);
+    } finally {
+      setPluginHookProvider(undefined);
+    }
   });
 });

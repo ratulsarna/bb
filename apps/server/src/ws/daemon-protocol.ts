@@ -331,16 +331,8 @@ export function onDaemonSocketMessage(
 }
 
 export function onDaemonSocketClose(
-  deps: Pick<
-    AppDeps,
-    | "db"
-    | "hub"
-    | "logger"
-    | "pendingInteractions"
-    | "providerRegistry"
-    | "sharedPorts"
-    | "terminalSessions"
-  >,
+  deps: LoggedPendingInteractionWorkSessionDeps &
+    Pick<AppDeps, "sharedPorts">,
   sessionId: string,
 ): void {
   handleDaemonSocketClosed(deps, {

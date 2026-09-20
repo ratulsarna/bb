@@ -247,9 +247,12 @@ export function registerThreadBaseRoutes(app: Hono, deps: AppDeps): void {
     return context.json(response);
   });
 
-  get(routes.running, (context) => {
+  get(routes.running, (context, query) => {
     return context.json(
-      listRunningThreadsWithIntendedHosts(deps) satisfies ThreadRunningResponse,
+      listRunningThreadsWithIntendedHosts(
+        deps,
+        query.experimental_includeDispatchOccupancy === "true",
+      ) satisfies ThreadRunningResponse,
     );
   });
 
@@ -354,7 +357,11 @@ export function registerThreadBaseRoutes(app: Hono, deps: AppDeps): void {
   });
 
   get(routes.get, (context, query) => {
-    const thread = requirePublicThread(deps.db, context.req.param("id"));
+    const thread = requirePublicThread(
+      deps.db,
+      context.req.param("id"),
+      query.experimental_includeDeleted === "true",
+    );
     return context.json(
       buildThreadResponse(deps, {
         includes: parseThreadIncludes(query),

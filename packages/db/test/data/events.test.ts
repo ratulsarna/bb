@@ -5118,6 +5118,19 @@ describe("events", () => {
       activeBackgroundAgentCount: 2,
       activeBackgroundCommandCount: 1,
     });
+    expect(
+      listActiveBackgroundTaskCountsByThreadIds(db, {
+        includeSkippedTranscript: true,
+        threadIds: [thread.id],
+      }),
+    ).toEqual([
+      {
+        threadId: thread.id,
+        activeWorkflowCount: 2,
+        activeBackgroundAgentCount: 2,
+        activeBackgroundCommandCount: 1,
+      },
+    ]);
   });
 
   it("chunks thread IDs before SQLite reaches its variable limit", () => {

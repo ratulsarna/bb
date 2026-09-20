@@ -13,14 +13,19 @@ import {
   threadScope,
 } from "@bb/domain";
 import type { ThreadEventBackgroundTaskItem } from "@bb/domain";
-import type { AppDeps } from "../../types.js";
+import type {
+  AppDeps,
+  LoggedPendingInteractionWorkSessionDeps,
+} from "../../types.js";
 import { appendThreadEventsInTransaction } from "./thread-events.js";
+import { requestDispatchAdmissionReleased } from "./dispatch-admission.js";
 
 interface SettleDanglingBackgroundTasksArgs {
   hostId: string;
 }
 
-type SettleDanglingBackgroundTasksDeps = Pick<AppDeps, "db" | "hub" | "logger">;
+type SettleDanglingBackgroundTasksDeps =
+  LoggedPendingInteractionWorkSessionDeps;
 type SettleDanglingBackgroundTasksTransactionDeps = {
   db: DbTransaction;
   hub: DbNotifier;
@@ -73,6 +78,7 @@ export function settleDanglingBackgroundTasks(
       eventTypes: ["item/backgroundTask/completed"],
     });
   }
+  if (settledThreadIds.size > 0) requestDispatchAdmissionReleased(deps);
 }
 
 export function settleDanglingBackgroundTasksForStoppedThreadInTransaction(

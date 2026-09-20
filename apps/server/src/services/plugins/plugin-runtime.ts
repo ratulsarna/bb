@@ -631,7 +631,14 @@ export function createPluginRuntime(context: PluginRuntimeContext) {
     const registrations: PluginHookRegistration<K>[] = [];
     for (const [id, plugin] of loaded) {
       const handler = plugin.handle.hooks[hook];
-      if (handler !== null) registrations.push({ pluginId: id, handler });
+      if (handler !== null)
+        registrations.push({
+          pluginId: id,
+          handler,
+          ...(plugin.handle.strictHooks.has(hook)
+            ? { experimental_enforcement: "strict" as const }
+            : {}),
+        });
     }
     return registrations;
   }

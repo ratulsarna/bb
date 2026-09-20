@@ -13,6 +13,7 @@ import {
 } from "@bb/domain";
 import type {
   ExecutionInputFieldSource,
+  SendMessageRequest,
   ThreadResponse,
 } from "@bb/server-contract";
 import type {
@@ -37,6 +38,16 @@ type DispatchHookDeps = Pick<AppDeps, "db" | "hub">;
  * send.
  */
 export type DispatchAttemptKind = PluginDispatchAttemptKind;
+
+export function resolveDispatchAttemptKind(
+  thread: Thread,
+  mode: SendMessageRequest["mode"],
+): DispatchAttemptKind {
+  if (thread.status !== "active") return "start-turn";
+  return mode === "steer" || mode === "steer-if-active" || mode === "auto"
+    ? "join-turn"
+    : "start-turn";
+}
 
 /**
  * A hook handler's answer, re-parsed at the boundary. Plugin sources are
@@ -103,6 +114,7 @@ export interface MessageDispatchHookPassRequest {
   parentThreadId: string | null;
   queuedMessages: ThreadQueuedMessage[];
   pluginSubmission: MessageDispatchHookContext["experimental_submission"];
+  strictOnly?: boolean;
   continueAfterHooks?: () => Promise<void>;
 }
 
@@ -159,10 +171,25 @@ export function isDispatchRequeuedRecently(threadId: string): boolean {
  * what it was before hooks existed — no lock, no context assembly, no queued
  * row.
  */
-export function hasMessageDispatchHooks(): boolean {
+export function hasMessageDispatchHooks(strictOnly = false): boolean {
   const provider = pluginHookProvider();
   return (
-    provider !== undefined && provider.listHooks("message.dispatch").length > 0
+    provider !== undefined &&
+    provider
+      .listHooks("message.dispatch")
+      .some((hook) => !strictOnly || hook.experimental_enforcement === "strict")
+  );
+}
+
+export function hasStrictMessageDispatchHook(pluginId: string): boolean {
+  return (
+    pluginHookProvider()
+      ?.listHooks("message.dispatch")
+      .some(
+        (hook) =>
+          hook.pluginId === pluginId &&
+          hook.experimental_enforcement === "strict",
+      ) ?? false
   );
 }
 
@@ -397,7 +424,12 @@ export async function runMessageDispatchHookPass(
   if (provider === undefined) {
     return { kind: "proceed" };
   }
-  const hooks = provider.listHooks("message.dispatch");
+  const hooks = provider
+    .listHooks("message.dispatch")
+    .filter(
+      (hook) =>
+        !request.strictOnly || hook.experimental_enforcement === "strict",
+    );
   if (hooks.length === 0) {
     return { kind: "proceed" };
   }

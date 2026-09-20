@@ -592,9 +592,9 @@ export type PluginDispatchAttemptKind = "start-turn" | "join-turn";
 
 /**
  * What core hands a `message.dispatch` hook: the one checkpoint, run before a
- * message reaches a provider. The exception is a user's explicit Send-now on a
- * queued row, which bypasses the pass by design — it is the user overriding
- * policy, and a policy that could veto its own override would not be one.
+ * message reaches a provider. Send now bypasses ordinary registrations.
+ * Registrations with experimental_enforcement: "strict" also gate Send now,
+ * manual compaction, edited resends, and parent system notifications.
  *
  * It runs identically whether the attempt is inline (someone just sent) or
  * from a drain (a queued row became eligible again), and whether the message
@@ -746,7 +746,22 @@ export interface PluginHooks {
    * At most one handler per hook per plugin; registering a second replaces
    * nothing and throws.
    */
-  on<K extends PluginHookName>(hook: K, handler: PluginHookHandler<K>): void;
+  on<K extends PluginHookName>(
+    hook: K,
+    handler: PluginHookHandler<K>,
+    options?: {
+      /**
+       * Enforce admission for Send now, manual compaction, edited resends, and
+       * parent system notifications. A wait queues messages and retries;
+       * compaction and edits return 409 before provider effects. Ordinary
+       * registrations retain their Send now override and operation exemptions.
+       * Count with sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true })
+       * to include admissions awaiting command preparation and tracked work.
+       * Require engines.bbPluginSdk >=0.4.107 when depending on enforcement.
+       */
+      experimental_enforcement?: "strict";
+    },
+  ): void;
 
   /**
    * Ask core to re-attempt the messages queued behind plugin waits.
@@ -2031,9 +2046,9 @@ export interface BbPluginApi {
   readonly events: PluginEvents;
   /**
    * Questions core asks and acts on the answer to. Today: the dispatch
-   * checkpoint messages pass through on their way to a provider (a user's
-   * Send-now bypasses it by design), which a handler may let go, queue with a
-   * reason, or refuse.
+   * checkpoint messages pass through on their way to a provider, which a
+   * handler may let go, queue with a reason, or refuse. Send now bypasses
+   * ordinary registrations; experimental_enforcement: "strict" always runs.
    */
   readonly experimental_hooks: PluginHooks;
   /**

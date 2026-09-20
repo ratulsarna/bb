@@ -233,6 +233,7 @@ import type {
   ThreadPaneActionResponse,
   ThreadPendingInteractionsResponse,
   ThreadRunningResponse,
+  ThreadRunningQuery,
   QueuedMessageListQuery,
   ThreadQueuedMessageListResponse,
   ThreadResponse,
@@ -355,6 +356,7 @@ import {
   threadGetQuerySchema,
   threadHostFileContentQuerySchema,
   threadCountQuerySchema,
+  threadRunningQuerySchema,
   threadListQuerySchema,
   threadOpenRequestSchema,
   threadPaneActionRequestSchema,
@@ -1237,7 +1239,9 @@ export const publicApiRoutes = {
     running: defineRoute({
       path: "/threads/running",
       method: "get",
-      request: noRequest(),
+      request: optionalQueryRequest<EmptyInput, ThreadRunningQuery>(
+        threadRunningQuerySchema,
+      ),
       response: jsonResponse<ThreadRunningResponse>(),
     }),
     search: defineRoute({

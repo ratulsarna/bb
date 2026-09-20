@@ -1388,7 +1388,13 @@ function createFakePluginHostInternal(
   };
 
   const experimental_hooks: PluginHooks = {
-    on(hook, handler) {
+    on(hook, handler, options) {
+      if (
+        options?.experimental_enforcement !== undefined &&
+        options.experimental_enforcement !== "strict"
+      ) {
+        throw new Error("Invalid dispatch hook enforcement");
+      }
       if (hooks[hook] !== null) {
         throw new Error(pluginHookAlreadyRegisteredMessage(hook));
       }

@@ -347,7 +347,11 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
   const CONVERSATION_OUTLINE_CACHE_MAX_ENTRIES = 128;
 
   get(routes.pluginMetadata.get, (context, query) => {
-    const thread = requirePublicThread(deps.db, context.req.param("id"));
+    const thread = requirePublicThread(
+      deps.db,
+      context.req.param("id"),
+      query.experimental_includeDeleted === "true",
+    );
     const { metadata, corrupt } = getThreadPluginMetadata(
       deps.db,
       thread.id,

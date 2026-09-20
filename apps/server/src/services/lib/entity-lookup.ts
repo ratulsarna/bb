@@ -229,10 +229,14 @@ function requireThread(db: DbConnection, threadId: string): ThreadRow {
 export function requirePublicThread(
   db: DbConnection,
   threadId: string,
+  includeDeleted = false,
 ): ThreadRow {
   const thread = requireThread(db, threadId);
   const project = getProject(db, thread.projectId);
-  if (thread.deletedAt !== null || project?.deletedAt !== null) {
+  if (
+    !includeDeleted &&
+    (thread.deletedAt !== null || project?.deletedAt !== null)
+  ) {
     throw new ApiError(404, "thread_not_found", "Thread not found");
   }
   return thread;

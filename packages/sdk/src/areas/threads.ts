@@ -129,6 +129,8 @@ export interface ThreadResolveMentionsArgs extends ResolveThreadMentionsRequest 
 }
 
 export interface ThreadGetArgs {
+  /** Read retained deleted threads when resolving dispatch occupancy and ancestry. */
+  experimental_includeDeleted?: boolean;
   include?: ThreadGetQuery["include"];
   signal?: AbortSignal;
   threadId: string;
@@ -153,10 +155,12 @@ export type ThreadCountResult = ThreadCountResponse;
  * a timer or a `turn.failed` listener it is an ordinary query racing with every
  * concurrent dispatch, exactly like {@link ThreadsArea.count}.
  *
- * One boundary: a warm follow-up admitted on an already-live `idle` thread
- * flips `idle -> active` inside the send transaction, just AFTER the lock
- * releases. First-dispatch admissions are exact; a burst of follow-ups to
- * distinct idle threads can momentarily under-report.
+ * With experimental_includeDispatchOccupancy, the result also contains warm
+ * admissions preparing commands, stopping threads, and tracked background
+ * agent, command, workflow, and active native goal activity. Reservations become visible before
+ * the next hook pass and remain until dispatch commits or fails. Archived or
+ * deleted threads with unfinished tracked work still occupy capacity. A confirmed
+ * runtime stop releases active goal occupancy until an admitted restart.
  */
 export type ThreadRunningResult = ThreadRunningResponse;
 export type ThreadListResult = ThreadListResponse;
@@ -208,7 +212,8 @@ export type ThreadStorageFilesResult = ThreadStorageFileListResponse;
 export type ThreadStorageLocationResult = ThreadStorageLocationResponse;
 export type ThreadStoragePathsResult = ThreadStoragePathListResponse;
 export type ThreadChildSummaryResult = ThreadChildSummaryResponse;
-export type ThreadDefaultExecutionOptionsResult = ResolvedThreadExecutionOptions | null;
+export type ThreadDefaultExecutionOptionsResult =
+  ResolvedThreadExecutionOptions | null;
 export type ThreadConversationOutlineResult = ThreadConversationOutlineResponse;
 export type ThreadTimelineTurnSummaryDetailsResult =
   TimelineTurnSummaryDetailsResponse;
@@ -247,6 +252,8 @@ export interface ThreadUpdateArgs extends UpdateThreadRequest {
 }
 
 export interface ThreadPluginMetadataArgs {
+  /** Read retained metadata on deleted ancestors; mutations remain unavailable. */
+  experimental_includeDeleted?: boolean;
   pluginId: string;
   signal?: AbortSignal;
   threadId: string;
@@ -573,7 +580,11 @@ export interface ThreadsArea {
   queue: ThreadQueueArea;
   interactions: ThreadInteractionsArea;
   list(args?: ThreadListArgs): Promise<ThreadListResult>;
-  listRunning(args?: { signal?: AbortSignal }): Promise<ThreadRunningResult>;
+  /** Opt into strict admission occupancy; the default reports starting/active live threads. */
+  listRunning(args?: {
+    signal?: AbortSignal;
+    experimental_includeDispatchOccupancy?: boolean;
+  }): Promise<ThreadRunningResult>;
   markRead(args: ThreadActionArgs): Promise<ThreadReadStateResult>;
   markUnread(args: ThreadActionArgs): Promise<ThreadReadStateResult>;
   open(args: ThreadOpenArgs): Promise<ThreadOpenResult>;
@@ -864,9 +875,22 @@ export function createThreadsArea(args: CreateSdkAreaArgs): ThreadsArea {
       transport.api.v1.threads[":id"].$get(
         {
           param: { id: input.threadId },
-          ...(input.include === undefined
+          ...(input.include === undefined &&
+          input.experimental_includeDeleted === undefined
             ? {}
-            : { query: { include: input.include } }),
+            : {
+                query: {
+                  ...(input.include === undefined
+                    ? {}
+                    : { include: input.include }),
+                  ...(input.experimental_includeDeleted === undefined
+                    ? {}
+                    : {
+                        experimental_includeDeleted:
+                          input.experimental_includeDeleted ? "true" : "false",
+                      }),
+                },
+              }),
         },
         ...signalRequestArgs(input.signal),
       ),
@@ -1113,7 +1137,16 @@ export function createThreadsArea(args: CreateSdkAreaArgs): ThreadsArea {
     async listRunning(input) {
       return transport.readJson(
         transport.api.v1.threads.running.$get(
-          {},
+          input?.experimental_includeDispatchOccupancy === undefined
+            ? {}
+            : {
+                query: {
+                  experimental_includeDispatchOccupancy:
+                    input.experimental_includeDispatchOccupancy
+                      ? "true"
+                      : "false",
+                },
+              },
           ...signalRequestArgs(input?.signal),
         ),
       );
@@ -1160,7 +1193,15 @@ export function createThreadsArea(args: CreateSdkAreaArgs): ThreadsArea {
         transport.api.v1.threads[":id"]["plugin-metadata"].$get(
           {
             param: { id: input.threadId },
-            query: { pluginId: input.pluginId },
+            query: {
+              pluginId: input.pluginId,
+              ...(input.experimental_includeDeleted === undefined
+                ? {}
+                : {
+                    experimental_includeDeleted:
+                      input.experimental_includeDeleted ? "true" : "false",
+                  }),
+            },
           },
           ...signalRequestArgs(input.signal),
         ),

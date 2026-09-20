@@ -366,8 +366,9 @@ Queued messages:
   queued row in the workspace; `--wait-holder plugin:<plugin-id>` narrows it to
   the rows one plugin is holding.
 
-  `queue send` dispatches a row now, bypassing every plugin wait and its own
-  schedule — the invariants (a running turn, an unfinished workspace, an
+  `queue send` dispatches a row now, bypassing ordinary plugin waits and its own
+  schedule. Strict plugin admission rules still apply; a blocked send remains
+  queued and reports its reason. For every send, the invariants (a running turn, an unfinished workspace, an
   unanswered interaction) still apply, and a message that hits one simply queues
   again. `--mode steer` uses those same send-now bypasses and re-attempts the row
   as a steer; it does not bypass the invariants, so a provisioning row remains

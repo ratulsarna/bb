@@ -1,5 +1,7 @@
 import type { ThreadStatus } from "./thread-status.js";
 
+export const THREAD_RUNTIME_STOPPED_OPERATION = "thread_runtime_stopped";
+
 export type ThreadLifecycleEvent =
   | { type: "run.preparing" }
   | { type: "run.started" }

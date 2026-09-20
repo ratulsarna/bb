@@ -22,7 +22,10 @@ import {
   isCommandTimeoutError,
   runtimeErrorLogFields,
 } from "../lib/error-log-fields.js";
-import { isDispatchRequeuedRecently } from "./dispatch-hooks.js";
+import {
+  hasStrictMessageDispatchHook,
+  isDispatchRequeuedRecently,
+} from "./dispatch-hooks.js";
 import { recordQueuedMessageDrainFailure } from "./queue-drain-failure.js";
 import { clearQueuedMessageWait } from "./queue-waits.js";
 import {
@@ -45,6 +48,7 @@ export type QueuedMessageDispatchWake =
   | { kind: "host-connected"; hostId: string }
   | { kind: "time-reached"; now: number }
   | { kind: "plugin-recheck" }
+  | { kind: "dispatch-admission-released" }
   | { kind: "plugin-unregistered"; pluginId: string }
   | { kind: "idle-recovery"; now: number }
   | {
@@ -65,6 +69,10 @@ type PreparedQueuedMessageDispatchWake = Exclude<
 >;
 
 const pendingPluginRechecks = new WeakSet<
+  QueueDispatchDeps["lifecycleDedupers"]
+>();
+
+const pendingAdmissionRechecks = new WeakSet<
   QueueDispatchDeps["lifecycleDedupers"]
 >();
 
@@ -122,6 +130,7 @@ function dispatchWakeContext(
     case "time-reached":
       return { now: wake.now, wake: wake.kind };
     case "plugin-recheck":
+    case "dispatch-admission-released":
       return { wake: wake.kind };
     case "plugin-unregistered":
       return { pluginId: wake.pluginId, wake: wake.kind };
@@ -132,9 +141,15 @@ function schedulePreparedQueuedMessageDispatch(
   deps: QueueDispatchDeps,
   wake: PreparedQueuedMessageDispatchWake,
 ): void {
-  if (wake.kind === "plugin-recheck") {
-    if (pendingPluginRechecks.has(deps.lifecycleDedupers)) return;
-    pendingPluginRechecks.add(deps.lifecycleDedupers);
+  const pending =
+    wake.kind === "plugin-recheck"
+      ? pendingPluginRechecks
+      : wake.kind === "dispatch-admission-released"
+        ? pendingAdmissionRechecks
+        : null;
+  if (pending !== null) {
+    if (pending.has(deps.lifecycleDedupers)) return;
+    pending.add(deps.lifecycleDedupers);
   }
   deferAfterResponse({
     config: deps.config,
@@ -142,9 +157,7 @@ function schedulePreparedQueuedMessageDispatch(
     logger: deps.logger,
     name: "Queued message dispatch",
     work: async () => {
-      if (wake.kind === "plugin-recheck") {
-        pendingPluginRechecks.delete(deps.lifecycleDedupers);
-      }
+      pending?.delete(deps.lifecycleDedupers);
       await executePreparedQueuedMessageDispatch(deps, wake);
     },
   });
@@ -248,7 +261,10 @@ async function executePreparedQueuedMessageDispatch(
       await runInteractionSettledDispatch(deps, wake.threadId);
       return;
     case "plugin-recheck":
-      await runPluginRecheckDispatch(deps);
+      await runPluginRecheckDispatch(deps, false);
+      return;
+    case "dispatch-admission-released":
+      await runPluginRecheckDispatch(deps, true);
       return;
     case "plugin-unregistered":
       await runPluginUnregisteredDispatch(deps, wake.pluginId);
@@ -351,7 +367,8 @@ async function runInteractionSettledDispatch(
   deps: QueueDispatchDeps,
   threadId: string,
 ): Promise<void> {
-  if (deps.pendingInteractions.hasTurnBoundPendingThreadInteraction(threadId)) return;
+  if (deps.pendingInteractions.hasTurnBoundPendingThreadInteraction(threadId))
+    return;
   const cleared = clearThreadQueueWaitsOfKind(deps, {
     threadId,
     kind: "interaction",
@@ -410,12 +427,18 @@ async function attemptAutomaticQueuedMessage(
 
 async function runPluginRecheckDispatch(
   deps: QueueDispatchDeps,
+  bypassStrictWaiterPacing: boolean,
 ): Promise<void> {
   const now = Date.now();
   for (const row of listQueuedThreadMessagePluginWaitRefs(deps.db)) {
+    const pluginId = row.waitHolder.slice(
+      QUEUED_MESSAGE_PLUGIN_WAIT_HOLDER_PREFIX.length,
+    );
     await attemptAutomaticQueuedMessage(deps, row, {
       now,
-      respectRequeuePacing: true,
+      respectRequeuePacing:
+        !bypassStrictWaiterPacing ||
+        !hasStrictMessageDispatchHook(pluginId),
     });
   }
 }

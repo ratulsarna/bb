@@ -497,6 +497,7 @@ export const threadIncludeOptionSchema = z.enum(["environment", "host"]);
 export type ThreadIncludeOption = z.infer<typeof threadIncludeOptionSchema>;
 
 export const threadGetQuerySchema = z.object({
+  experimental_includeDeleted: z.enum(["true", "false"]).optional(),
   include: z
     .string()
     .min(1)
@@ -514,7 +515,10 @@ export type ThreadGetQuery = z.infer<typeof threadGetQuerySchema>;
 
 export type ThreadPluginMetadataResponse = z.infer<typeof pluginMetadataSchema>;
 export const threadPluginMetadataQuerySchema = z
-  .object({ pluginId: pluginIdSchema })
+  .object({
+    pluginId: pluginIdSchema,
+    experimental_includeDeleted: z.enum(["true", "false"]).optional(),
+  })
   .strict();
 export type ThreadPluginMetadataQuery = z.infer<
   typeof threadPluginMetadataQuerySchema
@@ -821,33 +825,16 @@ export const threadCountResponseSchema = z.object({
 });
 export type ThreadCountResponse = z.infer<typeof threadCountResponseSchema>;
 
-/**
- * One thread currently occupying capacity — canonical status `starting` or
- * `active`. Archived and deleted threads are excluded (neither runs); hidden
- * ones are not, because a hidden thread burns a real slot on a real machine.
- *
- * The row is an id and the machine that id is occupying, and nothing else.
- * `hostId` is here because a per-host pool cannot be derived from an id
- * without a query per row; every other question a caller might ask is
- * answerable by fetching the thread it names.
- *
- * **Exact inside the `message.dispatch` hook, a snapshot everywhere else.**
- * Hook passes run one at a time under a server-wide lock, and a cleared first
- * attempt commits its `pending → starting` flip before that lock releases — so
- * the next handler in line sees the admission the previous one granted. Read
- * anywhere else (a background service, an HTTP client, a `turn.failed`
- * listener) it is an ordinary query that races with every concurrent dispatch,
- * exactly like `threads.count`.
- * See {@link threadRunningResponseSchema}'s consumers in the plugin authoring
- * guide for the one boundary case: a warm follow-up's `idle → active` flip
- * commits just after the lock, so admissions of already-live threads can be
- * momentarily invisible.
- */
 export const threadRunningEntrySchema = z.object({
   id: z.string(),
   /** The machine it runs on; null while no environment has been chosen. */
   hostId: z.string().nullable(),
 });
+
+export const threadRunningQuerySchema = z.object({
+  experimental_includeDispatchOccupancy: z.enum(["true", "false"]).optional(),
+});
+export type ThreadRunningQuery = z.infer<typeof threadRunningQuerySchema>;
 
 export const threadRunningResponseSchema = z.array(threadRunningEntrySchema);
 export type ThreadRunningResponse = z.infer<typeof threadRunningResponseSchema>;

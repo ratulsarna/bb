@@ -170,6 +170,21 @@ describe("plugin bb.sdk bind gate", () => {
     ]);
   });
 
+  it("preserves strict enforcement in the loaded hook registry and removes it on disable", async () => {
+    const rootDir = await writePlugin(workDir, {
+      name: "bb-plugin-strict-admission",
+      serverSource: `export default function plugin(bb) {
+        bb.experimental_hooks.on("message.dispatch", () => ({ action: "proceed" }), { experimental_enforcement: "strict" });
+      }`,
+    });
+    await service.installPath(rootDir);
+    expect(service.hooks.listHooks("message.dispatch")).toMatchObject([
+      { pluginId: "strict-admission", experimental_enforcement: "strict" },
+    ]);
+    await service.setEnabled("strict-admission", false);
+    expect(service.hooks.listHooks("message.dispatch")).toEqual([]);
+  });
+
   beforeEach(async () => {
     db = createConnection(":memory:");
     migrate(db);

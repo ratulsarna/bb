@@ -1,3 +1,8 @@
+import { listLatestThreadStateEventRowsByThreadIds } from "@bb/db";
+import {
+  LEGACY_CODEX_GOAL_EXTENSION_KIND,
+  THREAD_RUNTIME_STOPPED_OPERATION,
+} from "@bb/domain";
 import { advanceEnvironmentProvisioning } from "../environments/environment-engine.js";
 import { revokeThreadDesktopBrowserControl } from "../desktop-browsers.js";
 import {
@@ -108,6 +113,7 @@ import { scheduleThreadProvisioningAdvance } from "./thread-provisioning.js";
 import { isPreStartThreadStatus } from "./thread-status.js";
 import { settleDanglingBackgroundTasksForStoppedThreadInTransaction } from "./background-task-reconciliation.js";
 import { abortPluginToolCallsForThreads } from "../plugins/plugin-tool-calls.js";
+import { requestDispatchAdmissionReleased } from "./dispatch-admission.js";
 
 type ThreadStartCommand = Awaited<ReturnType<typeof buildThreadStartCommand>>;
 type ThreadStopCommand = ReturnType<typeof buildThreadStopCommand>;
@@ -854,6 +860,7 @@ function settleThreadCommandFailure(
   });
   if (outcome.applied) {
     args.deps.hub.notifyThread(thread.id, ["status-changed"]);
+    postCommitActions.push(dispatchAdmissionReleasedAction());
   }
   if (isParentNotifiableChildThread(thread)) {
     const parentThreadId = thread.parentThreadId;
@@ -1010,17 +1017,58 @@ export async function prepareReadyThreadTurnCommand(
   };
 }
 
+function recordConfirmedGoalRuntimeStop(
+  args: {
+    command: { threadId: string };
+    deps: { db: DbTransaction; hub: DbNotifier };
+    operationId: string;
+  },
+): void {
+  const threadId = args.command.threadId;
+  if (
+    listLatestThreadStateEventRowsByThreadIds(args.deps.db, {
+      threadIds: [threadId],
+      kind: LEGACY_CODEX_GOAL_EXTENSION_KIND,
+      status: "active",
+    }).length === 0
+  )
+    return;
+  appendThreadEventInTransaction(args.deps.db, {
+    threadId,
+    scope: threadScope(),
+    type: "system/operation",
+    data: {
+      operation: THREAD_RUNTIME_STOPPED_OPERATION,
+      operationId: args.operationId,
+      status: "completed",
+      message: "Thread stopped",
+    },
+  });
+  args.deps.hub.notifyThread(threadId, ["events-appended"], {
+    eventTypes: ["system/operation"],
+  });
+}
+
 export function settleThreadStopCommandResult(
   args: SettleThreadStopCommandResultArgs,
 ): CommandResultSideEffectsResult {
   if (args.report.ok && args.report.result.activeTurnRetained !== true) {
+    recordConfirmedGoalRuntimeStop({
+      ...args,
+      operationId: args.execution.id,
+    });
     settleDanglingBackgroundTasksForStoppedThreadInTransaction(args.deps, {
       threadId: args.command.threadId,
     });
   }
 
   if (args.command.intent === "release") {
-    return emptyCommandResultSideEffects();
+    return {
+      postCommitActions:
+        args.report.ok && args.report.result.activeTurnRetained !== true
+          ? [drainQueuedMessagesAfterStopAction(args.command.threadId)]
+          : [],
+    };
   }
 
   if (!args.report.ok) {
@@ -1028,6 +1076,10 @@ export function settleThreadStopCommandResult(
       return emptyCommandResultSideEffects();
     }
 
+    recordConfirmedGoalRuntimeStop({
+      ...args,
+      operationId: args.execution.id,
+    });
     finalizeStoppedThreadInTransaction(args.deps, {
       threadId: args.command.threadId,
     });
@@ -1065,6 +1117,10 @@ export function settleThreadStorageDeleteCommandResult(
   if (!args.report.ok) {
     return emptyCommandResultSideEffects();
   }
+  recordConfirmedGoalRuntimeStop({
+    ...args,
+    operationId: args.execution.id,
+  });
   settleDanglingBackgroundTasksForStoppedThreadInTransaction(args.deps, {
     threadId: args.command.threadId,
   });
@@ -1077,7 +1133,11 @@ export function settleThreadStorageDeleteCommandResult(
       : {}),
     threadId: args.command.threadId,
   });
-  return emptyCommandResultSideEffects();
+  return {
+    postCommitActions: [
+      drainQueuedMessagesAfterStopAction(args.command.threadId),
+    ],
+  };
 }
 
 export function requestThreadStorageDeletion(
@@ -1091,8 +1151,20 @@ export function requestThreadStorageDeletion(
   });
   abortPluginToolCallsForThreads([thread.id], "thread-deleted");
   if (thread.environmentId === null) {
+    const notificationBuffer = new NotificationBuffer();
+    deps.db.transaction(
+      (tx) =>
+        recordConfirmedGoalRuntimeStop({
+          deps: { db: tx, hub: notificationBuffer },
+          command: { threadId: thread.id },
+          operationId: `thread-storage-delete:${thread.id}`,
+        }),
+      { behavior: "immediate" },
+    );
+    notificationBuffer.flushInto(deps.hub);
     markThreadStorageDeleted(deps.db, { threadId: thread.id });
     finalizeStoppedThread(deps, { threadId: thread.id });
+    requestDispatchAdmissionReleased(deps);
     return;
   }
   if (environment === null) {
@@ -1140,6 +1212,15 @@ function drainQueuedMessagesAfterStopAction(
   return {
     run: (deps) => {
       requestQueuedMessageDispatch(deps, { kind: "thread-ready", threadId });
+      requestDispatchAdmissionReleased(deps);
+    },
+  };
+}
+
+function dispatchAdmissionReleasedAction(): CommandResultPostCommitAction {
+  return {
+    run: (deps) => {
+      requestDispatchAdmissionReleased(deps);
     },
   };
 }
