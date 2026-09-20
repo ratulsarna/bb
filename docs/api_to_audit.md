@@ -339,7 +339,8 @@ re-asks, so a wake that was not warranted is safe by construction.
 
 A plugin's wait therefore clears when the row's `sendAt` comes due, when some
 plugin requests a drain and this handler now proceeds, when the user sends it
-now, or when the orphan sweep clears a wait whose plugin is no longer running.
+now and every strict policy permits it, or when the orphan sweep clears a wait
+whose plugin is no longer running.
 
 **Audit before stabilizing.**
 
@@ -393,10 +394,9 @@ now, or when the orphan sweep clears a wait whose plugin is no longer running.
   plugin wait with a `sendAt` sets the row's `sendAt`, which is also what
   `--send-at` sets. Confirm nothing renders a plugin's instant as a user's
   schedule.
-- **Send-now bypasses EVERY plugin check.** A user's "Send now" skips the pass
-  entirely, so a content-policy `reject` is skipped with it. That is a
-  deliberate loosening of the old skip-owner-only rule; confirm it before
-  stabilizing, or split `wait` bypass from `reject` bypass.
+- **Send-now enforcement.** Send now skips ordinary registrations, including
+  their rejects. Registrations with `experimental_enforcement: "strict"` still
+  run. Confirm this distinction stays visible in queue actions and errors.
 - **"Never started" is now a thread status, not an event-log fact.** That
   replaced a `getLastProviderThreadId(...) === null` probe on a hot-ish path.
   Confirm `pending` is maintained everywhere that probe used to be consulted.
@@ -405,6 +405,49 @@ now, or when the orphan sweep clears a wait whose plugin is no longer running.
   to.
 - **The single server-wide lock.** One slow handler delays every dispatch in the
   server, up to its box.
+
+## Dispatch admission enforcement and occupancy
+
+`bb.experimental_hooks.on("message.dispatch", handler, {
+experimental_enforcement: "strict" })` enforces a policy for first turns,
+follow-ups, retries, Send now, manual compaction, edited resends, and parent
+system notifications. Message and notification waits use the existing durable
+queue; compact/edit waits return 409 before provider or rewind effects. Other
+plugins can still wait or reject a dispatch. Ordinary registrations keep their
+Send now override and compaction/edit/system-notification exemptions.
+
+`sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true })`
+returns `{ id, hostId }` rows for admitted command preparations, starting/active
+threads, stopping threads, tracked background commands, agents, workflows, and
+active native goals between autonomous turns. Archived/deleted threads remain
+included while starting, active, stopping, or carrying unfinished tracked work.
+Confirmed runtime Stop or storage deletion releases stale active goal occupancy;
+an admitted restart reacquires it. Stop requests and queued messages alone do not
+change goal occupancy. Pending threads occupy capacity only when admitted or carrying
+tracked work. Defaults retain the starting/active, unarchived, undeleted query.
+The HTTP query is `GET /threads/running?experimental_includeDispatchOccupancy=true`.
+`threads.get` and `threads.getPluginMetadata` accept
+`experimental_includeDeleted: true` to resolve retained deleted threads and
+ancestors. Their HTTP GET routes accept the same flag as a string boolean.
+Default reads still return 404; writes and other routes remain unavailable.
+This read option also permits retained threads from deleted projects.
+
+Core reserves cleared admissions inside the hook evaluation lock and releases
+that lock before provider command preparation or daemon RPC. Reservations have
+no expiry. Dispatch commits canonical occupancy before releasing the reservation;
+preparation and claim failures release it and wake the existing queue. Queue
+claims and recorded lifecycle/activity support restart recovery. Plugins own
+membership and counting rules; core defines no task IDs or numerical limits.
+
+Plugins relying on strict enforcement must require `engines.bbPluginSdk: ">=0.4.107"`.
+Older SDKs do not interpret the registration or occupancy options.
+
+**Audit before stabilizing.** Exercise mixed ordinary/strict policies, concurrent
+cold/warm starts, provider preparation failures, manual operations, restart claim
+recovery, and background completion. Confirm command occupancy spans every
+provider-executing dispatch and that released reservations cannot strand waiters.
+Measure the tracked-background query with long event histories before adding
+filters or indexes. Preserve the default query's compatibility.
 
 ## `interaction.pending` (`bb.events.on`)
 

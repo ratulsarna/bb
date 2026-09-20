@@ -873,7 +873,7 @@ function normalizeThreadSearchHighlightText(text: string): {
   const originalStarts: number[] = [];
   const originalEnds: number[] = [];
 
-  for (let index = 0; index < text.length;) {
+  for (let index = 0; index < text.length; ) {
     const codePoint = text.codePointAt(index);
     if (codePoint === undefined) {
       break;
@@ -1318,7 +1318,13 @@ export interface RunningThreadRow {
  * `archived_at IS NULL` is the leading equality and the status set is the
  * range that follows.
  */
-export function listRunningThreads(db: DbQueryConnection): RunningThreadRow[] {
+export function listRunningThreads(
+  db: DbQueryConnection,
+  options: {
+    includeDispatchOccupancy?: boolean;
+    additionalThreadIds?: string[];
+  } = {},
+): RunningThreadRow[] {
   return db
     .select({
       id: threads.id,
@@ -1327,9 +1333,16 @@ export function listRunningThreads(db: DbQueryConnection): RunningThreadRow[] {
     .from(threads)
     .leftJoin(environments, eq(environments.id, threads.environmentId))
     .where(
-      and(
-        liveThreads(),
-        inArray(threads.status, [...OCCUPYING_THREAD_STATUSES]),
+      or(
+        options.includeDispatchOccupancy
+          ? inArray(threads.status, [...OCCUPYING_THREAD_STATUSES, "stopping"])
+          : and(
+              liveThreads(),
+              inArray(threads.status, [...OCCUPYING_THREAD_STATUSES]),
+            ),
+        options.additionalThreadIds?.length
+          ? inArray(threads.id, options.additionalThreadIds)
+          : undefined,
       ),
     )
     .orderBy(asc(threads.id))

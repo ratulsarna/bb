@@ -1,5 +1,16 @@
 import {
+  threadScope,
+  turnScope,
+  LEGACY_CODEX_GOAL_EXTENSION_KIND,
+  type Thread,
+  type ThreadEvent,
+} from "@bb/domain";
+import { groupHostDaemonEvents } from "@bb/host-daemon-contract";
+import { noteDispatchRequeued } from "../../src/services/threads/dispatch-hooks.js";
+import { queueParentSystemMessage } from "../../src/services/threads/parent-system-messages.js";
+import {
   createQueuedThreadMessage,
+  deleteQueuedThreadMessage,
   getThread,
   listEvents,
   listQueuedThreadMessages,
@@ -14,7 +25,7 @@ import type {
   MessageDispatchHookContext,
   PluginHookName,
 } from "@get-bb/plugin-sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../src/errors.js";
 import {
   invokePluginInline,
@@ -28,7 +39,10 @@ import {
   sendQueuedMessage,
 } from "../../src/services/threads/queued-messages.js";
 import { acceptThreadSendRequest } from "../../src/services/threads/thread-send-request.js";
-import { attemptDispatch } from "../../src/services/threads/dispatch-attempt.js";
+import {
+  attemptDispatch,
+  listRunningThreadsWithIntendedHosts,
+} from "../../src/services/threads/dispatch-attempt.js";
 import { runQueuedMessageDispatch } from "../../src/services/threads/queued-message-dispatch.js";
 import { createThreadFromRequest } from "../../src/services/threads/thread-create.js";
 import { applyLoggedThreadLifecycleEvent } from "../../src/services/threads/lifecycle-outcome.js";
@@ -36,11 +50,14 @@ import { createClientTurnRequestId } from "../../src/services/threads/thread-eve
 import { toThreadQueuedMessage } from "../../src/services/threads/thread-queued-messages.js";
 import { textInput } from "../helpers/prompt-input.js";
 import {
+  internalAuthHeaders,
   listQueuedThreadCommands,
+  reportQueuedCommandError,
   reportQueuedCommandSuccess,
   waitForQueuedCommand,
 } from "../helpers/commands.js";
 import {
+  seedStoredEvent,
   seedEnvironment,
   seedHostSession,
   seedProjectWithSource,
@@ -49,6 +66,8 @@ import {
   seedTurnStarted,
 } from "../helpers/seed.js";
 import { withTestHarness, type TestAppHarness } from "../helpers/test-app.js";
+import { failThreadProvisioning } from "../../src/services/threads/thread-provisioning-environment.js";
+import { settleDanglingBackgroundTasks } from "../../src/services/threads/background-task-reconciliation.js";
 
 const WORKSPACE_PATH = "/tmp/dispatch-hooks-project";
 
@@ -85,6 +104,7 @@ function installHooks(
 
 afterEach(() => {
   setPluginHookProvider(undefined);
+  vi.restoreAllMocks();
 });
 
 function seedDispatchFixture(harness: TestAppHarness, hostId: string) {
@@ -195,6 +215,33 @@ async function expectApiError(run: () => Promise<unknown>): Promise<ApiError> {
     throw error;
   }
   throw new Error("expected the operation to fail");
+}
+
+async function queueStrictOccupancyWaiter(
+  harness: TestAppHarness,
+  args: { occupiedThreadId: string; waiter: Thread },
+): Promise<void> {
+  installHooks({
+    "message.dispatch": [
+      {
+        pluginId: "capacity",
+        experimental_enforcement: "strict",
+        handler: () =>
+          listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+            (row) => row.id === args.occupiedThreadId,
+          )
+            ? { action: "wait", reason: "Capacity" }
+            : { action: "proceed" },
+      },
+    ],
+  });
+  await expect(
+    acceptThreadSendRequest(harness.deps, {
+      thread: args.waiter,
+      payload: { input: textInput("Wait for capacity"), mode: "auto" },
+    }),
+  ).resolves.toMatchObject({ delivery: "queued" });
+  noteDispatchRequeued(args.waiter.id);
 }
 
 describe("message.dispatch hook context", () => {
@@ -335,6 +382,7 @@ describe("pending admission races", () => {
         projectId: project.id,
       });
       setPluginHookProvider(undefined);
+      vi.restoreAllMocks();
       const stale = getThread(harness.db, created.id);
       if (!stale) throw new Error("expected the pending thread");
       expect(stale.status).toBe("pending");
@@ -1373,3 +1421,792 @@ describe("message.dispatch hooks on the queue drain", () => {
     });
   });
 });
+
+describe("strict dispatch admission", () => {
+  it.each(["cold", "warm"] as const)(
+    "admits only two concurrent %s starts",
+    async (kind) => {
+      await withTestHarness(async (harness) => {
+        const { environment, host, project } = seedDispatchFixture(
+          harness,
+          `strict-${kind}`,
+        );
+        const seen: string[][] = [];
+        installHooks({
+          "message.dispatch": [
+            {
+              pluginId: "capacity",
+              experimental_enforcement: "strict",
+              handler: () => {
+                const occupied = listRunningThreadsWithIntendedHosts(
+                  harness.deps,
+                  true,
+                );
+                seen.push(occupied.map((row) => row.id));
+                return occupied.length >= 2
+                  ? { action: "wait", reason: "Capacity" }
+                  : { action: "proceed" };
+              },
+            },
+          ],
+        });
+        if (kind === "cold") {
+          const threads = await Promise.all(
+            Array.from({ length: 3 }, () =>
+              createHookedThread(harness, {
+                hostId: host.id,
+                projectId: project.id,
+              }),
+            ),
+          );
+          expect(
+            threads.filter(
+              (thread) =>
+                getThread(harness.db, thread.id)?.status === "pending",
+            ),
+          ).toHaveLength(1);
+          expect(
+            threads.flatMap((thread) => queuedRows(harness, thread.id)),
+          ).toHaveLength(1);
+        } else {
+          const threads = Array.from({ length: 3 }, (_, index) => {
+            const thread = seedThread(harness.deps, {
+              environmentId: environment.id,
+              projectId: project.id,
+              status: "idle",
+            });
+            seedThreadRuntimeState(harness.deps, {
+              environmentId: environment.id,
+              providerThreadId: `strict-provider-${index}`,
+              threadId: thread.id,
+            });
+            return thread;
+          });
+          const results = await Promise.all(
+            threads.map((thread) =>
+              acceptThreadSendRequest(harness.deps, {
+                thread,
+                payload: { input: textInput("work"), mode: "auto" },
+              }),
+            ),
+          );
+          expect(results.map((result) => result.delivery).sort()).toEqual([
+            "queued",
+            "sent",
+            "sent",
+          ]);
+        }
+        expect(seen.map((rows) => rows.length)).toEqual([0, 1, 2]);
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "releases the evaluation lock and wakes waits after preparation failure=%s",
+    async (fail) => {
+      await withTestHarness(async (harness) => {
+        const first = seedRunnableThread(harness, {
+          hostId: "strict-slow-first",
+          status: "idle",
+        });
+        const second = seedRunnableThread(harness, {
+          hostId: "strict-slow-second",
+          status: "idle",
+        });
+        const entered = createDeferredPromise<void>();
+        const release = createDeferredPromise<void>();
+        installHooks({
+          "message.dispatch": [
+            {
+              pluginId: "capacity",
+              experimental_enforcement: "strict",
+              handler: (context) => {
+                if (
+                  listRunningThreadsWithIntendedHosts(harness.deps, true)
+                    .length > 0
+                )
+                  return { action: "wait", reason: "Capacity" };
+                if (context.thread.id === first.thread.id) {
+                  vi.spyOn(
+                    harness.deps.providerRegistry,
+                    "whenRegistrationsSettled",
+                  ).mockImplementationOnce(async () => {
+                    entered.resolve();
+                    await release.promise;
+                    if (fail) throw new Error("Preparation failed");
+                  });
+                }
+                return { action: "proceed" };
+              },
+            },
+          ],
+        });
+        const sending = acceptThreadSendRequest(harness.deps, {
+          thread: first.thread,
+          payload: { input: textInput("first"), mode: "auto" },
+        });
+        try {
+          await entered.promise;
+          expect(listRunningThreads(harness.db)).toEqual([]);
+          expect(
+            listRunningThreadsWithIntendedHosts(harness.deps, true),
+          ).toEqual([
+            { id: first.thread.id, hostId: first.environment.hostId },
+          ]);
+          expect(
+            await acceptThreadSendRequest(harness.deps, {
+              thread: second.thread,
+              payload: { input: textInput("second"), mode: "auto" },
+            }),
+          ).toMatchObject({ delivery: "queued" });
+          if (fail) noteDispatchRequeued(second.thread.id);
+        } finally {
+          release.resolve();
+          if (fail) await expect(sending).rejects.toThrow("Preparation failed");
+          else await sending;
+        }
+        if (fail) {
+          await vi.waitFor(() =>
+            expect(
+              listQueuedThreadMessages(harness.db, second.thread.id),
+            ).toEqual([]),
+          );
+          expect(getThread(harness.db, first.thread.id)?.status).toBe("idle");
+          expect(getThread(harness.db, second.thread.id)?.status).toBe(
+            "active",
+          );
+        }
+      });
+    },
+  );
+
+  it("wakes a strict waiter when a provider command failure releases occupancy", async () => {
+    await withTestHarness(async (harness) => {
+      const occupied = seedRunnableThread(harness, {
+        hostId: "strict-command-failure-occupied",
+        status: "idle",
+      });
+      await acceptThreadSendRequest(harness.deps, {
+        thread: occupied.thread,
+        payload: { input: textInput("Occupy capacity"), mode: "auto" },
+      });
+      const command = await waitForQueuedCommand(
+        harness,
+        ({ command }) =>
+          command.type === "turn.submit" &&
+          command.threadId === occupied.thread.id,
+      );
+      const { thread: waiter } = seedRunnableThread(harness, {
+        hostId: "strict-command-failure-waiter",
+        status: "idle",
+      });
+      await queueStrictOccupancyWaiter(harness, {
+        occupiedThreadId: occupied.thread.id,
+        waiter,
+      });
+
+      await reportQueuedCommandError(harness, command, {
+        errorCode: "provider_failure",
+        errorMessage: "Provider command failed",
+      });
+
+      await vi.waitFor(() =>
+        expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
+      );
+      expect(getThread(harness.db, occupied.thread.id)?.status).toBe("error");
+      expect(queuedRows(harness, waiter.id)).toEqual([]);
+    });
+  });
+
+  it("wakes a strict waiter when provisioning failure releases occupancy", async () => {
+    await withTestHarness(async (harness) => {
+      const { environment, host, project } = seedDispatchFixture(
+        harness,
+        "strict-provisioning-failure",
+      );
+      const occupied = seedThread(harness.deps, {
+        environmentId: environment.id,
+        projectId: project.id,
+        status: "starting",
+      });
+      const waiter = seedThread(harness.deps, {
+        environmentId: environment.id,
+        projectId: project.id,
+        status: "idle",
+      });
+      seedThreadRuntimeState(harness.deps, {
+        environmentId: environment.id,
+        providerThreadId: "provider-provisioning-waiter",
+        threadId: waiter.id,
+      });
+      await queueStrictOccupancyWaiter(harness, {
+        occupiedThreadId: occupied.id,
+        waiter,
+      });
+
+      failThreadProvisioning(harness.deps, {
+        detail: "Workspace setup failed",
+        environmentId: environment.id,
+        thread: occupied,
+      });
+
+      await vi.waitFor(() =>
+        expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
+      );
+      expect(getThread(harness.db, occupied.id)?.status).toBe("error");
+      expect(
+        listRunningThreadsWithIntendedHosts(harness.deps, true),
+      ).toContainEqual({ id: waiter.id, hostId: host.id });
+    });
+  });
+
+  it("wakes a strict waiter when synthetic background completion releases occupancy", async () => {
+    await withTestHarness(async (harness) => {
+      const { environment, host, project } = seedDispatchFixture(
+        harness,
+        "strict-background-reconciliation",
+      );
+      const occupied = seedThread(harness.deps, {
+        environmentId: environment.id,
+        projectId: project.id,
+        status: "idle",
+      });
+      const task = {
+        type: "backgroundTask" as const,
+        id: "task-synthetic-release",
+        taskType: "local_workflow",
+        status: "pending" as const,
+        taskStatus: "running",
+        description: "Working",
+        skipTranscript: false,
+      };
+      seedStoredEvent(harness.deps, {
+        threadId: occupied.id,
+        environmentId: environment.id,
+        sequence: 1,
+        type: "item/started",
+        providerThreadId: "provider-background-occupied",
+        scope: threadScope(),
+        itemId: task.id,
+        itemKind: "backgroundTask",
+        data: { item: task },
+      });
+      const waiter = seedThread(harness.deps, {
+        environmentId: environment.id,
+        projectId: project.id,
+        status: "idle",
+      });
+      seedThreadRuntimeState(harness.deps, {
+        environmentId: environment.id,
+        providerThreadId: "provider-background-waiter",
+        threadId: waiter.id,
+      });
+      await queueStrictOccupancyWaiter(harness, {
+        occupiedThreadId: occupied.id,
+        waiter,
+      });
+
+      settleDanglingBackgroundTasks(harness.deps, { hostId: host.id });
+
+      await vi.waitFor(() =>
+        expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
+      );
+      expect(queuedRows(harness, waiter.id)).toEqual([]);
+      expect(
+        listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+          (row) => row.id === occupied.id,
+        ),
+      ).toBe(false);
+    });
+  });
+
+  it("bypasses requeue pacing only for the strict plugin that owns a wait", async () => {
+    await withTestHarness(async (harness) => {
+      const { thread: ordinaryWaiter } = seedRunnableThread(harness, {
+        hostId: "ordinary-paced-waiter",
+        status: "idle",
+      });
+      const { thread: strictWaiter } = seedRunnableThread(harness, {
+        hostId: "strict-unpaced-waiter",
+        status: "idle",
+      });
+      let strictReleased = false;
+      let ordinaryWaiterCalls = 0;
+      let strictWaiterCalls = 0;
+      installHooks({
+        "message.dispatch": [
+          {
+            pluginId: "ordinary",
+            handler: (context) => {
+              if (context.thread.id !== ordinaryWaiter.id)
+                return { action: "proceed" };
+              ordinaryWaiterCalls += 1;
+              return { action: "wait", reason: "Ordinary wait" };
+            },
+          },
+          {
+            pluginId: "capacity",
+            experimental_enforcement: "strict",
+            handler: (context) => {
+              if (context.thread.id !== strictWaiter.id)
+                return { action: "proceed" };
+              strictWaiterCalls += 1;
+              return strictReleased
+                ? { action: "proceed" }
+                : { action: "wait", reason: "Capacity" };
+            },
+          },
+        ],
+      });
+      await acceptThreadSendRequest(harness.deps, {
+        thread: ordinaryWaiter,
+        payload: { input: textInput("Ordinary wait"), mode: "auto" },
+      });
+      await acceptThreadSendRequest(harness.deps, {
+        thread: strictWaiter,
+        payload: { input: textInput("Strict wait"), mode: "auto" },
+      });
+      expect(onlyQueuedRow(harness, ordinaryWaiter.id).waitingOn).toMatchObject(
+        { pluginId: "ordinary" },
+      );
+      expect(onlyQueuedRow(harness, strictWaiter.id).waitingOn).toMatchObject({
+        pluginId: "capacity",
+      });
+      noteDispatchRequeued(ordinaryWaiter.id);
+      noteDispatchRequeued(strictWaiter.id);
+      strictReleased = true;
+
+      await runQueuedMessageDispatch(harness.deps, {
+        kind: "dispatch-admission-released",
+      });
+
+      expect(ordinaryWaiterCalls).toBe(1);
+      expect(strictWaiterCalls).toBe(2);
+      expect(queuedRows(harness, ordinaryWaiter.id)).toHaveLength(1);
+      expect(queuedRows(harness, strictWaiter.id)).toEqual([]);
+      expect(getThread(harness.db, strictWaiter.id)?.status).toBe("active");
+    });
+  });
+
+  it("keeps strict Send now waits while bypassing an ordinary policy for unrelated work", async () => {
+    await withTestHarness(async (harness) => {
+      const { thread } = seedRunnableThread(harness, {
+        hostId: "strict-send-now",
+        status: "idle",
+      });
+      let strictWait = true;
+      const ordinary = vi.fn(
+        () => ({ action: "wait", reason: "Ordinary wait" }) as const,
+      );
+      installHooks({
+        "message.dispatch": [
+          { pluginId: "ordinary", handler: ordinary },
+          {
+            pluginId: "capacity",
+            experimental_enforcement: "strict",
+            handler: () =>
+              strictWait
+                ? { action: "wait", reason: "Capacity" }
+                : { action: "proceed" },
+          },
+        ],
+      });
+      await acceptThreadSendRequest(harness.deps, {
+        thread,
+        payload: { input: textInput("work"), mode: "auto" },
+      });
+      const queued = onlyQueuedRow(harness, thread.id);
+      const sendNow = () =>
+        sendQueuedMessage(harness.deps, {
+          threadId: thread.id,
+          queuedMessageId: queued.id,
+          mode: "auto",
+          claimPolicy: { kind: "explicit-send" },
+        });
+      const before = turnRequests(harness, thread.id).length;
+      await expect(sendNow()).rejects.toMatchObject({
+        body: { code: "queued_message_still_waiting" },
+      });
+      expect(onlyQueuedRow(harness, thread.id).waitingOn).toMatchObject({
+        pluginId: "capacity",
+      });
+      expect(turnRequests(harness, thread.id)).toHaveLength(before);
+      strictWait = false;
+      await sendNow();
+      expect(ordinary).toHaveBeenCalledTimes(1);
+      expect(listQueuedThreadMessages(harness.db, thread.id)).toEqual([]);
+      expect(turnRequests(harness, thread.id)).toHaveLength(before + 1);
+    });
+  });
+
+  it.each(["wait", "reject"] as const)(
+    "does not reserve when another plugin votes %s",
+    async (action) => {
+      await withTestHarness(async (harness) => {
+        const { thread } = seedRunnableThread(harness, {
+          hostId: `strict-other-${action}`,
+          status: "idle",
+        });
+        installHooks({
+          "message.dispatch": [
+            {
+              pluginId: "capacity",
+              experimental_enforcement: "strict",
+              handler: () => ({ action: "proceed" }),
+            },
+            {
+              pluginId: "other",
+              handler: () =>
+                action === "wait"
+                  ? { action, reason: "Held" }
+                  : { action, message: "Refused" },
+            },
+          ],
+        });
+        const sending = acceptThreadSendRequest(harness.deps, {
+          thread,
+          payload: { input: textInput("work"), mode: "auto" },
+        });
+        if (action === "reject")
+          await expect(sending).rejects.toMatchObject({ status: 409 });
+        else expect(await sending).toMatchObject({ delivery: "queued" });
+        expect(listRunningThreadsWithIntendedHosts(harness.deps, true)).toEqual(
+          [],
+        );
+      });
+    },
+  );
+
+  it("releases a warm reservation when command preparation fails", async () => {
+    await withTestHarness(async (harness) => {
+      const { thread } = seedRunnableThread(harness, {
+        hostId: "strict-failed-send",
+        status: "idle",
+      });
+      installHooks({
+        "message.dispatch": [
+          {
+            pluginId: "capacity",
+            experimental_enforcement: "strict",
+            handler: () => {
+              vi.spyOn(
+                harness.deps.providerRegistry,
+                "whenRegistrationsSettled",
+              ).mockRejectedValueOnce(new Error("preparation failed"));
+              return { action: "proceed" };
+            },
+          },
+        ],
+      });
+      await expect(
+        acceptThreadSendRequest(harness.deps, {
+          thread,
+          payload: { input: textInput("work"), mode: "auto" },
+        }),
+      ).rejects.toThrow("preparation failed");
+      expect(listRunningThreadsWithIntendedHosts(harness.deps, true)).toEqual(
+        [],
+      );
+      expect(getThread(harness.db, thread.id)?.status).toBe("idle");
+    });
+  });
+
+  it("releases a warm reservation when its queue claim is lost", async () => {
+    await withTestHarness(async (harness) => {
+      const { thread } = seedRunnableThread(harness, {
+        hostId: "strict-lost-claim",
+        status: "idle",
+      });
+      const queued = await createQueuedMessageForThread(harness.deps, {
+        thread,
+        payload: { input: textInput("work") },
+      });
+      installHooks({
+        "message.dispatch": [
+          {
+            pluginId: "capacity",
+            experimental_enforcement: "strict",
+            handler: () => {
+              deleteQueuedThreadMessage(harness.db, harness.hub, queued.id);
+              return { action: "proceed" };
+            },
+          },
+        ],
+      });
+      await expect(
+        sendQueuedMessage(harness.deps, {
+          threadId: thread.id,
+          queuedMessageId: queued.id,
+          mode: "auto",
+          claimPolicy: { kind: "explicit-send" },
+        }),
+      ).rejects.toMatchObject({ body: { code: "queued_message_claim_lost" } });
+      expect(listRunningThreadsWithIntendedHosts(harness.deps, true)).toEqual(
+        [],
+      );
+      expect(getThread(harness.db, thread.id)?.status).toBe("idle");
+    });
+  });
+
+  it("keeps a retry queued across hook re-registration and drains after capacity clears", async () => {
+    await withTestHarness(async (harness) => {
+      const { thread } = seedRunnableThread(harness, {
+        hostId: "strict-retry",
+        status: "idle",
+      });
+      const registry = emptyRegistry();
+      let wait = true;
+      registry["message.dispatch"].push({
+        pluginId: "capacity",
+        experimental_enforcement: "strict",
+        handler: () =>
+          wait ? { action: "wait", reason: "Capacity" } : { action: "proceed" },
+      });
+      installHooks(registry);
+      const requestId = createClientTurnRequestId();
+      await attemptDispatch(harness.deps, {
+        thread,
+        payload: { input: textInput("retry"), mode: "auto" },
+        source: { kind: "inline" },
+        queuePayload: {
+          kind: "retry",
+          retryOfTurnRequestId: requestId,
+          attempt: 2,
+          reason: "Retry",
+        },
+        pluginSubmission: null,
+        origin: null,
+        originPluginId: null,
+        startedOnBehalfOf: null,
+        trigger: "auto-dispatch",
+        retryOf: { requestId, attempt: 2 },
+      });
+      expect(onlyQueuedRow(harness, thread.id).waitingOn).toMatchObject({
+        pluginId: "capacity",
+      });
+      setPluginHookProvider(undefined);
+      installHooks(registry);
+      wait = false;
+      await runQueuedMessageDispatch(harness.deps, { kind: "plugin-recheck" });
+      expect(listQueuedThreadMessages(harness.db, thread.id)).toEqual([]);
+    });
+  });
+});
+
+it("gates manual compaction before a provider command", async () => {
+  await withTestHarness(async (harness) => {
+    const { thread } = seedRunnableThread(harness, {
+      hostId: "strict-compact",
+      status: "idle",
+    });
+    const hook = vi.fn(() => ({ action: "wait", reason: "Capacity" }) as const);
+    installHooks({
+      "message.dispatch": [
+        {
+          pluginId: "capacity",
+          experimental_enforcement: "strict",
+          handler: hook,
+        },
+      ],
+    });
+    const before = turnRequests(harness, thread.id).length;
+    const response = await harness.app.request(
+      `/api/v1/threads/${thread.id}/compact`,
+      { method: "POST" },
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "dispatch_rejected" });
+    expect(hook).toHaveBeenCalledOnce();
+    expect(turnRequests(harness, thread.id)).toHaveLength(before);
+    expect(listRunningThreadsWithIntendedHosts(harness.deps, true)).toEqual([]);
+  });
+});
+
+it("queues parent system notifications behind strict admission and preserves their taxonomy on drain", async () => {
+  await withTestHarness(async (harness) => {
+    const { thread } = seedRunnableThread(harness, {
+      hostId: "strict-notice",
+      status: "idle",
+    });
+    let wait = true;
+    installHooks({
+      "message.dispatch": [
+        {
+          pluginId: "capacity",
+          experimental_enforcement: "strict",
+          handler: (context) => {
+            expect(context.initiator).toBe("system");
+            return wait
+              ? { action: "wait", reason: "Capacity" }
+              : { action: "proceed" };
+          },
+        },
+      ],
+    });
+    const before = turnRequests(harness, thread.id).length;
+    await queueParentSystemMessage(harness.deps, {
+      parentThreadId: thread.id,
+      input: textInput("Child completed"),
+      systemMessageKind: "child-completed",
+      systemMessageSubject: null,
+    });
+    const queued = onlyQueuedRow(harness, thread.id);
+    expect(queued.waitingOn).toMatchObject({ pluginId: "capacity" });
+    await expect(
+      sendQueuedMessage(harness.deps, {
+        threadId: thread.id,
+        queuedMessageId: queued.id,
+        mode: "auto",
+        claimPolicy: { kind: "explicit-send" },
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(turnRequests(harness, thread.id)).toHaveLength(before);
+    wait = false;
+    await sendQueuedMessage(harness.deps, {
+      threadId: thread.id,
+      queuedMessageId: queued.id,
+      mode: "auto",
+      claimPolicy: { kind: "explicit-send" },
+    });
+    expect(listQueuedThreadMessages(harness.db, thread.id)).toEqual([]);
+    expect(turnRequests(harness, thread.id)).toHaveLength(before + 1);
+  });
+});
+
+it.each(["turn", "background", "goal"] as const)(
+  "wakes a recently requeued strict waiter on final %s completion",
+  async (kind) => {
+    await withTestHarness(async (harness) => {
+      const { host, session } = seedHostSession(harness.deps);
+      const { project } = seedProjectWithSource(harness.deps, {
+        hostId: host.id,
+      });
+      const environment = seedEnvironment(harness.deps, {
+        hostId: host.id,
+        projectId: project.id,
+      });
+      const occupied = seedThread(harness.deps, {
+        environmentId: environment.id,
+        projectId: project.id,
+        status: kind === "turn" ? "active" : "idle",
+      });
+      const providerThreadId = "provider-occupancy-release";
+      let completion: ThreadEvent;
+      if (kind === "turn") {
+        seedTurnStarted(harness.deps, {
+          threadId: occupied.id,
+          environmentId: environment.id,
+          providerThreadId,
+          turnId: "turn-release",
+        });
+        completion = {
+          type: "turn/completed",
+          threadId: occupied.id,
+          providerThreadId,
+          scope: turnScope("turn-release"),
+          status: "completed",
+        };
+      } else if (kind === "background") {
+        const item = {
+          type: "backgroundTask" as const,
+          id: "task-release",
+          taskType: "local_bash",
+          status: "pending" as const,
+          taskStatus: "running",
+          description: "Working",
+          skipTranscript: false,
+        };
+        seedStoredEvent(harness.deps, {
+          threadId: occupied.id,
+          sequence: 1,
+          type: "item/started",
+          providerThreadId,
+          scope: threadScope(),
+          itemId: item.id,
+          itemKind: "backgroundTask",
+          data: { item },
+        });
+        completion = {
+          type: "item/backgroundTask/completed",
+          threadId: occupied.id,
+          providerThreadId,
+          scope: threadScope(),
+          item: { ...item, status: "completed", taskStatus: "completed" },
+        };
+      } else {
+        const payload = {
+          objective: "Work",
+          status: "active",
+          tokenBudget: 1000,
+          tokensUsed: 10,
+          timeUsedSeconds: 1,
+        };
+        seedStoredEvent(harness.deps, {
+          threadId: occupied.id,
+          sequence: 1,
+          type: "thread/extensionState/updated",
+          providerThreadId,
+          scope: threadScope(),
+          data: { kind: LEGACY_CODEX_GOAL_EXTENSION_KIND, payload },
+        });
+        completion = {
+          type: "thread/extensionState/updated",
+          threadId: occupied.id,
+          providerThreadId,
+          scope: threadScope(),
+          kind: LEGACY_CODEX_GOAL_EXTENSION_KIND,
+          payload: { ...payload, status: "complete" },
+        };
+      }
+      const waiter = seedThread(harness.deps, {
+        environmentId: environment.id,
+        projectId: project.id,
+        status: "idle",
+      });
+      seedThreadRuntimeState(harness.deps, {
+        environmentId: environment.id,
+        providerThreadId: "provider-waiter",
+        threadId: waiter.id,
+      });
+      installHooks({
+        "message.dispatch": [
+          {
+            pluginId: "capacity",
+            experimental_enforcement: "strict",
+            handler: () =>
+              listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+                (row) => row.id === occupied.id,
+              )
+                ? { action: "wait", reason: "Occupied" }
+                : { action: "proceed" },
+          },
+        ],
+      });
+      await acceptThreadSendRequest(harness.deps, {
+        thread: waiter,
+        payload: { input: textInput("Wait for capacity"), mode: "auto" },
+      });
+      await runQueuedMessageDispatch(harness.deps, { kind: "plugin-recheck" });
+      expect(queuedRows(harness, waiter.id)).toHaveLength(1);
+      noteDispatchRequeued(waiter.id);
+      const response = await harness.app.request("/internal/session/events", {
+        method: "POST",
+        headers: internalAuthHeaders(harness),
+        body: JSON.stringify({
+          sessionId: session.id,
+          eventGroups: groupHostDaemonEvents([
+            { threadId: occupied.id, event: completion },
+          ]),
+        }),
+      });
+      expect(response.status).toBe(200);
+      await vi.waitFor(() =>
+        expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
+      );
+      expect(queuedRows(harness, waiter.id)).toEqual([]);
+      expect(
+        listQueuedThreadCommands(harness, "turn.submit", waiter.id),
+      ).toHaveLength(1);
+    });
+  },
+);

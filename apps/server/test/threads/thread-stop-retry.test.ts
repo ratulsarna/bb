@@ -1,7 +1,17 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { getThread, listEvents, markThreadDeleted } from "@bb/db";
+import { eq } from "drizzle-orm";
+import {
+  environments,
+  getThread,
+  listEvents,
+  markThreadDeleted,
+} from "@bb/db";
 import type { EnvironmentRow } from "@bb/db";
-import type { Thread } from "@bb/domain";
+import {
+  LEGACY_CODEX_GOAL_EXTENSION_KIND,
+  threadScope,
+  type Thread,
+} from "@bb/domain";
 import { describe, expect, it } from "vitest";
 import {
   finalizeStoppedThread,
@@ -19,10 +29,12 @@ import {
   seedEnvironment,
   seedHostSession,
   seedProjectWithSource,
+  seedStoredEvent,
   seedThread,
   seedTurnStarted,
 } from "../helpers/seed.js";
 import { withTestHarness, type TestAppHarness } from "../helpers/test-app.js";
+import { listRunningThreadsWithIntendedHosts } from "../../src/services/threads/dispatch-attempt.js";
 
 interface ActiveThreadStopFixture {
   environment: EnvironmentRow;
@@ -134,6 +146,67 @@ describe("thread stop dispatch", () => {
       expect(
         listQueuedThreadCommands(harness, "thread.storage.delete", thread.id),
       ).toHaveLength(0);
+    });
+  });
+
+  it("releases retained goal occupancy after environmentless storage deletion", async () => {
+    await withTestHarness(async (harness) => {
+      const { host } = seedHostSession(harness.deps, {
+        id: "host-environmentless-storage-delete",
+      });
+      const { project } = seedProjectWithSource(harness.deps, {
+        hostId: host.id,
+      });
+      const thread = seedThread(harness.deps, {
+        environmentId: null,
+        projectId: project.id,
+        status: "idle",
+      });
+      const cleanupEnvironment = seedEnvironment(harness.deps, {
+        hostId: host.id,
+        projectId: project.id,
+        status: "error",
+      });
+      harness.db
+        .update(environments)
+        .set({ ownerThreadId: thread.id, teardownStatus: "running" })
+        .where(eq(environments.id, cleanupEnvironment.id))
+        .run();
+      seedStoredEvent(harness.deps, {
+        threadId: thread.id,
+        sequence: 1,
+        type: "thread/extensionState/updated",
+        providerThreadId: "provider-retained-goal",
+        scope: threadScope(),
+        data: {
+          kind: LEGACY_CODEX_GOAL_EXTENSION_KIND,
+          payload: {
+            objective: "Retained work",
+            status: "active",
+            tokenBudget: 1_000,
+            tokensUsed: 100,
+            timeUsedSeconds: 1,
+          },
+        },
+      });
+      markThreadDeleted(harness.db, harness.hub, { threadId: thread.id });
+      expect(
+        listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+          (row) => row.id === thread.id,
+        ),
+      ).toBe(true);
+
+      requestThreadStorageDeletion(harness.deps, thread, null);
+
+      expect(getThread(harness.db, thread.id)).toMatchObject({
+        deletedAt: expect.any(Number),
+        storageDeletedAt: expect.any(Number),
+      });
+      expect(
+        listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+          (row) => row.id === thread.id,
+        ),
+      ).toBe(false);
     });
   });
 

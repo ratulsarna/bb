@@ -4,6 +4,7 @@ import { errorMessage } from "../lib/error-log-fields.js";
 /** One plugin's handler for one hook. */
 export interface PluginHookRegistration<K extends PluginHookName> {
   pluginId: string;
+  experimental_enforcement?: "strict";
   handler: PluginHookHandler<K>;
 }
 

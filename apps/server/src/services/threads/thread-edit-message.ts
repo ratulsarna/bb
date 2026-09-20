@@ -1,3 +1,4 @@
+import { withStrictDispatchAdmission } from "./dispatch-operation.js";
 import { createHash, randomUUID } from "node:crypto";
 import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
 import {
@@ -445,7 +446,23 @@ export async function editThreadMessage(
       requestSequence: committed.requestSequence,
     };
   }
-  if (deps.pendingInteractions.hasTurnBoundPendingThreadInteraction(args.thread.id)) {
+  return withStrictDispatchAdmission(
+    deps,
+    { thread: args.thread, payload: { ...args.payload, mode: "start" } },
+    () => editAdmittedThreadMessage(deps, args, fingerprint),
+  );
+}
+
+async function editAdmittedThreadMessage(
+  deps: LoggedPendingInteractionWorkSessionDeps,
+  args: Parameters<typeof editThreadMessage>[1],
+  fingerprint: string,
+): Promise<EditMessageResponse> {
+  if (
+    deps.pendingInteractions.hasTurnBoundPendingThreadInteraction(
+      args.thread.id,
+    )
+  ) {
     conflict("Resolve the pending interaction before editing the message");
   }
   if (hasQueuedThreadMessages(deps.db, args.thread.id)) {
@@ -549,6 +566,7 @@ export async function editThreadMessage(
   } = args.payload;
   try {
     await sendThreadMessage(deps, {
+      dispatchAdmissionChecked: true,
       beforeAppendInTransaction: ({ tx }) => {
         if (getActivePendingInteractionForThread(tx, editableThread.id)) {
           conflict(

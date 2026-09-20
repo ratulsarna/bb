@@ -261,3 +261,57 @@ describe("public thread plugin metadata routes", () => {
     });
   });
 });
+
+it("allows explicit deleted ancestry reads without permitting mutation or changing default visibility", async () => {
+  await withTestHarness(async (harness) => {
+    const thread = seedMetadataThread(harness);
+    await patchMetadata(harness, thread.id, {
+      pluginId: "capacity",
+      set: { taskId: "task" },
+    });
+    markThreadDeleted(harness.db, harness.hub, { threadId: thread.id });
+    expect(
+      (await harness.app.request(`/api/v1/threads/${thread.id}`)).status,
+    ).toBe(404);
+    expect((await getMetadata(harness, thread.id, "capacity")).status).toBe(
+      404,
+    );
+    const readable = await harness.app.request(
+      `/api/v1/threads/${thread.id}?experimental_includeDeleted=true`,
+    );
+    expect(readable.status).toBe(200);
+    expect(await readJson(readable)).toMatchObject({
+      id: thread.id,
+      projectId: thread.projectId,
+      parentThreadId: null,
+      deletedAt: expect.any(Number),
+    });
+    const metadata = await harness.app.request(
+      `/api/v1/threads/${thread.id}/plugin-metadata?pluginId=capacity&experimental_includeDeleted=true`,
+    );
+    expect(metadata.status).toBe(200);
+    expect(await readJson(metadata)).toEqual({ taskId: "task" });
+    expect(
+      (
+        await patchMetadata(harness, thread.id, {
+          pluginId: "capacity",
+          set: { taskId: "changed" },
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await harness.app.request(
+          `/api/v1/threads/${thread.id}?experimental_includeDeleted=false`,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await harness.app.request(
+          `/api/v1/threads/missing?experimental_includeDeleted=true`,
+        )
+      ).status,
+    ).toBe(404);
+  });
+});

@@ -84,3 +84,23 @@ describe("thread plugin metadata transport", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 });
+
+it("sends explicit occupancy and deleted ancestry options without changing defaults", async () => {
+  const { requests, sdk } = createRecordingSdk();
+  await sdk.threads.listRunning();
+  await sdk.threads.listRunning({
+    experimental_includeDispatchOccupancy: true,
+  });
+  await sdk.threads.get({ threadId: "t", experimental_includeDeleted: true });
+  await sdk.threads.getPluginMetadata({
+    threadId: "t",
+    pluginId: "p",
+    experimental_includeDeleted: true,
+  });
+  expect(requests.map((request) => request.url)).toEqual([
+    "http://bb.test/api/v1/threads/running",
+    "http://bb.test/api/v1/threads/running?experimental_includeDispatchOccupancy=true",
+    "http://bb.test/api/v1/threads/t?experimental_includeDeleted=true",
+    "http://bb.test/api/v1/threads/t/plugin-metadata?pluginId=p&experimental_includeDeleted=true",
+  ]);
+});

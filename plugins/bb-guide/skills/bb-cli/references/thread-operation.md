@@ -52,7 +52,7 @@
   `interaction`, or `plugin` (which also carries `pluginId` and a human reason).
 - Inspect and act on queued dispatches with `bb thread queue list [<thread-id>]
 [--wait-holder plugin:<plugin-id>]`, `bb thread queue send <thread-id>
-<message-id>` (send it now, bypassing every plugin wait and its schedule), and
+<message-id>` (send it now, bypassing ordinary plugin waits and its schedule; strict admission still applies), and
   `bb thread queue delete <thread-id> <message-id>` (discard it). Omitting the
   thread lists every queued row in the workspace. The list shows `Waiting on`
   and `Send at` columns. Several queued rows on one thread are normal. The SDK
@@ -60,7 +60,7 @@
   `threads.queuedMessages.list/send/update/delete` (one thread).
 - `bb thread queue send <thread-id> <message-id> --mode steer` re-attempts the
   row as a steer with the same send-now behavior: it bypasses the row's schedule
-  and plugin waits, while core waits still apply. During provisioning it reports
+  and ordinary plugin waits, while strict admission and core waits still apply. During provisioning it reports
   that the row is still queued and leaves it waiting for the workspace.
 - Queueing writes nothing to the timeline: a queued message reaches the thread
   log only once it dispatches. Ask the queue instead. In the app the same fact

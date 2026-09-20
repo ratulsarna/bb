@@ -1,3 +1,9 @@
+import { StrictDispatchWaitError } from "./dispatch-operation.js";
+import {
+  dispatchWaitReasonForPass,
+  noteDispatchRequeued,
+} from "./dispatch-hooks.js";
+import { recordQueuedMessageWait } from "./queue-waits.js";
 import {
   claimNextQueuedThreadMessageGroup,
   claimQueuedThreadMessageGroup,
@@ -633,12 +639,49 @@ async function sendClaimedSystemNotice(
     JSON.parse(lead.systemNotice),
   );
   const queuedMessage = toThreadQueuedMessage(lead);
-  const delivered = await deliverParentSystemMessage(deps, {
-    input: queuedMessage.content,
-    parentThread: args.thread,
-    systemMessageKind: notice.kind,
-    systemMessageSubject: notice.subject,
-  });
+  let delivered: boolean;
+  try {
+    delivered = await deliverParentSystemMessage(deps, {
+      input: queuedMessage.content,
+      parentThread: args.thread,
+      systemMessageKind: notice.kind,
+      systemMessageSubject: notice.subject,
+    });
+  } catch (error) {
+    if (!(error instanceof StrictDispatchWaitError)) throw error;
+    const execution = await buildExecutionOptions(deps, queuedMessage, {
+      threadId: args.thread.id,
+    });
+    const waiting = recordQueuedMessageWait(deps, {
+      thread: args.thread,
+      claimed: args.queuedMessages,
+      waitingOn: {
+        kind: "plugin",
+        pluginId: error.outcome.waiter.pluginId,
+        reason: dispatchWaitReasonForPass(error.outcome),
+      },
+      sendAt: error.outcome.waiter.sendAt,
+      message: {
+        input: queuedMessage.content,
+        execution,
+        senderThreadId: null,
+        origin: null,
+        originPluginId: null,
+        requestedBy: null,
+        payload: queuedMessage.payload,
+        systemNotice: notice,
+      },
+    });
+    if (waiting === null) throw createQueuedMessageClaimLostError();
+    noteDispatchRequeued(args.thread.id);
+    if (args.sendNow)
+      throw new ApiError(
+        409,
+        "queued_message_still_waiting",
+        dispatchWaitReasonForPass(error.outcome),
+      );
+    return waiting;
+  }
   if (!delivered) {
     // The thread changed under the drain. Leave the row claimed-and-released
     // by the caller's error path rather than consuming a notice nobody got.
@@ -726,15 +769,6 @@ async function sendClaimedQueuedMessageForThread(
     outcome.kind === "queued" &&
     outcome.entry.waitingOn?.kind !== "stopping"
   ) {
-    // "Send now" overrides every plugin wait and the row's own schedule, but
-    // not a core wait — those guard invariants rather than express a policy.
-    // The row is back on the queue with its new reason; say so rather than
-    // returning a success the caller would read as "it went".
-    //
-    // `stopping` is the one core wait Send-now does clear, because pressing it
-    // is what clears it: the row leaves the manual-stop pause behind and
-    // dispatches when the stop lands. Refusing would leave the user no way to
-    // express that intent until the stop finished.
     throw new ApiError(
       409,
       "queued_message_still_waiting",

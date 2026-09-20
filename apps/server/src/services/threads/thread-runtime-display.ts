@@ -363,6 +363,22 @@ export function toThreadResponseFromThread(
   };
 }
 
+export function listThreadsWithActiveGoals(
+  deps: Pick<ThreadPromptBannerDeps, "db">,
+): string[] {
+  return listLatestThreadStateEventRowsByThreadIds(deps.db, {
+    kind: LEGACY_CODEX_GOAL_EXTENSION_KIND,
+    status: "active",
+    excludeStopped: true,
+  })
+    .filter(
+      (row) =>
+        extractThreadTimelineGoal([toThreadEventWithMeta(row)])?.status ===
+        "active",
+    )
+    .map((row) => row.threadId);
+}
+
 function getThreadPromptBannerActivityState(
   deps: ThreadPromptBannerDeps,
   thread: Thread,

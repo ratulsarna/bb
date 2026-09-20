@@ -31,6 +31,7 @@ import {
   type ThreadProvisionContext,
 } from "./thread-startup-store.js";
 import { applyLoggedThreadLifecycleEvent } from "./lifecycle-outcome.js";
+import { requestDispatchAdmissionReleased } from "./dispatch-admission.js";
 
 export type ThreadProvisioningDeps = CommandResultSideEffectsDeps;
 interface EnsureWorkspaceReadyEventArgs {
@@ -142,10 +143,13 @@ export function failThreadProvisioning(
     detail: args.detail,
     scope: threadScope(),
   });
-  applyLoggedThreadLifecycleEvent(deps, {
+  const outcome = applyLoggedThreadLifecycleEvent(deps, {
     event: { type: "run.failed" },
     threadId: args.thread.id,
   });
+  if (outcome.applied) {
+    requestDispatchAdmissionReleased(deps);
+  }
 }
 
 export async function ensureThreadProvisionEnvironmentReady(

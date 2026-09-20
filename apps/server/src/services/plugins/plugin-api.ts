@@ -256,6 +256,7 @@ export interface PluginApiHandle {
   threadEventHandlers: PluginThreadEventHandlers;
   /** Hook handlers recorded by `bb.experimental_hooks.on`. */
   hooks: PluginHookRecords;
+  strictHooks: Set<PluginHookName>;
   environmentCompositions: Map<string, NormalizedPluginEnvironmentComposition>;
   environmentProviders: Map<string, NormalizedPluginEnvironmentProvider>;
   machineProviders: Map<string, NormalizedPluginMachineProvider>;
@@ -1117,8 +1118,9 @@ export function createPluginApi(options: {
     },
   };
 
+  const strictHooks = new Set<PluginHookName>();
   const experimental_hooks: PluginHooks = {
-    on(hook, handler) {
+    on(hook, handler, options) {
       assertLive();
       if (hooks[hook] !== null) {
         // Two handlers from one plugin for one hook would make the order
@@ -1126,7 +1128,14 @@ export function createPluginApi(options: {
         // silently keeping one.
         throw new Error(pluginHookAlreadyRegisteredMessage(hook));
       }
+      if (
+        options?.experimental_enforcement !== undefined &&
+        options.experimental_enforcement !== "strict"
+      ) {
+        throw new Error("Invalid dispatch hook enforcement");
+      }
       storePluginHook(hooks, hook, handler);
+      if (options?.experimental_enforcement === "strict") strictHooks.add(hook);
     },
     async recheck(hook) {
       assertLive();
@@ -1348,6 +1357,7 @@ export function createPluginApi(options: {
     databaseHandles,
     threadEventHandlers,
     hooks,
+    strictHooks,
     environmentCompositions,
     environmentProviders,
     machineProviders,

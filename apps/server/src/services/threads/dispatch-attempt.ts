@@ -1,3 +1,7 @@
+import {
+  listDispatchAdmissions,
+  reserveDispatchAdmission,
+} from "./dispatch-admission.js";
 import { requestQueuedMachineReadiness } from "./queued-message-dispatch.js";
 import {
   cancelPreparingMachinePause,
@@ -9,6 +13,7 @@ import {
   getThread,
   isThreadQueueAutoSendPaused,
   listRunningThreads,
+  listActiveBackgroundTaskCountsByThreadIds,
   type ClaimedQueuedThreadMessageRow,
   type RunningThreadRow,
 } from "@bb/db";
@@ -44,8 +49,8 @@ import {
   dispatchWaitReasonForPass,
   hasMessageDispatchHooks,
   noteDispatchRequeued,
+  resolveDispatchAttemptKind,
   runMessageDispatchHookPass,
-  type DispatchAttemptKind,
 } from "./dispatch-hooks.js";
 import {
   createQueuedMessageAutoSendPausedError,
@@ -73,6 +78,7 @@ import {
 import {
   buildThreadStatusChangeMetadata,
   toThreadResponseFromThread,
+  listThreadsWithActiveGoals,
 } from "./thread-runtime-display.js";
 import { toThreadQueuedMessage } from "./thread-queued-messages.js";
 import { isPreStartThreadStatus } from "./thread-status.js";
@@ -183,8 +189,29 @@ export function intendedThreadHostId(
  */
 export function listRunningThreadsWithIntendedHosts(
   deps: Pick<LoggedPendingInteractionWorkSessionDeps, "db">,
+  includeDispatchOccupancy = false,
 ): RunningThreadRow[] {
-  return listRunningThreads(deps.db).map((row) =>
+  const reservations = includeDispatchOccupancy
+    ? listDispatchAdmissions(deps.db)
+    : [];
+  const rows = listRunningThreads(
+    deps.db,
+    includeDispatchOccupancy
+      ? {
+          includeDispatchOccupancy: true,
+          additionalThreadIds: [
+            ...listActiveBackgroundTaskCountsByThreadIds(deps.db, {
+              includeSkippedTranscript: true,
+            }).map((row) => row.threadId),
+            ...listThreadsWithActiveGoals(deps),
+          ],
+        }
+      : {},
+  );
+  const occupied = new Map(rows.map((row) => [row.id, row]));
+  for (const reservation of reservations)
+    occupied.set(reservation.id, reservation);
+  return [...occupied.values()].map((row) =>
     row.hostId !== null
       ? row
       : { ...row, hostId: intendedThreadHostId(deps, row.id) },
@@ -241,25 +268,6 @@ export type DispatchAttemptOutcome =
   | { kind: "queued"; entry: ThreadQueuedMessage };
 
 /**
- * Whether this attempt starts a turn or joins one that is already running.
- *
- * Read off the thread's live status and the message's own delivery mode, which
- * is exactly what makes "steers are hooked uniformly" implementable: the same
- * message is a `join-turn` attempt against a running thread and a `start-turn`
- * attempt against an idle one, and it is the drain firing at the right moment
- * — not a separate code path — that decides which.
- */
-export function resolveDispatchAttemptKind(
-  thread: Thread,
-  mode: SendMessageRequest["mode"],
-): DispatchAttemptKind {
-  if (thread.status !== "active") return "start-turn";
-  return mode === "steer" || mode === "steer-if-active" || mode === "auto"
-    ? "join-turn"
-    : "start-turn";
-}
-
-/**
  * THE dispatch checkpoint.
  *
  * Every message on its way to a provider passes through here exactly once per
@@ -291,6 +299,27 @@ async function runDispatchAttempt(
   deps: LoggedPendingInteractionWorkSessionDeps,
   args: DispatchAttemptArgs,
   reattempted: boolean,
+): Promise<DispatchAttemptOutcome> {
+  let releaseAdmission: (() => void) | undefined;
+  try {
+    return await runDispatchAttemptWithAdmission(
+      deps,
+      args,
+      reattempted,
+      (row) => {
+        releaseAdmission = reserveDispatchAdmission(deps, row);
+      },
+    );
+  } finally {
+    releaseAdmission?.();
+  }
+}
+
+async function runDispatchAttemptWithAdmission(
+  deps: LoggedPendingInteractionWorkSessionDeps,
+  args: DispatchAttemptArgs,
+  reattempted: boolean,
+  reserve: (row: RunningThreadRow) => void,
 ): Promise<DispatchAttemptOutcome> {
   const { payload, thread } = args;
   // A stopping thread is writable HERE and nowhere upstream: the checkpoint
@@ -494,6 +523,7 @@ async function runDispatchAttempt(
       admitted.value = await admitPendingThread(deps, {
         claimed,
         payload: resolvedPayload,
+        execution,
         respectManualStopPause,
         startContext: args.startContext ?? retryStartContext,
         thread,
@@ -503,11 +533,22 @@ async function runDispatchAttempt(
         continued.reattemptThread = current;
       }
     }
+    if (
+      hasMessageDispatchHooks(true) &&
+      continued.outcome === null &&
+      continued.reattemptThread === null
+    ) {
+      reserve({
+        id: thread.id,
+        hostId: dispatchHost?.id ?? intendedThreadHostId(deps, thread.id),
+      });
+    }
   };
 
-  if (!sendNow && hasMessageDispatchHooks()) {
+  if (hasMessageDispatchHooks(sendNow)) {
     const outcome = await runMessageDispatchHookPass(deps, {
       thread,
+      strictOnly: sendNow,
       threadResponse: toThreadResponseFromThread(deps, { thread }),
       project: requirePublicProject(deps.db, thread.projectId),
       environmentId: thread.environmentId,
@@ -588,6 +629,7 @@ async function runDispatchAttempt(
   const environment = await requireThreadCommandEnvironment(deps, { thread });
   try {
     await sendThreadMessage(deps, {
+      dispatchAdmissionChecked: true,
       environment,
       payload: resolvedPayload,
       thread,
@@ -672,6 +714,7 @@ interface AdmitPendingThreadArgs {
   claimed: ClaimedQueuedThreadMessageRow[] | null;
   payload: SendMessageRequest & { inputGroups?: PromptInput[][] };
   respectManualStopPause: boolean;
+  execution: ResolvedThreadExecutionOptions;
   /** Creation's own record; null on a re-attempt, which reads it back. */
   startContext: PendingThreadStartContext | null;
   thread: Thread;
@@ -725,9 +768,7 @@ async function admitPendingThread(
       `Thread ${args.thread.id} is pending but has no start context to dispatch`,
     );
   }
-  const execution = await buildExecutionOptions(deps, args.payload, {
-    threadId: args.thread.id,
-  });
+  const execution = args.execution;
   const claimedRow = args.claimed?.[0] ?? null;
   let startingThread: Thread;
   try {

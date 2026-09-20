@@ -1,4 +1,9 @@
 import {
+  StrictDispatchWaitError,
+  withStrictDispatchAdmission,
+} from "./dispatch-operation.js";
+import { dispatchWaitReasonForPass } from "./dispatch-hooks.js";
+import {
   getEnvironment,
   getThread,
   requireThreadLifecycleEventApplied,
@@ -12,6 +17,7 @@ import type {
   SystemMessageKind,
   SystemMessageSubject,
   Thread,
+  QueuedMessageWaitingOn,
 } from "@bb/domain";
 import type { HostDaemonCommand } from "@bb/host-daemon-contract";
 import type { LoggedPendingInteractionWorkSessionDeps } from "../../types.js";
@@ -433,7 +439,13 @@ export async function queueParentSystemMessage(
     return false;
   }
   const hasPendingInteraction =
-    deps.pendingInteractions.hasTurnBoundPendingThreadInteraction(parentThread.id);
+    deps.pendingInteractions.hasTurnBoundPendingThreadInteraction(
+      parentThread.id,
+    );
+  let waitingOn: QueuedMessageWaitingOn = {
+    kind: hasPendingInteraction ? "interaction" : "thread-busy",
+  };
+  let sendAt: number | null = null;
   if (!hasPendingInteraction) {
     try {
       return await deliverParentSystemMessage(deps, {
@@ -443,7 +455,15 @@ export async function queueParentSystemMessage(
         systemMessageSubject: args.systemMessageSubject,
       });
     } catch (error) {
-      if (!(error instanceof ThreadContextClearInProgressError)) throw error;
+      if (error instanceof StrictDispatchWaitError) {
+        waitingOn = {
+          kind: "plugin",
+          pluginId: error.outcome.waiter.pluginId,
+          reason: dispatchWaitReasonForPass(error.outcome),
+        };
+        sendAt = error.outcome.waiter.sendAt;
+      } else if (!(error instanceof ThreadContextClearInProgressError))
+        throw error;
     }
   }
 
@@ -464,15 +484,15 @@ export async function queueParentSystemMessage(
     reasoningLevel: execution.reasoningLevel,
     permissionMode: execution.permissionMode,
     serviceTier: execution.serviceTier,
-    waitingOn: { kind: hasPendingInteraction ? "interaction" : "thread-busy" },
-    sendAt: null,
+    waitingOn,
+    sendAt,
     payload: { kind: "inline" },
     systemNotice: {
       kind: args.systemMessageKind,
       subject: args.systemMessageSubject,
     },
   });
-  if (!hasPendingInteraction) {
+  if (!hasPendingInteraction && waitingOn.kind !== "plugin") {
     requestQueuedMessageDispatch(deps, {
       kind: "thread-ready",
       threadId: parentThread.id,
@@ -498,8 +518,17 @@ export async function deliverParentSystemMessage(
   deps: LoggedPendingInteractionWorkSessionDeps,
   args: DeliverParentSystemMessageArgs,
 ): Promise<boolean> {
-  return withThreadSendGuard(args.parentThread.id, () =>
-    deliverParentSystemMessageWithContextGuard(deps, args),
+  return withStrictDispatchAdmission(
+    deps,
+    {
+      thread: args.parentThread,
+      payload: { input: args.input, mode: "auto" },
+      initiator: "system",
+    },
+    () =>
+      withThreadSendGuard(args.parentThread.id, () =>
+        deliverParentSystemMessageWithContextGuard(deps, args),
+      ),
   );
 }
 

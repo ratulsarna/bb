@@ -273,11 +273,18 @@ export async function runServer(serverConfig: ServerConfig): Promise<void> {
   );
   disconnectImportedDaemonSessions(
     {
+      aiServices,
+      config: runtimeConfig,
       db,
       hub,
+      lifecycleDedupers,
       logger,
+      machineAuth,
       pendingInteractions,
+      pluginHostArtifacts,
       providerRegistry,
+      skillTreeRegistry,
+      telemetry,
       terminalSessions,
     },
     { sessions: serverImport.importedDaemonSessions },
