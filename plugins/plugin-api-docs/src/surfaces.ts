@@ -883,7 +883,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
           'Register on("message.dispatch", handler, { experimental_enforcement: "strict" }) to enforce admission for Send now, manual compaction, edited resends, and parent system notifications; compact/edit waits return 409 before provider effects',
           "Count sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true }) to include atomic admissions, stopping threads, unfinished background agents, commands, workflows, and active native goals between turns; archived/deleted runtimes count until work stops; defaults remain starting/active live threads",
           "Read retained deleted ancestry through threads.get and threads.getPluginMetadata with experimental_includeDeleted: true; default reads and mutations retain their deleted-thread restrictions",
-          "Require engines.bbPluginSdk >=0.4.107 for strict enforcement; release notifications wake the existing queue, and plugin condition changes use recheck",
+          "Require engines.bbPluginSdk >=0.5.31 for strict enforcement; release notifications wake the existing queue, and plugin condition changes use recheck",
           "See the thread, project, machine, prompt and resolved execution tuple before the turn runs",
           "Read each queued message, its author, origin, and originPluginId in queuedMessages, with an empty array for inline attempts",
           "Read the shared initiator category or mixed for a grouped dispatch, and the shared senderThreadId, null when nobody sent it, or mixed",

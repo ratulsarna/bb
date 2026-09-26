@@ -445,7 +445,7 @@ preparation and claim failures release it and wake the existing queue. Queue
 claims and recorded lifecycle/activity support restart recovery. Plugins own
 membership and counting rules; core defines no task IDs or numerical limits.
 
-Plugins relying on strict enforcement must require `engines.bbPluginSdk: ">=0.4.107"`.
+Plugins relying on strict enforcement must require `engines.bbPluginSdk: ">=0.5.31"`.
 Older SDKs do not interpret the registration or occupancy options.
 
 **Audit before stabilizing.** Exercise mixed ordinary/strict policies, concurrent
