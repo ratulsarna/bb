@@ -183,7 +183,7 @@ export function useEnvironmentPullRequest(
         signal,
       }),
     enabled,
-    refetchOnMount: true,
+    refetchOnMount: "always",
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
       getEnvironmentPullRequestRefetchInterval(
