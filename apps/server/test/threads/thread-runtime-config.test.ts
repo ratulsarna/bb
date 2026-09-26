@@ -18,10 +18,7 @@ import type { DiscoveredSkill } from "@bb/host-daemon-contract";
 import { setPluginAgentContributions } from "../../src/services/plugins/plugin-agent-contributions.js";
 import { readSkillTreeManifest } from "../../src/services/skills/injected-skills.js";
 import type { PluginAgentToolContribution } from "../../src/services/plugins/plugin-service.js";
-import {
-  resolvePermissionEscalation,
-  resolveThreadRuntimeCommandConfig,
-} from "../../src/services/threads/thread-runtime-config.js";
+import { resolveThreadRuntimeCommandConfig } from "../../src/services/threads/thread-runtime-config.js";
 import {
   buildExecutionOptions,
   buildThreadStartCommand,
@@ -289,25 +286,9 @@ describe("thread runtime config", () => {
         command: "grok",
         args: ["agent", "stdio"],
         env: {},
-        modelCli: {
-          listArgs: ["models"],
-          selectFlag: "--model",
-          primaryModels: ["grok-4.5", "grok-composer-2.5-fast"],
-        },
         permissionCli: {
           full: ["--always-approve"],
           insertAfterArgs: 1,
-        },
-        reasoningCli: {
-          flag: "--reasoning-effort",
-          supportedLevels: ["low", "medium", "high"],
-          levelValues: {
-            none: "low",
-            xhigh: "high",
-            ultracode: "high",
-            max: "high",
-          },
-          defaultLevel: "high",
         },
       },
       providerId: "acp-grok",
@@ -570,6 +551,65 @@ describe("thread runtime config", () => {
       expect(execution.permissionMode).toBe("accept-edits");
     });
   });
+
+  it.each([
+    { providerId: "pi", model: "openai/codex-mini", modeSource: "default" },
+    { providerId: "pi", model: "openai/codex-mini", modeSource: "requested" },
+    { providerId: "pi", model: "openai/codex-mini", modeSource: "recorded" },
+    { providerId: "codex", model: "gpt-5", modeSource: "requested" },
+    { providerId: "codex", model: "gpt-5", modeSource: "recorded" },
+  ])(
+    "allows $providerId full mode from $modeSource under an auto parent",
+    async ({ providerId, model, modeSource }) => {
+      await withTestHarness(async (harness) => {
+        const { host } = seedHostSession(harness.deps, {
+          id: "host-runtime-child-full-mode",
+        });
+        const { project } = seedProjectWithSource(harness.deps, {
+          hostId: host.id,
+        });
+        const environment = seedEnvironment(harness.deps, {
+          hostId: host.id,
+          projectId: project.id,
+        });
+        const parentThread = seedThread(harness.deps, {
+          projectId: project.id,
+          environmentId: environment.id,
+        });
+        seedThreadRuntimeState(harness.deps, {
+          threadId: parentThread.id,
+          environmentId: environment.id,
+          providerThreadId: "provider-parent-auto",
+          permissionMode: "auto",
+        });
+        const childThread = seedThread(harness.deps, {
+          projectId: project.id,
+          environmentId: environment.id,
+          parentThreadId: parentThread.id,
+          providerId,
+        });
+        if (modeSource === "recorded") {
+          seedThreadRuntimeState(harness.deps, {
+            threadId: childThread.id,
+            environmentId: environment.id,
+            providerThreadId: "provider-child-full",
+            permissionMode: "full",
+          });
+        }
+
+        const execution = await buildExecutionOptions(
+          harness.deps,
+          {
+            model,
+            ...(modeSource === "requested" ? { permissionMode: "full" } : {}),
+          },
+          { threadId: childThread.id },
+        );
+
+        expect(execution.permissionMode).toBe("full");
+      });
+    },
+  );
 
   it("treats ghost parent references as root-thread execution defaults", async () => {
     await withTestHarness(async (harness) => {
@@ -1100,11 +1140,6 @@ describe("thread runtime config", () => {
       expect(oneOff.model).toBe("claude-sonnet-4-6");
       expect(oneOff.reasoningLevel).toBe("low");
     });
-  });
-
-  it("derives ask escalation only for user-initiated work", () => {
-    expect(resolvePermissionEscalation({ initiator: "user" })).toBe("ask");
-    expect(resolvePermissionEscalation({ initiator: "system" })).toBe("deny");
   });
 
   it("resolves the workspace, storage path, and environment directory dynamic tool", async () => {

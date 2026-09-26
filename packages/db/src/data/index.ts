@@ -67,8 +67,11 @@ export {
   getThreadExecutionOverride,
   hasActiveThreadAttention,
   setThreadExecutionOverride,
+  setThreadDraft,
+  getThreadDraft,
   getThreadStartupContext,
   setThreadStartupContext,
+  listExistingThreadIds,
   listHostThreadIds,
   listActiveHostThreads,
   listActiveVisiblePinnedThreadRootsWithPendingInteractionState,
@@ -81,6 +84,7 @@ export {
   lifecycleThreadTreeIdsForProject,
   listLifecycleThreadTree,
   listLifecycleThreadDependents,
+  listArchivedThreadsPendingTeardown,
   listRunningThreads,
   listThreadsWithPendingInteractionState,
   listThreadsWithPendingInteractionStateForProjects,
@@ -112,13 +116,19 @@ export type {
 } from "./threads.js";
 
 export {
+  getAiServiceSelections,
   getAppKeybindingOverrides,
   getAppSettings,
+  getPluginSafeMode,
+  setAiServiceSelection,
   setAppKeybindingOverrides,
   setAppSettings,
+  setPluginSafeMode,
 } from "./app-settings.js";
 export { getStoredThreadTabs, replaceStoredThreadTabs } from "./thread-tabs.js";
 export {
+  getStoredUiPreferenceDefault,
+  listStoredUiPreferenceDefaults,
   listStoredUiPreferences,
   overwriteStoredUiPreference,
   replaceStoredUiPreference,
@@ -246,10 +256,12 @@ export {
   getNonDestroyedHost,
   getNonDestroyedHostByLaunchKey,
   listHosts,
+  listHostsByIds,
   listNonDestroyedHostsByIds,
   listPublicHosts,
   updateHost,
 } from "./hosts.js";
+export type { HostRow } from "./hosts.js";
 
 export {
   deleteStoredProviderModelCatalogsForHost,
@@ -338,7 +350,6 @@ export {
   pruneContextWindowUsageEvents,
   pruneTokenUsageEvents,
   pruneResolvedItemDeltas,
-  pruneThreadEventsBeforeSequence,
 } from "./events.js";
 export {
   getDatabaseDataVersion,
@@ -410,16 +421,17 @@ export {
 export type { HostDaemonSessionRow } from "./sessions.js";
 
 export {
-  claimQueuedThreadMessage,
   claimQueuedThreadMessageGroup,
   claimNextQueuedThreadMessageGroup,
   clearQueuedThreadMessageWaitingOn,
   createQueuedThreadMessage,
   createQueuedThreadMessageInTransaction,
+  deleteQueuedRetriesForThreadEventSuffixInTransaction,
   deleteClaimedQueuedThreadMessageBatchInTransaction,
   deleteQueuedThreadMessage,
   getQueuedThreadMessage,
   hasQueuedRetryOfTurnRequest,
+  hasClaimedQueuedThreadMessages,
   hasQueuedThreadMessages,
   isOrdinaryTurnEndQueuedMessage,
   isThreadQueueAutoSendPaused,
@@ -431,6 +443,7 @@ export {
   listQueuedThreadMessagesForApi,
   listQueuedThreadMessagesByWaitHolder,
   listQueuedThreadMessagesWaitingOnKind,
+  listRetryableFailedQueuedThreadMessages,
   listThreadIdsWithHostOfflineQueueWaits,
   releaseQueuedMessageClaim,
   requeueClaimedQueuedThreadMessages,
@@ -453,15 +466,11 @@ export type {
 export {
   CLOSED_SESSION_ROW_RETENTION_MS,
   DEFAULT_CLOSED_SESSION_PRUNE_BATCH_SIZE,
-  DEFAULT_DESTROYED_ENVIRONMENT_EVENT_DETACH_BATCH_SIZE,
   DEFAULT_COMPLETED_EVENT_OUTPUT_MIGRATION_SCAN_LIMIT,
-  DEFAULT_DESTROYED_ENVIRONMENT_PRUNE_BATCH_SIZE,
   DEFAULT_LEGACY_IMAGE_GENERATION_MIGRATION_SCAN_LIMIT,
-  DESTROYED_ENVIRONMENT_TTL_MS,
   migrateNextCompletedEventItemOutput,
   migrateNextLegacyImageGenerationOutput,
   pruneClosedSessions,
-  pruneDestroyedEnvironments,
 } from "./sweeps.js";
 export {
   compactDatabase,

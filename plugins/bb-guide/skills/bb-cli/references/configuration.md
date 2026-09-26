@@ -25,6 +25,12 @@
 - Read `references/app-settings.md` for every general key, experiment, default,
   and effect.
 - Use `bb settings show` and `bb settings ai-services` for current values.
+- Use `bb settings ai-services set <thread-title|commit-message|voice>
+<automatic|off|service-id>` to choose which plugin AI service writes titles,
+  commit messages, or voice transcripts, and `bb settings ai-services test
+<thread-title|commit-message>` to try the current choice. Add
+  `--plugin <plugin-id>` to `set` when two plugins register the same service
+  id.
 - Use `bb settings general <key> <value>` or
   `bb settings experiment <key> <value>` for updates.
 - Use `bb settings keyboard list`, `set`, and `reset` for shortcut overrides.
@@ -166,6 +172,25 @@ Plugin host calls start immediately using the current environment while any call
 are active in that plugin worker. Changed or removed machine variables take
 effect on the next call after all active calls finish. Continuous overlapping
 calls can keep the previous values until the worker becomes idle.
+
+On macOS, right-panel tabs use `panel.previousTab` / `panel.nextTab` with
+`Command+Control+ArrowLeft` / `Command+Control+ArrowRight`. They wrap through visible
+tabs and each pane's New tab button in displayed order across the active
+chat's right-panel groups. Press Enter or Space on New tab to open the picker.
+On the selected New tab page, `panel.previousNewTabItem` /
+`panel.nextNewTabItem` use `Command+Control+ArrowUp` / `Command+Control+ArrowDown` to
+move through search, enabled actions, and recent items in displayed order.
+Search results replace actions and recents while searching. Enter activates
+the focused item.
+Chat splits use `pane.focus.left` / `right` / `up` / `down` with
+`Command+Shift+ArrowLeft` / `ArrowRight` / `ArrowUp` / `ArrowDown` on macOS. These move
+spatially to the adjacent chat pane, including stacked splits, and stop at the
+layout edge. The initially unassigned `pane.focus.previous` / `pane.focus.next`
+commands still cycle in reading order. On Windows/Linux, these arrow navigation
+commands start unassigned to preserve native Control-arrow editing shortcuts.
+Rebind any of these commands in Settings → Keyboard, via
+`bb settings keyboard set <command> <shortcut|disabled>`, or SDK
+`system.updateKeyboardSettings`; read bindings with `system.config`.
 
 Plugin commands use `plugin:<plugin-id>/<command-id>` as their stable binding
 ID. For example: `bb settings keyboard set plugin:example/open-issue Mod+Shift+I`.

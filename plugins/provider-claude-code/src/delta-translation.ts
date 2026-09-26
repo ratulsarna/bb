@@ -82,10 +82,7 @@ export interface ClaudeDeltaTranslationContext {
 }
 
 const ASSISTANT_STREAM_KEY = "assistant";
-
-function thinkingStreamChannel(contentIndex: number): string {
-  return `thinking-${contentIndex}`;
-}
+const THINKING_STREAM_KEY = "thinking";
 
 const PLAN_STEPS_CHANNEL = "planSteps";
 
@@ -382,6 +379,7 @@ interface ClaudeThreadDialectState {
   cumulativeTokens: ThreadEventTokenUsageBreakdown;
   latestRequestContextTokens: number | undefined;
   latestProviderCheckpointId: string | undefined;
+  pendingUserCheckpointId: string | undefined;
   lastModelFallback:
     | (ClaudeModelFallbackTransition & { segment: number })
     | undefined;
@@ -400,6 +398,7 @@ function createThreadState(): ClaudeThreadDialectState {
     cumulativeTokens: ZERO_TOKEN_USAGE,
     latestRequestContextTokens: undefined,
     latestProviderCheckpointId: undefined,
+    pendingUserCheckpointId: undefined,
     lastModelFallback: undefined,
     armedHardRateLimitRejection: undefined,
     selectedModelContextWindow: null,
@@ -448,7 +447,8 @@ export function createClaudeDeltaTranslator(
     state.mirror.segment += 1;
     state.mirror.pendingInputs = 0;
     state.latestRequestContextTokens = undefined;
-    state.latestProviderCheckpointId = undefined;
+    state.latestProviderCheckpointId = state.pendingUserCheckpointId;
+    state.pendingUserCheckpointId = undefined;
     state.armedHardRateLimitRejection = undefined;
     state.startedTools.clear();
   }
@@ -843,15 +843,12 @@ export function createClaudeDeltaTranslator(
       }
     }
 
-    for (const thinkingBlock of extractThinkingBlocks(message)) {
+    for (const thinking of extractThinkingBlocks(message)) {
       deltas.push({
         kind: "item.textClose",
-        key: {
-          channel: thinkingStreamChannel(thinkingBlock.contentIndex),
-          ...parentRefField,
-        },
+        key: { channel: THINKING_STREAM_KEY, ...parentRefField },
         channel: "reasoningText",
-        text: thinkingBlock.text,
+        text: thinking,
       });
     }
 
@@ -913,12 +910,9 @@ export function createClaudeDeltaTranslator(
       deltas.push({ kind: "turn.open" });
       deltas.push({
         kind: "item.textDelta",
-        key: {
-          channel: thinkingStreamChannel(reasoningDelta.contentIndex),
-          ...parentRefField,
-        },
+        key: { channel: THINKING_STREAM_KEY, ...parentRefField },
         channel: "reasoningText",
-        text: reasoningDelta.delta,
+        text: reasoningDelta,
       });
     }
 
@@ -929,7 +923,7 @@ export function createClaudeDeltaTranslator(
         kind: "item.textDelta",
         key: { channel: ASSISTANT_STREAM_KEY, ...parentRefField },
         channel: "agentMessage",
-        text: textDelta.delta,
+        text: textDelta,
       });
     }
 
@@ -947,6 +941,21 @@ export function createClaudeDeltaTranslator(
     }
     const toolResults = extractToolResults(parsedMessage.data);
     if (toolResults.length === 0) {
+      const message = parsedMessage.data;
+      if (
+        message.uuid === undefined ||
+        message.isSynthetic === true ||
+        message.parent_tool_use_id != null ||
+        context?.parentToolCallId !== undefined ||
+        (!state.mirror.turnOpen && state.mirror.pendingInputs === 0)
+      ) {
+        return [];
+      }
+      if (state.mirror.turnOpen) {
+        state.latestProviderCheckpointId ??= message.uuid;
+      } else {
+        state.pendingUserCheckpointId = message.uuid;
+      }
       return [];
     }
     if (!state.mirror.turnOpen) {
@@ -1237,15 +1246,24 @@ export function createClaudeDeltaTranslator(
       if (isTurnStartSuppressed(state)) {
         return [];
       }
-      return withMirror(state, [
-        { kind: "turn.open" },
-        {
-          kind: "provider.error",
-          message: "Provider error",
-          detail,
-          settlesTurn: true,
-        },
-      ]);
+      const deltas = withMirror(state, [{ kind: "turn.open" }]);
+      return [
+        ...deltas,
+        ...withMirror(state, [
+          {
+            kind: "provider.error",
+            message: "Provider error",
+            detail,
+          },
+          {
+            kind: "turn.boundary",
+            status: "failed",
+            ...(state.latestProviderCheckpointId !== undefined
+              ? { providerCheckpointId: state.latestProviderCheckpointId }
+              : {}),
+          },
+        ]),
+      ];
     }
 
     const envelope = jsonRpcEnvelopeSchema.safeParse(event);

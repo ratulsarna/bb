@@ -34,10 +34,16 @@ import { DAEMON_ACTIVE_WORK_DISCONNECT_GRACE_MS } from "../../constants.js";
 import type { NotificationHub } from "../../ws/hub.js";
 import { resolveProviderPlanCommand } from "../providers/provider-plan-command.js";
 import type { ProviderRegistryService } from "../providers/provider-registry.js";
-import { listQueuedThreadMessageCountsByThreadIds } from "@bb/db";
+import {
+  getThreadDraft,
+  listQueuedThreadMessageCountsByThreadIds,
+} from "@bb/db";
 import { resolveEnvironmentWorkspaceDisplayKind } from "../environments/environment-response.js";
 import { canThreadSpawnChild } from "./thread-parent.js";
+import { canRestoreThreadEnvironment } from "./thread-environment-restore.js";
+import { parseStoredThreadDraft } from "./thread-draft.js";
 import { toThreadEventWithMeta } from "./timeline.js";
+import { intendedThreadHostId } from "./dispatch-attempt.js";
 
 type ThreadRuntimeDisplayHub = Pick<
   NotificationHub,
@@ -355,11 +361,18 @@ export function toThreadResponseFromThread(
       listActiveBackgroundTaskCountsByThreadIds(deps.db, {
         threadIds: [args.thread.id],
       })[0]?.activeBackgroundAgentCount ?? 0,
+    canRestoreEnvironment: canRestoreThreadEnvironment(deps, {
+      thread: args.thread,
+    }),
     canSpawnChild: canThreadSpawnChild(deps, { thread: args.thread }),
     queuedMessageCount:
       listQueuedThreadMessageCountsByThreadIds(deps.db, {
         threadIds: [args.thread.id],
       })[0]?.queuedMessageCount ?? 0,
+    draft: parseStoredThreadDraft({
+      id: args.thread.id,
+      draft: getThreadDraft(deps.db, args.thread.id),
+    }),
   };
 }
 
@@ -584,7 +597,7 @@ export function toThreadListEntryResponses(
     args.threads,
   );
   return args.threads.map((thread) => {
-    return toThreadListEntryResponseFromLatestSession({
+    const entry = toThreadListEntryResponseFromLatestSession({
       activity: activityByThreadId.get(thread.id) ?? EMPTY_THREAD_ACTIVITY,
       queuedWork: queuedWorkByThreadId.get(thread.id) ?? "none",
       hostConnected:
@@ -597,6 +610,13 @@ export function toThreadListEntryResponses(
       now: args.now,
       thread,
     });
+    return thread.environmentHostId === null &&
+      (thread.status === "pending" || thread.status === "starting")
+      ? {
+          ...entry,
+          environmentHostId: intendedThreadHostId(deps, thread.id),
+        }
+      : entry;
   });
 }
 

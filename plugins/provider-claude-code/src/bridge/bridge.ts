@@ -6,6 +6,7 @@ import {
   type PendingInteractionPayload,
   type PermissionEscalation,
   type ReasoningLevel,
+  type ServiceTier,
   type ThreadDelta,
   BRIDGE_INBOUND_REQUEST_METHODS,
   BRIDGE_JSON_RPC_ERRORS,
@@ -54,6 +55,7 @@ import {
   type ClaudeCodeSkillRoot,
 } from "../session-params.js";
 import { SdkSession, type SdkSessionOptions } from "./sdk-session.js";
+import { MissingClaudeCliError } from "./missing-cli-error.js";
 import { createClaudeCodeBridgeModelListMemo } from "./model-list.js";
 import {
   claudeThreadForkParamsSchema,
@@ -116,6 +118,22 @@ const promptInputItemSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("text"),
     text: z.string(),
+    mentions: z
+      .array(
+        z.object({
+          start: z.number().int().nonnegative(),
+          end: z.number().int().nonnegative(),
+          resource: z
+            .object({
+              kind: z.string(),
+              trigger: z.string().optional(),
+              name: z.string().optional(),
+              source: z.string().optional(),
+            })
+            .passthrough(),
+        }),
+      )
+      .default([]),
   }),
   z.object({
     type: z.literal("image"),
@@ -259,7 +277,11 @@ interface SessionConstructionConfig {
   dynamicTools: ThreadResumeParams["dynamicTools"];
   sessionOptions: Omit<
     BuildSessionOptionsArgs,
-    "memoryEnabled" | "model" | "reasoningLevel" | "workflowsEnabled"
+    | "memoryEnabled"
+    | "model"
+    | "reasoningLevel"
+    | "serviceTier"
+    | "workflowsEnabled"
   >;
 }
 
@@ -268,6 +290,7 @@ interface ClaudeLiveSessionSettings {
   model?: string;
   providerSubagentsEnabled: boolean;
   reasoningLevel?: ReasoningLevel;
+  serviceTier: ServiceTier;
   workflowsEnabled: boolean;
 }
 
@@ -612,6 +635,7 @@ async function applyLiveSessionSettings(
   if (
     current.memoryEnabled !== next.memoryEnabled ||
     current.reasoningLevel !== next.reasoningLevel ||
+    current.serviceTier !== next.serviceTier ||
     current.workflowsEnabled !== next.workflowsEnabled
   ) {
     await threadSession.session.applyMutableSettings({
@@ -623,6 +647,7 @@ async function applyLiveSessionSettings(
         memoryEnabled: next.memoryEnabled,
         reasoningLevel: next.reasoningLevel,
         workflowsEnabled: next.workflowsEnabled,
+        serviceTier: next.serviceTier,
       }),
     });
   }
@@ -851,6 +876,7 @@ function toInitialLiveSessionSettings(
     ...(params.reasoningLevel !== undefined
       ? { reasoningLevel: params.reasoningLevel }
       : {}),
+    serviceTier: params.serviceTier,
     workflowsEnabled: params.workflowsEnabled,
   };
 }
@@ -867,6 +893,7 @@ function withTurnLiveSessionSettings(
     providerSubagentsEnabled:
       params.providerSubagentsEnabled ?? current.providerSubagentsEnabled,
     ...(reasoningLevel !== undefined ? { reasoningLevel } : {}),
+    serviceTier: params.serviceTier ?? current.serviceTier,
     workflowsEnabled: params.workflowsEnabled ?? current.workflowsEnabled,
   };
 }
@@ -1260,13 +1287,13 @@ async function getWritableThreadSession(
     return undefined;
   }
   const replacement: ClaudeSessionRestart | null = threadSession.streamEnded
-      ? {
-          reason: "Thread session replaced after Claude SDK stream ended",
-          showRuntimeNote: false,
-        }
-      : intent === "new-turn"
-        ? threadSession.restartBeforeNextTurn
-        : null;
+    ? {
+        reason: "Thread session replaced after Claude SDK stream ended",
+        showRuntimeNote: false,
+      }
+    : intent === "new-turn"
+      ? threadSession.restartBeforeNextTurn
+      : null;
   if (replacement === null) {
     return threadSession;
   }
@@ -1974,7 +2001,19 @@ async function handleRequest(request: ClaudeCodeJsonRpcRequest): Promise<void> {
       sendResult(request.id, result);
       break;
     case "model/list":
-      sendResult(request.id, await listModelsMemoized());
+      try {
+        sendResult(request.id, await listModelsMemoized());
+      } catch (error) {
+        if (error instanceof MissingClaudeCliError) {
+          sendError(
+            request.id,
+            BRIDGE_JSON_RPC_ERRORS.MISSING_EXECUTABLE,
+            error.message,
+          );
+          break;
+        }
+        throw error;
+      }
       break;
     case "provider/health":
       sendResult(request.id, await getClaudeProviderHealth());
@@ -2359,6 +2398,31 @@ function localAttachmentMarker(args: {
   return `[Attached ${args.kind}${namePart}${suffix}. It is on disk at ${args.path} — use the Read tool to view it.]`;
 }
 
+function normalizeClaudeSkillMentions(
+  entry: Extract<z.infer<typeof promptInputItemSchema>, { type: "text" }>,
+): string {
+  const replacements = new Set<number>();
+  for (const mention of entry.mentions) {
+    const resource = mention.resource;
+    if (
+      resource.kind === "command" &&
+      resource.source === "skill" &&
+      resource.trigger === "$" &&
+      typeof resource.name === "string" &&
+      mention.end <= entry.text.length &&
+      entry.text.slice(mention.start, mention.end) === `$${resource.name}`
+    ) {
+      replacements.add(mention.start);
+    }
+  }
+
+  let normalized = entry.text;
+  for (const start of replacements) {
+    normalized = `${normalized.slice(0, start)}/${normalized.slice(start + 1)}`;
+  }
+  return normalized;
+}
+
 function buildPromptText(input: unknown): string | undefined {
   if (typeof input === "string") {
     return input.length > 0 ? input : undefined;
@@ -2372,7 +2436,8 @@ function buildPromptText(input: unknown): string | undefined {
     const entry = parsed.data;
     switch (entry.type) {
       case "text":
-        if (entry.text.length > 0) chunks.push(entry.text);
+        if (entry.text.length > 0)
+          chunks.push(normalizeClaudeSkillMentions(entry));
         break;
       case "image":
         chunks.push(`[Attached image: ${entry.url}]`);

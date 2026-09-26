@@ -28,6 +28,7 @@ import Delete02Icon from "@hugeicons/core-free-icons/Delete02Icon";
 import Download01Icon from "@hugeicons/core-free-icons/Download01Icon";
 import Edit02Icon from "@hugeicons/core-free-icons/Edit02Icon";
 import FilterHorizontalIcon from "@hugeicons/core-free-icons/FilterHorizontalIcon";
+import FilterIcon from "@hugeicons/core-free-icons/FilterIcon";
 import FolderAddIcon from "@hugeicons/core-free-icons/FolderAddIcon";
 import FolderExportIcon from "@hugeicons/core-free-icons/FolderExportIcon";
 import FolderGitTwoIcon from "@hugeicons/core-free-icons/FolderGit2Icon";
@@ -109,6 +110,50 @@ const SectionAddStrokeRoundedIcon: IconSvgElement = [
   ],
 ];
 
+const SectionMoveStrokeRoundedIcon: IconSvgElement = [
+  [
+    "path",
+    {
+      d: "M2 3.4C2 2.24173 2.24173 2 3.4 2H20.6C21.7583 2 22 2.24173 22 3.4V4.6C22 5.75827 21.7583 6 20.6 6H3.4C2.24173 6 2 5.75827 2 4.6V3.4Z",
+      stroke: "currentColor",
+      strokeLinecap: "round",
+      strokeWidth: "1.5",
+      key: "0",
+    },
+  ],
+  [
+    "path",
+    {
+      d: "M2 11.4C2 10.2417 2.24173 10 3.4 10H10.6C11.7583 10 12 10.2417 12 11.4V12.6C12 13.7583 11.7583 14 10.6 14H3.4C2.24173 14 2 13.7583 2 12.6V11.4Z",
+      stroke: "currentColor",
+      strokeLinecap: "round",
+      strokeWidth: "1.5",
+      key: "1",
+    },
+  ],
+  [
+    "path",
+    {
+      d: "M2 19.4C2 18.2417 2.24173 18 3.4 18H10.6C11.7583 18 12 18.2417 12 19.4V20.6C12 21.7583 11.7583 22 10.6 22H3.4C2.24173 22 2 21.7583 2 20.6V19.4Z",
+      stroke: "currentColor",
+      strokeLinecap: "round",
+      strokeWidth: "1.5",
+      key: "2",
+    },
+  ],
+  [
+    "path",
+    {
+      d: "M14 17H22M19 14L22 17L19 20",
+      stroke: "currentColor",
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      strokeWidth: "1.5",
+      key: "3",
+    },
+  ],
+];
+
 const CORE_ICON_MAP = {
   AlertCircle: AlertCircleIcon,
   AlertTriangle: Alert02Icon,
@@ -130,6 +175,7 @@ const CORE_ICON_MAP = {
   Copy: Copy01Icon,
   Download: Download01Icon,
   Edit: Edit02Icon,
+  Filter: FilterIcon,
   FilterHorizontal: FilterHorizontalIcon,
   Folder: FolderIcon,
   FolderExport: FolderExportIcon,
@@ -149,6 +195,7 @@ const CORE_ICON_MAP = {
   PanelLeft: SidebarLeftIcon,
   Search: Search01Icon,
   SectionAdd: SectionAddStrokeRoundedIcon,
+  SectionMove: SectionMoveStrokeRoundedIcon,
   Settings: Settings01Icon,
   SlidersHorizontal: SlidersHorizontalIcon,
   Spinner: DashedLineCircleIcon,

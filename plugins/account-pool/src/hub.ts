@@ -42,9 +42,11 @@ const DEFAULT_REFRESH_URL = "https://platform.claude.com/v1/oauth/token";
 const DEFAULT_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const DEFAULT_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
 const DEFAULT_USAGE_REFRESH_INTERVAL_MS = 5 * 60 * 1_000;
+const EXHAUSTED_USAGE_REFRESH_INTERVAL_MS = 30 * 1_000;
 const MAX_INLINE_HOLD_MS = 20_000;
 const MAX_REFRESH_BACKOFF_MS = 60_000;
 const MAX_REFRESH_BACKOFFS = 1_024;
+const UPSTREAM_REJECTION_HOLD_MS = 60_000;
 const MAX_FAILURE_DETAIL_BYTES = 1_024;
 const FAILURE_DISPOSAL_TIMEOUT_MS = 250;
 const AFFINITY_IDLE_TTL_MS = 30 * 60 * 1_000;
@@ -106,7 +108,7 @@ interface UpstreamResult {
 }
 
 interface RefreshBackoff {
-  kind: "proactive" | "rejected";
+  kind: "proactive" | "rejected" | "upstream";
   accessToken: string;
   retryAt: number;
   delayMs: number;
@@ -276,32 +278,69 @@ export class AccountPoolHub {
         (accountId === undefined || account.id === accountId),
     );
     await Promise.all(
-      accounts.map((account) => this.refreshAccountUsage(account, force)),
+      accounts.map((account) =>
+        this.refreshAccountUsage(
+          account,
+          force ? 0 : DEFAULT_USAGE_REFRESH_INTERVAL_MS,
+          force,
+        ),
+      ),
+    );
+  }
+
+  private async refreshExhaustedUsage(
+    candidateIds: ReadonlySet<string>,
+    attempted: ReadonlySet<string>,
+    family: ModelFamily,
+  ): Promise<void> {
+    const now = this.options.now();
+    const threshold = this.options.getSettings().switchThreshold;
+    const accounts = (await this.options.accounts.list()).filter((account) => {
+      if (
+        !candidateIds.has(account.id) ||
+        attempted.has(account.id) ||
+        !account.enabled ||
+        account.kind !== "oauth"
+      )
+        return false;
+      const quota = this.options.quotas.get(account.id);
+      return (
+        quota.error === null && isQuotaExhausted(quota, family, threshold, now)
+      );
+    });
+    await Promise.all(
+      accounts.map((account) =>
+        this.refreshAccountUsage(account, EXHAUSTED_USAGE_REFRESH_INTERVAL_MS),
+      ),
     );
   }
 
   private async refreshAccountUsage(
     account: Account,
-    force: boolean,
+    minIntervalMs: number,
+    recoverError = false,
   ): Promise<void> {
     const adapter = this.adapter(account.provider);
     if ((this.inFlightByAccount.get(account.id) ?? 0) > 0) return;
-    const now = this.options.now();
-    const last = this.lastUsageRefreshAt.get(account.id);
-    if (
-      !force &&
-      last !== undefined &&
-      now - last < DEFAULT_USAGE_REFRESH_INTERVAL_MS
-    )
-      return;
     const running = this.usageRefreshes.get(account.id);
     if (running !== undefined) return running;
+    const now = this.options.now();
+    const last = this.lastUsageRefreshAt.get(account.id);
+    if (last !== undefined && now - last < minIntervalMs) return;
     this.lastUsageRefreshAt.set(account.id, now);
+    const recover =
+      recoverError && this.options.quotas.get(account.id).error !== null;
     const refresh = adapter
       .refreshUsage({
         account,
         freshSecret: () =>
-          this.freshSecret(account, adapter, { kind: "normal" }),
+          this.freshSecret(account, adapter, { kind: "normal" }, recover).catch(
+            (error: unknown) => {
+              if (recover && !(error instanceof TransientOAuthRefreshError))
+                this.markError(account.id, errorMessage(error));
+              throw error;
+            },
+          ),
         accounts: this.options.accounts,
         quotas: this.options.quotas,
         fetch: this.options.fetch,
@@ -377,6 +416,7 @@ export class AccountPoolHub {
     };
     let previousAccountId: string | null = null;
     let failure: FailureSummary | null = null;
+    let usageRefreshed = false;
     const accounts = (await this.options.accounts.list()).filter(
       (account) => account.provider === adapter.provider,
     );
@@ -405,7 +445,15 @@ export class AccountPoolHub {
           routing,
           signal,
         );
-        if (selected === null) break;
+        if (selected === null) {
+          if (usageRefreshed) break;
+          usageRefreshed = true;
+          await abortable(
+            this.refreshExhaustedUsage(candidateIds, attempted, family),
+            signal,
+          );
+          continue;
+        }
         let pacing: PacingFlight | null = null;
         const heldMs = (selected.quota.heldUntil ?? 0) - this.options.now();
         let activePacing = this.pacingByAccount.get(selected.account.id);
@@ -576,11 +624,8 @@ export class AccountPoolHub {
                   ".",
               headers: retryAfter === null ? {} : { "retry-after": retryAfter },
             };
-            if (
-              response.status === 401 &&
-              secret.kind === "oauth" &&
-              !authRetried
-            ) {
+            const rejected = response.status === 401 || response.status === 403;
+            if (rejected && secret.kind === "oauth" && !authRetried) {
               authRetried = true;
               try {
                 secret = await abortable(
@@ -599,23 +644,47 @@ export class AccountPoolHub {
                     headers: {},
                   };
                 } else {
-                  await this.markAuthError(
+                  const message = errorMessage(error);
+                  await this.rejectCredential(
                     selected.account,
                     secret,
-                    errorMessage(error),
                     signal,
+                    () => this.markError(selected.account.id, message),
                   );
                 }
                 break;
               }
               continue;
             }
-            if (response.status === 401 || response.status === 403) {
-              await this.markAuthError(
+            if (rejected && secret.kind === "oauth") {
+              const accessToken = secret.accessToken;
+              const hold = new TransientOAuthRefreshError(
+                adapter.upstreamName +
+                  " returned HTTP " +
+                  response.status +
+                  " for a freshly refreshed credential, so the Account Pooler is treating it as an upstream failure: " +
+                  failure.message,
+                0,
+              );
+              failure = { status: 503, message: hold.message, headers: {} };
+              await this.rejectCredential(
                 selected.account,
                 secret,
-                failure.message,
                 signal,
+                () =>
+                  this.holdUpstreamRejection(
+                    selected.account.id,
+                    accessToken,
+                    hold,
+                  ),
+              );
+            } else if (rejected) {
+              const message = failure.message;
+              await this.rejectCredential(
+                selected.account,
+                secret,
+                signal,
+                () => this.markError(selected.account.id, message),
               );
             }
             break;
@@ -686,14 +755,14 @@ export class AccountPoolHub {
     }
   }
 
-  private async markAuthError(
+  private async rejectCredential(
     account: Account,
     rejected: AccountSecret,
-    message: string,
     signal: AbortSignal,
+    apply: () => void,
   ): Promise<void> {
     if (rejected.kind !== "oauth") {
-      this.markError(account.id, message);
+      apply();
       return;
     }
     while (true) {
@@ -720,11 +789,12 @@ export class AccountPoolHub {
               current.kind === "oauth" &&
               current.accessToken === rejected.accessToken &&
               !(
-                backoff?.kind === "rejected" &&
+                backoff !== undefined &&
+                backoff.kind !== "proactive" &&
                 backoff.accessToken === current.accessToken
               )
             ) {
-              this.markError(account.id, message);
+              apply();
             }
           })
           .finally(() => {
@@ -889,6 +959,7 @@ export class AccountPoolHub {
     account: Account,
     adapter: ProviderAdapter,
     use: SecretUse,
+    recover = false,
   ): Promise<AccountSecret> {
     while (true) {
       const existing = this.refreshes.get(account.id);
@@ -911,7 +982,7 @@ export class AccountPoolHub {
         if (
           secret.kind === "oauth" &&
           backoff?.accessToken === secret.accessToken &&
-          backoff.kind === "rejected"
+          backoff.kind !== "proactive"
         )
           continue;
         if (
@@ -944,7 +1015,7 @@ export class AccountPoolHub {
               use.kind === "rejected" &&
               secret.accessToken === use.accessToken;
             const forceRefresh =
-              explicitlyRejected || backoff?.kind === "rejected";
+              recover || explicitlyRejected || backoff?.kind === "rejected";
             if (forceRefresh && secret.kind === "oauth") {
               flight.use = {
                 kind: "rejected",
@@ -952,13 +1023,15 @@ export class AccountPoolHub {
               };
             }
             const error = this.options.quotas.get(account.id).error;
-            if (error !== null) throw new Error(error);
+            if (error !== null && !recover) throw new Error(error);
             if (
+              !recover &&
               backoff !== undefined &&
               this.options.now() < backoff.retryAt &&
-              (!explicitlyRejected || backoff.kind === "rejected")
+              (!explicitlyRejected || backoff.kind !== "proactive")
             ) {
               if (
+                backoff.kind === "proactive" &&
                 !forceRefresh &&
                 secret.kind === "oauth" &&
                 secret.expiresAt !== null &&
@@ -1165,6 +1238,25 @@ export class AccountPoolHub {
       "No Account Pooler account is currently eligible.",
       { "retry-after": String(retryAfter) },
     );
+  }
+
+  private holdUpstreamRejection(
+    accountId: string,
+    accessToken: string,
+    error: TransientOAuthRefreshError,
+  ): void {
+    this.refreshBackoffs.delete(accountId);
+    this.refreshBackoffs.set(accountId, {
+      kind: "upstream",
+      accessToken,
+      retryAt: this.options.now() + UPSTREAM_REJECTION_HOLD_MS,
+      delayMs: UPSTREAM_REJECTION_HOLD_MS,
+      error,
+    });
+    while (this.refreshBackoffs.size > MAX_REFRESH_BACKOFFS) {
+      const oldest = this.refreshBackoffs.keys().next();
+      if (!oldest.done) this.refreshBackoffs.delete(oldest.value);
+    }
   }
 
   private markError(accountId: string, message: string): void {

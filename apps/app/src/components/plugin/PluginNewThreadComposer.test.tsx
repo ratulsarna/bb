@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  StrictMode,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { Provider } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -46,6 +52,8 @@ import { encodeReuseValue } from "@/components/pickers/environment-picker-value"
 import { useRootComposeReuseEnvironment } from "@/lib/root-compose-selection";
 import { getPromptDraftAccessor } from "@/hooks/usePromptDraftStorage";
 import { makeThreadListEntry } from "@bb/test-helpers/domain-fixtures";
+import { createDeferredPromise } from "@bb/test-helpers";
+import type { PromptDraftAttachment } from "@bb/client-core";
 import { makeProjectWithThreadsResponse } from "@/test/fixtures/projects";
 import { RootComposeView } from "@/views/RootComposeView";
 import { ROOT_COMPOSE_FIXED_PANEL_STATE_ID } from "@/views/RootComposePanelTabContent";
@@ -748,6 +756,75 @@ describe("PluginNewThreadComposer seeding", () => {
     expect(latestPromptBoxProps().mentionMenuPlacement).toBe("top");
   });
 
+  function leaveDraftElement(
+    onLeaveWithDraft: NonNullable<
+      Parameters<typeof NewThreadComposer>[0]["onLeaveWithDraft"]
+    >,
+  ) {
+    return (
+      <StrictMode>
+        <Provider>
+          <MemoryRouter>
+            <NewThreadComposer
+              projectId="proj_1"
+              onProjectChange={() => undefined}
+              draftStorage={{ kind: "new-thread" }}
+              selectionScope="new-thread"
+              onSubmit={() => undefined}
+              onLeaveWithDraft={onLeaveWithDraft}
+            >
+              {(composer) =>
+                composer.renderPromptBox({ mentionMenuPlacement: "bottom" })
+              }
+            </NewThreadComposer>
+          </MemoryRouter>
+        </Provider>
+      </StrictMode>
+    );
+  }
+
+  it("hands a typed draft off once when the composer really unmounts", async () => {
+    getPromptDraftAccessor({ kind: "new-thread" }).setDraft({
+      text: "Save me for later",
+      mentions: [],
+      attachments: [],
+    });
+    const onLeaveWithDraft = vi.fn();
+    const view = render(leaveDraftElement(onLeaveWithDraft));
+    await waitFor(() => {
+      expect(latestPromptBoxProps().disabled).toBe(false);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(onLeaveWithDraft).not.toHaveBeenCalled();
+
+    view.unmount();
+    await waitFor(() => {
+      expect(onLeaveWithDraft).toHaveBeenCalledTimes(1);
+    });
+    const [request, draft] = onLeaveWithDraft.mock.calls[0] ?? [];
+    expect(request).toMatchObject({
+      projectId: "proj_1",
+      input: [{ type: "text", text: "Save me for later" }],
+    });
+    expect(draft).toMatchObject({ text: "Save me for later" });
+  });
+
+  it("does not hand off an empty composer", async () => {
+    const onLeaveWithDraft = vi.fn();
+    const view = render(leaveDraftElement(onLeaveWithDraft));
+    await waitFor(() => {
+      expect(latestPromptBoxProps().value).toBe("");
+    });
+
+    view.unmount();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(onLeaveWithDraft).not.toHaveBeenCalled();
+  });
+
   it("restores the environment type and machine after reload and project switching", async () => {
     const first = render(newThreadElement("proj_1"));
     await act(async () => {
@@ -1008,8 +1085,8 @@ describe("PluginNewThreadComposer seeding", () => {
       expect(latestPromptBoxProps().disabled).toBe(false);
     });
     const pluginSubmission = {
-      pluginId: "drafts",
-      data: { kind: "draft" } as const,
+      pluginId: "example-plugin",
+      data: { kind: "hold" } as const,
     };
     await act(async () => {
       await latestPromptBoxProps().pluginComposerHost.submit(
@@ -1381,6 +1458,96 @@ describe("PluginNewThreadComposer seeding", () => {
     ).toBe(true);
   });
 
+  it("applies a plugin machine target after the root composer loads", async () => {
+    mocks.sidebarNavigationSettled = false;
+    window.localStorage.setItem("bb.root-compose.project-id", "proj_1");
+    const router = createMemoryRouter(
+      [{ path: "/", element: <RootComposeView /> }],
+      {
+        initialEntries: [
+          {
+            pathname: "/",
+            state: { newEnvironmentHostId: "host_2", focusPrompt: true },
+          },
+        ],
+      },
+    );
+    const element = () => (
+      <Provider>
+        <RouterProvider router={router} />
+      </Provider>
+    );
+    const view = render(element());
+
+    expect(router.state.location.state).toEqual({
+      newEnvironmentHostId: "host_2",
+      focusPrompt: true,
+    });
+    mocks.sidebarNavigationSettled = true;
+    view.rerender(element());
+
+    await waitFor(() => {
+      expect(
+        latestPromptBoxProps().modeConfig.environment.selectedProviderHostId,
+      ).toBe("host_2");
+      expect(router.state.location.state).toBeNull();
+    });
+    expect(latestPromptBoxProps().modeConfig.environment.value).toBe(
+      "provider:project-checkout",
+    );
+    const selectedIndex = mocks.promptBoxProps.findIndex(
+      (props) =>
+        props.modeConfig.environment.selectedProviderHostId === "host_2",
+    );
+    expect(selectedIndex).toBeGreaterThan(0);
+    const focusRequestAtSelection =
+      mocks.promptBoxProps[selectedIndex].focusRequest;
+    await waitFor(() => {
+      expect(latestPromptBoxProps().focusRequest).not.toBe(
+        focusRequestAtSelection,
+      );
+    });
+  });
+
+  it("reuses an environment when the plugin supplies both targets", async () => {
+    mocks.projectThreads = [
+      makeThreadListEntry({
+        id: "thr_existing",
+        projectId: "proj_1",
+        environmentId: "env_existing",
+        environmentHostId: "host_1",
+        environmentProviderId: "git-worktree",
+      }),
+    ];
+    window.localStorage.setItem("bb.root-compose.project-id", "proj_1");
+    const router = createMemoryRouter(
+      [{ path: "/", element: <RootComposeView /> }],
+      {
+        initialEntries: [
+          {
+            pathname: "/",
+            state: {
+              newEnvironmentHostId: "host_2",
+              reuseEnvironmentId: "env_existing",
+            },
+          },
+        ],
+      },
+    );
+    render(
+      <Provider>
+        <RouterProvider router={router} />
+      </Provider>,
+    );
+
+    await waitFor(() => {
+      expect(latestPromptBoxProps().modeConfig.environment.value).toBe(
+        encodeReuseValue("env_existing"),
+      );
+      expect(router.state.location.state).toBeNull();
+    });
+  });
+
   it("closes visible plugin details before an underlying terminal", async () => {
     const terminal = createTerminalFixedPanelTab({
       terminalId: "terminal-under-details",
@@ -1748,6 +1915,55 @@ describe("PluginNewThreadComposer seeding", () => {
       expect(latestPromptBoxProps().isSubmitting).toBe(false);
     });
     expect(latestPromptBoxProps().value).toBe("next thread");
+  });
+
+  it("accepts overlapping uploads and stays busy until every batch settles", async () => {
+    const first = createDeferredPromise<PromptDraftAttachment>();
+    const second = createDeferredPromise<PromptDraftAttachment>();
+    mocks.uploadAttachment
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    renderComposer(STORED_REQUEST, vi.fn(), "concurrent-uploads");
+    await waitFor(() => expect(latestPromptBoxProps().disabled).toBe(false));
+
+    let firstBatch: Promise<void>;
+    let secondBatch: Promise<void>;
+    act(() => {
+      const attach = latestPromptBoxProps().attachments.onAttachFiles;
+      firstBatch = attach([new File(["first"], "first.txt")]);
+      secondBatch = attach([new File(["second"], "second.txt")]);
+    });
+    expect(mocks.uploadAttachment).toHaveBeenCalledTimes(2);
+    expect(latestPromptBoxProps().attachments.pendingUploads).toHaveLength(2);
+    expect(latestPromptBoxProps().attachments.isAttaching).toBe(true);
+
+    await act(async () => {
+      second.resolve({
+        type: "localFile",
+        name: "second.txt",
+        path: "second.txt",
+        sizeBytes: 6,
+      });
+      await secondBatch;
+    });
+    expect(latestPromptBoxProps().attachments.items).toHaveLength(1);
+    expect(latestPromptBoxProps().attachments.pendingUploads).toHaveLength(1);
+    expect(latestPromptBoxProps().attachments.isAttaching).toBe(true);
+    await act(async () => {
+      await latestPromptBoxProps().project.onChange("proj_2");
+    });
+    expect(latestPromptBoxProps().project.value).toBe("proj_1");
+
+    await act(async () => {
+      first.reject(new Error("Failed to fetch"));
+      await firstBatch;
+    });
+    expect(latestPromptBoxProps().attachments.isAttaching).toBe(false);
+    expect(latestPromptBoxProps().attachments.pendingUploads).toHaveLength(0);
+    expect(latestPromptBoxProps().attachments.items).toHaveLength(1);
+    expect(latestPromptBoxProps().attachments.error).toBe(
+      "Could not reach the server. Check that it is running and try again.",
+    );
   });
 
   it("keeps the old project when attachment copying fails", async () => {

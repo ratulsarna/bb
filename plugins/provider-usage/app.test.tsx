@@ -11,6 +11,7 @@ import {
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -24,11 +25,17 @@ function threadOnMachine(
     projectId: "project-one",
     title: "Active thread",
     titleFallback: null,
+    displayTitle: "Active thread",
     parentThreadId: null,
+    lifecycleOwnerThreadId: null,
+    sourceThreadId: null,
     sectionId: null,
     originKind: null,
     originPluginId: null,
     providerId: "codex",
+    status: "idle",
+    runtimeStatus: "idle",
+    queuedWork: "none",
     hasPendingInteraction: false,
     activity: {
       workflows: 0,
@@ -41,7 +48,12 @@ function threadOnMachine(
     indicatorLabel: null,
     isUnread: false,
     isPinned: false,
+    pinnedAt: null,
+    pinSortKey: null,
     isArchived: false,
+    archivedAt: null,
+    href: "/projects/project-one/threads/thread-active",
+    isHidden: false,
     environment: null,
     host: { id: hostId, name: hostName },
     createdAt: 1,
@@ -260,6 +272,9 @@ describe("provider usage footer disclosure", () => {
     expect(slot.getByRole("heading", { name: "Codex" })).toBeTruthy();
     expect(slot.getByText("codex@example.com")).toBeTruthy();
     expect(slot.getByText("97%")).toBeTruthy();
+    expect(localStorage.getItem("bb.test-plugin.selected-machine.v1")).toBe(
+      "host-m5",
+    );
 
     fireEvent.pointerDown(machinePicker, { button: 0 });
     fireEvent.click(slot.getByRole("menuitemradio", { name: "M4" }));

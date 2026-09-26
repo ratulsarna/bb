@@ -1,8 +1,14 @@
 import { eq, inArray } from "drizzle-orm";
 import {
+  aiServiceSelectionSchema,
+  AI_TASKS,
   appKeybindingOverridesSchema,
   appSettingsSchema,
+  defaultAiServiceSelections,
   defaultAppSettings,
+  type AiServiceSelection,
+  type AiServiceSelections,
+  type AiTask,
   type AppKeybindingOverrides,
   type AppSettings,
 } from "@bb/domain";
@@ -13,6 +19,8 @@ const appSettingsKeySchema = appSettingsSchema.keyof();
 const appSettingsKeys = appSettingsKeySchema.options;
 
 const KEYBINDING_OVERRIDES_KEY = "keybindingOverrides";
+const AI_SERVICE_SELECTIONS_KEY = "aiServiceSelections";
+const PLUGIN_SAFE_MODE_KEY = "pluginSafeMode";
 const LEGACY_DIAGNOSTIC_EVENTS_KEY = "showUnhandledProviderEvents";
 
 function parseStoredValue(text: string): unknown {
@@ -107,4 +115,44 @@ export function setAppKeybindingOverrides(
   overrides: AppKeybindingOverrides,
 ): void {
   writeValue(db, KEYBINDING_OVERRIDES_KEY, overrides, Date.now());
+}
+
+export function getAiServiceSelections(db: DbConnection): AiServiceSelections {
+  const row = db
+    .select({ value: appSettingsValues.value })
+    .from(appSettingsValues)
+    .where(eq(appSettingsValues.key, AI_SERVICE_SELECTIONS_KEY))
+    .get();
+  const stored: unknown =
+    row === undefined ? undefined : parseStoredValue(row.value);
+  const selections: AiServiceSelections = { ...defaultAiServiceSelections };
+  if (typeof stored !== "object" || stored === null) return selections;
+  for (const task of AI_TASKS) {
+    const parsed = aiServiceSelectionSchema.safeParse(Reflect.get(stored, task));
+    if (parsed.success) selections[task] = parsed.data;
+  }
+  return selections;
+}
+
+export function setAiServiceSelection(
+  db: DbConnection,
+  task: AiTask,
+  selection: AiServiceSelection,
+): AiServiceSelections {
+  const selections = { ...getAiServiceSelections(db), [task]: selection };
+  writeValue(db, AI_SERVICE_SELECTIONS_KEY, selections, Date.now());
+  return selections;
+}
+
+export function getPluginSafeMode(db: DbConnection): boolean {
+  const row = db
+    .select({ value: appSettingsValues.value })
+    .from(appSettingsValues)
+    .where(eq(appSettingsValues.key, PLUGIN_SAFE_MODE_KEY))
+    .get();
+  return row !== undefined && parseStoredValue(row.value) === true;
+}
+
+export function setPluginSafeMode(db: DbConnection, enabled: boolean): void {
+  writeValue(db, PLUGIN_SAFE_MODE_KEY, enabled, Date.now());
 }

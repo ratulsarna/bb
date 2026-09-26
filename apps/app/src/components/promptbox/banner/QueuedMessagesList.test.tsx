@@ -169,6 +169,41 @@ afterEach(() => {
 });
 
 describe("QueuedMessagesList", () => {
+  it.each([
+    { kind: "host-offline", hostName: "M4" },
+    { kind: "provisioning" },
+    { kind: "interaction" },
+    { kind: "turn-starting" },
+    { kind: "stopping" },
+  ] as const)("offers Send now for a failed $kind row", (waitingOn) => {
+    const onSend = vi.fn();
+    const { getByRole, getByText } = render(
+      <QueuedMessagesList
+        queuedMessages={[
+          makeThreadQueuedMessage({
+            id: "failed-row",
+            waitingOn,
+            failureReason: "Provider unavailable",
+          }),
+        ]}
+        sendDisabled={false}
+        actionDisabled={false}
+        processingMessageId={null}
+        processingAction={null}
+        onSend={onSend}
+        onReorder={noop}
+        onSetGroupBoundary={noop}
+        onEdit={noop}
+        onDelete={noop}
+      />,
+    );
+    expect(getByText("Provider unavailable")).toBeTruthy();
+    const button = getByRole("button", { name: "Send queued message 1 now" });
+    expect(button.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(button);
+    expect(onSend).toHaveBeenCalledWith("failed-row");
+  });
+
   it("labels non-user senders and refreshes their names from the thread cache", async () => {
     const queryClient = new QueryClient();
     const messages = [
@@ -1774,9 +1809,9 @@ describe("queued row affordances", () => {
     setPluginLogoUrls(
       new Map([
         [
-          "drafts",
+          "approvals",
           {
-            displayName: "Drafts",
+            displayName: "Approvals",
             icon: "EditFile",
             compactIconUrl: null,
             logoUrl: null,
@@ -1788,16 +1823,16 @@ describe("queued row affordances", () => {
     );
     const { container, getByText } = renderQueuedMessages([
       {
-        ...makeQueuedMessage("q_draft", "Draft message"),
+        ...makeQueuedMessage("q_held", "Held message"),
         waitingOn: {
           kind: "plugin",
-          pluginId: "drafts",
-          reason: "Draft",
+          pluginId: "approvals",
+          reason: "Awaiting approval",
         },
       },
     ]);
 
-    const waitLine = getByText("Held by Drafts · Draft").closest(
+    const waitLine = getByText("Held by Approvals · Awaiting approval").closest(
       "[data-queued-message-wait]",
     );
     expect(waitLine?.querySelector("[data-icon=EditFile]")).not.toBeNull();

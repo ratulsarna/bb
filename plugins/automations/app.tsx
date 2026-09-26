@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { buildAutomationEditThreadPrompt } from "@bb/shared-ui/resource-edit-prompt";
 import {
   definePluginApp,
   useBbNavigate,
@@ -18,7 +17,7 @@ import type {
   AutomationRunListResponse,
   AutomationRunResponse,
   AutomationsOverviewResponse,
-} from "@/src/rpc-types";
+} from "./src/rpc-types";
 import { AutomationDetailView } from "./detail-view";
 import {
   AutomationOverviewView,
@@ -27,8 +26,9 @@ import {
   type AutomationCollectionMode,
 } from "./overview-view";
 import { PERSONAL_PROJECT_ID } from "./lib/format-schedule";
-import { Button } from "@bb/shared-ui/button";
-import { DelayedLoading } from "@bb/shared-ui/delayed-loading";
+import { buildAutomationEditThreadPrompt } from "./lib/edit-prompt";
+import { Button } from "@/components/ui/button";
+import { DelayedLoading } from "@/components/ui/delayed-loading";
 import {
   Dialog,
   DialogContent,
@@ -36,9 +36,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@bb/shared-ui/dialog";
-import { ResourceListState } from "@bb/shared-ui/resource-list";
-import { cn } from "@bb/shared-ui/lib/utils";
+} from "@/components/ui/dialog";
+import { ResourceListState } from "@/components/ui/resource-list";
+import { cn } from "@/lib/utils";
 
 const PANEL_PATH = "automations";
 type OverviewEntry = AutomationsOverviewResponse["automations"][number];
@@ -50,6 +50,11 @@ function errorText(error: unknown): string {
 interface DetailRoute {
   projectId: string;
   automationId: string;
+}
+
+interface DeleteTarget {
+  route: DetailRoute;
+  name: string;
 }
 
 interface ParsedDetailRoute {
@@ -394,6 +399,8 @@ function OverviewView({
   const navigate = useBbNavigate();
   const { entries, error, refetch } = useOverview();
   const mutations = useMutations();
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const changeEnabled = useCallback(
     async (enabled: boolean, route: DetailRoute) => {
@@ -407,6 +414,43 @@ function OverviewView({
     [mutations],
   );
 
+  const runNow = useCallback(
+    async (route: DetailRoute) => {
+      try {
+        await mutations.run(route);
+        toast.success("Run started");
+      } catch (rpcError: unknown) {
+        toast.error(`Failed to run automation: ${errorText(rpcError)}`);
+      }
+    },
+    [mutations],
+  );
+
+  const requestDelete = useCallback((route: DetailRoute, name: string) => {
+    setDeleteTarget({ route, name });
+  }, []);
+
+  const closeDelete = useCallback(() => {
+    if (!deleting) setDeleteTarget(null);
+  }, [deleting]);
+
+  const confirmDelete = useCallback(() => {
+    if (deleteTarget === null) return;
+    setDeleting(true);
+    mutations
+      .delete(deleteTarget.route)
+      .then(
+        () => {
+          toast.success("Automation deleted");
+          setDeleteTarget(null);
+          refetch();
+        },
+        (rpcError: unknown) =>
+          toast.error(`Failed to delete automation: ${errorText(rpcError)}`),
+      )
+      .finally(() => setDeleting(false));
+  }, [deleteTarget, mutations, refetch]);
+
   const createViaChat = useCallback(
     (prompt?: string) => {
       navigate.toCompose({
@@ -418,16 +462,30 @@ function OverviewView({
   );
 
   return (
-    <AutomationOverviewView
-      entries={entries}
-      error={error}
-      onRetry={refetch}
-      onOpenDetail={onOpenDetail}
-      onEnabledChange={changeEnabled}
-      onCreateViaChat={createViaChat}
-      activeMode={activeMode}
-      onModeChange={onModeChange}
-    />
+    <>
+      <AutomationOverviewView
+        entries={entries}
+        error={error}
+        onRetry={refetch}
+        onOpenDetail={onOpenDetail}
+        onEnabledChange={changeEnabled}
+        onRunNow={runNow}
+        onDelete={requestDelete}
+        onCreateViaChat={createViaChat}
+        activeMode={activeMode}
+        onModeChange={onModeChange}
+      />
+      <DeleteAutomationDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) closeDelete();
+        }}
+        name={deleteTarget?.name ?? ""}
+        pending={deleting}
+        onConfirm={confirmDelete}
+        onCancel={closeDelete}
+      />
+    </>
   );
 }
 

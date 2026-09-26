@@ -16,10 +16,11 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
+  BRIDGE_INBOUND_REQUEST_METHODS,
+  BRIDGE_JSON_RPC_ERRORS,
   type JsonValue,
   type RuntimePermissionPolicy,
-  type ThreadEvent,
-} from "@bb/domain";
+} from "@get-bb/plugin-sdk/provider-bridge";
 
 const { forkSessionMock, queryMock } = vi.hoisted(() => ({
   forkSessionMock: vi.fn(),
@@ -47,9 +48,10 @@ import {
   experimental_assembleCapturedThreadEvents as assembleCapturedThreadEvents,
   experimental_createBridgeJsonRpcTestHarness as createBridgeJsonRpcTestHarness,
 } from "@get-bb/plugin-sdk/provider-bridge/testing";
-import type { BridgeJsonRpcOutputMessage } from "@get-bb/plugin-sdk/provider-bridge/testing";
-
-import { BRIDGE_INBOUND_REQUEST_METHODS } from "@bb/provider-bridge-protocol";
+import type {
+  BridgeJsonRpcOutputMessage,
+  ThreadEvent,
+} from "@get-bb/plugin-sdk/provider-bridge/testing";
 
 type BridgeSessionOptions = ReturnType<typeof buildSessionOptions>;
 type BridgeSessionHooks = NonNullable<BridgeSessionOptions["hooks"]>;
@@ -572,8 +574,7 @@ async function startBridgeThread(args: StartBridgeThreadArgs): Promise<void> {
   args.bridge.sendRequest(1, "thread/start", {
     cwd: "/tmp/worktree",
     instructionMode: "append",
-    options: canonicalOptions({
-    }),
+    options: canonicalOptions({}),
     threadId: args.threadId,
   });
   await args.bridge.waitForResponse(1);
@@ -813,6 +814,44 @@ describe("bridge", () => {
     }
   });
 
+  it("answers model/list with the missing-executable code when the Claude CLI is absent", async () => {
+    const bridge = createBridgeJsonRpcTestHarness(handleLine);
+    queryMock.mockReturnValue({
+      initializationResult: vi
+        .fn()
+        .mockRejectedValue(
+          new Error("Native CLI binary for darwin-arm64 not found at /tmp/cli"),
+        ),
+      close: vi.fn(),
+    });
+
+    try {
+      bridge.sendRequest(1, "model/list", {});
+      const missing = await bridge.waitForResponse(1);
+
+      expect(missing.error?.code).toBe(
+        BRIDGE_JSON_RPC_ERRORS.MISSING_EXECUTABLE,
+      );
+      expect(missing.error?.message).toContain(
+        "could not find the Claude Code CLI",
+      );
+
+      queryMock.mockReturnValue({
+        initializationResult: vi
+          .fn()
+          .mockRejectedValue(new Error("Claude SDK stream closed")),
+        close: vi.fn(),
+      });
+      bridge.sendRequest(2, "model/list", {});
+      const other = await bridge.waitForResponse(2);
+
+      expect(other.error?.code).toBe(BRIDGE_JSON_RPC_ERRORS.BRIDGE_ERROR);
+      expect(other.error?.message).toBe("Claude SDK stream closed");
+    } finally {
+      bridge.restore();
+    }
+  });
+
   it("forks a Claude session through the requested provider checkpoint", async () => {
     const bridge = createBridgeJsonRpcTestHarness(handleLine);
     const queries: ControlledClaudeQuery[] = [];
@@ -864,6 +903,7 @@ describe("bridge", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         baseInstructions: "You are a manager.",
         cwd: "/tmp/worktree",
@@ -888,6 +928,7 @@ describe("bridge", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         baseInstructions: "You are a coder.",
         cwd: "/tmp/worktree",
         instructionMode: "append",
@@ -904,6 +945,7 @@ describe("bridge", () => {
       autoMemoryEnabled: true,
       enableWorkflows: true,
       ultracode: true,
+      fastMode: false,
     });
   });
 
@@ -911,6 +953,7 @@ describe("bridge", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         baseInstructions: "You are a coder.",
         cwd: "/tmp/worktree",
         instructionMode: "append",
@@ -927,13 +970,33 @@ describe("bridge", () => {
       autoMemoryEnabled: true,
       enableWorkflows: true,
       ultracode: false,
+      fastMode: false,
     });
+  });
+
+  it("sets fast mode only for the fast service tier at session start", () => {
+    const options = buildSessionOptions(
+      {
+        chromeEnabled: false,
+        workflowsEnabled: false,
+        serviceTier: "fast",
+        cwd: "/tmp/worktree",
+        instructionMode: "append",
+        permissionMode: "default",
+        permissionScope: "workspace",
+        model: "claude-opus-5",
+      },
+      {},
+    );
+
+    expect(options.settings).toMatchObject({ fastMode: true });
   });
 
   it("passes the memory setting when workflows are not enabled", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         baseInstructions: "You are a coder.",
         cwd: "/tmp/worktree",
@@ -949,6 +1012,7 @@ describe("bridge", () => {
       autoMemoryEnabled: true,
       enableWorkflows: false,
       ultracode: false,
+      fastMode: false,
     });
   });
 
@@ -956,6 +1020,7 @@ describe("bridge", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         memoryEnabled: false,
         cwd: "/tmp/worktree",
@@ -970,12 +1035,14 @@ describe("bridge", () => {
       autoMemoryEnabled: false,
       enableWorkflows: false,
       ultracode: false,
+      fastMode: false,
     });
   });
 
   it("passes --chrome only when Claude in Chrome is enabled", () => {
     const base = {
       workflowsEnabled: false,
+      serviceTier: "default",
       cwd: "/tmp/worktree",
       instructionMode: "append",
       permissionMode: "default",
@@ -994,6 +1061,7 @@ describe("bridge", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         baseInstructions: "You are a coder.",
         cwd: "/tmp/worktree",
@@ -1022,6 +1090,7 @@ describe("bridge", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         baseInstructions: "You are a coder.",
         cwd: "/tmp/worktree",
@@ -1043,6 +1112,7 @@ describe("bridge", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         baseInstructions: "You are a coder.",
         cwd: "/tmp/worktree",
@@ -1061,6 +1131,7 @@ describe("bridge", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         baseInstructions: "You are a coder.",
         cwd: "/tmp/worktree",
@@ -1086,6 +1157,7 @@ describe("bridge", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         baseInstructions: "You are a coder.",
         cwd: "/tmp/worktree",
@@ -1104,6 +1176,7 @@ describe("bridge", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         baseInstructions: "You are a coder.",
         cwd: "/tmp/worktree",
@@ -1125,6 +1198,7 @@ describe("bridge", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         baseInstructions: "You are a coder.",
         cwd: "/tmp/worktree",
@@ -1150,6 +1224,7 @@ describe("bridge", () => {
       buildSessionOptions(
         {
           chromeEnabled: false,
+          serviceTier: "default",
           workflowsEnabled: false,
           baseInstructions: "You are a coder.",
           cwd: "/tmp/worktree",
@@ -1169,6 +1244,7 @@ describe("bridge", () => {
     const acceptEditsOptions = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         baseInstructions: "You are a coder.",
         cwd: "/tmp/worktree",
@@ -1181,6 +1257,7 @@ describe("bridge", () => {
     const autoOptions = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         baseInstructions: "You are a coder.",
         cwd: "/tmp/worktree",
@@ -1213,6 +1290,7 @@ describe("bridge", () => {
     const options = buildSessionOptions(
       {
         chromeEnabled: false,
+        serviceTier: "default",
         workflowsEnabled: false,
         additionalWorkspaceWriteRoots: ["/repo/.git/worktrees/bb13"],
         baseInstructions: "You are a coder.",
@@ -1227,40 +1305,6 @@ describe("bridge", () => {
     expect(options.permissionMode).toBe("plan");
     expect(options.sandbox).toBeUndefined();
     expect(options.additionalDirectories).toBeUndefined();
-  });
-
-  it("configures auto sessions with additional writable roots", () => {
-    const options = buildSessionOptions(
-      {
-        chromeEnabled: false,
-        workflowsEnabled: false,
-        additionalWorkspaceWriteRoots: [
-          "/repo/.git/worktrees/bb13",
-          "/repo/.git/objects",
-        ],
-        baseInstructions: "You are a coder.",
-        cwd: "/tmp/worktree",
-        instructionMode: "append",
-        permissionMode: "auto",
-        permissionScope: "workspace",
-      },
-      {},
-    );
-
-    expect(options.additionalDirectories).toEqual([
-      "/repo/.git/worktrees/bb13",
-      "/repo/.git/objects",
-    ]);
-    expect(options.sandbox).toEqual({
-      enabled: true,
-      failIfUnavailable: false,
-      autoAllowBashIfSandboxed: true,
-      allowUnsandboxedCommands: true,
-      network: { allowLocalBinding: true },
-      filesystem: {
-        allowWrite: ["/repo/.git/worktrees/bb13", "/repo/.git/objects"],
-      },
-    });
   });
 
   describe("Bash canUseTool policy", () => {
@@ -1782,6 +1826,58 @@ describe("bridge", () => {
         bridge.messages.filter((message) => isApprovalInteraction(message)),
       ).toHaveLength(1);
 
+      await stopBridgeThread({ bridge, queries, threadId });
+    } finally {
+      bridge.restore();
+    }
+  });
+
+  it("translates tagged dollar skill mentions without changing plain dollar text", async () => {
+    const bridge = createBridgeJsonRpcTestHarness(handleLine);
+    const queries: ControlledClaudeQuery[] = [];
+    queryMock.mockImplementation(() => {
+      const query = createControlledClaudeQuery();
+      queries.push(query);
+      return query;
+    });
+
+    try {
+      const threadId = "thread-dollar-skill";
+      await startBridgeThread({ bridge, threadId });
+      const call = getLatestQueryCall();
+      bridge.sendRequest(
+        2,
+        "turn/start",
+        canonicalTurnParams({
+          threadId,
+          input: [
+            {
+              type: "text",
+              text: "Use $review but keep $PATH and $review",
+              mentions: [
+                {
+                  start: 4,
+                  end: 11,
+                  resource: {
+                    kind: "command",
+                    trigger: "$",
+                    name: "review",
+                    source: "skill",
+                    origin: "user",
+                    label: "review",
+                    argumentHint: null,
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      expect(await readNextPromptText(call)).toBe(
+        "Use /review but keep $PATH and $review",
+      );
+      await bridge.waitForResponse(2);
       await stopBridgeThread({ bridge, queries, threadId });
     } finally {
       bridge.restore();
@@ -2362,10 +2458,7 @@ describe("bridge", () => {
       PATH: binDir,
     });
     expect(models.map((model) => model.model)).toEqual([
-      "claude-fable-5-1",
       "claude-opus-5[1m]",
-      "claude-opus-4-8[1m]",
-      "claude-opus-4-7[1m]",
       "claude-sonnet-5",
     ]);
     expect(models.filter((model) => model.isDefault)).toEqual([
@@ -2386,6 +2479,22 @@ describe("bridge", () => {
         persistSession: false,
       }),
     });
+    const probeOptions = queryMock.mock.calls.at(-1)?.[0]?.options;
+    expect(probeOptions).not.toHaveProperty("allowDangerouslySkipPermissions");
+    expect(probeOptions).not.toHaveProperty("permissionMode");
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("treats an empty Claude model report as a discovery failure", async () => {
+    const close = vi.fn();
+    queryMock.mockReturnValueOnce({
+      initializationResult: vi.fn().mockResolvedValue({ models: [] }),
+      close,
+    });
+
+    await expect(listClaudeCodeBridgeModels()).rejects.toThrow(
+      "Claude Code reported no models.",
+    );
     expect(close).toHaveBeenCalledOnce();
   });
 
@@ -2949,7 +3058,10 @@ describe("bridge", () => {
         },
       });
       await bridge.waitForResponse(1);
-      expect(getLatestQueryOptions().extraArgs).toEqual({ chrome: null });
+      expect(getLatestQueryOptions().extraArgs).toEqual({
+        chrome: null,
+        "replay-user-messages": null,
+      });
 
       bridge.sendRequest(
         2,
@@ -2981,7 +3093,9 @@ describe("bridge", () => {
       expect(queries).toHaveLength(2);
       expect(queries[0]?.close).toHaveBeenCalled();
       expect(getLatestQueryOptions()).toMatchObject({ resume: threadId });
-      expect(getLatestQueryOptions()).not.toHaveProperty("extraArgs");
+      expect(getLatestQueryOptions().extraArgs).toEqual({
+        "replay-user-messages": null,
+      });
       await expect(readNextPromptText(getLatestQueryCall())).resolves.toBe(
         "chrome turned off",
       );
@@ -3065,6 +3179,7 @@ describe("bridge", () => {
           permissionEscalation: "ask",
           model: "claude-opus-5[1m]",
           reasoningLevel: "max",
+          serviceTier: "fast",
           providerOptions: {
             workflowsEnabled: true,
             memoryEnabled: false,
@@ -3083,6 +3198,7 @@ describe("bridge", () => {
         enableWorkflows: true,
         effortLevel: "max",
         ultracode: false,
+        fastMode: true,
       });
 
       for (const toolName of ["Agent", "Task"]) {
@@ -3141,6 +3257,7 @@ describe("bridge", () => {
           permissionEscalation: "ask",
           model: "claude-opus-5[1m]",
           reasoningLevel: "xhigh",
+          serviceTier: "default",
           providerOptions: {
             workflowsEnabled: false,
             memoryEnabled: true,
@@ -3157,6 +3274,7 @@ describe("bridge", () => {
         enableWorkflows: false,
         effortLevel: "xhigh",
         ultracode: false,
+        fastMode: false,
       });
       const enabledSubagentOutputs = await invokeBridgeHooks(
         hooks.PreToolUse,

@@ -13,6 +13,7 @@ import {
 } from "@bb/host-daemon-contract";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BbDesktopBrowserViewBounds } from "@bb/desktop-contract";
+import { resolveDesktopBrowserAppCommand } from "../src/desktop-browser-shortcuts.js";
 import { createDesktopBrowserCdpAdapter } from "../src/desktop-browser-cdp-adapter.js";
 import { createDesktopBrowserBroker } from "../src/desktop-browser-broker.js";
 import { createDesktopBrowserBrokerClient } from "../src/desktop-browser-broker-client.js";
@@ -21,7 +22,6 @@ import type { DesktopBrowserCdpPage } from "../src/desktop-browser-cdp.js";
 import {
   browserPageEvaluationSource,
   createDesktopBrowserViewManager as createProductionDesktopBrowserViewManager,
-  isAllowedBrowserPermission,
   type CreateDesktopBrowserViewManagerArgs,
   type DesktopBrowserViewManager,
   type DesktopBrowserHostContentBounds,
@@ -384,6 +384,7 @@ const electronMock = vi.hoisted(() => {
     public canGoForwardResult = false;
     public destroyed = false;
     public focusCalls = 0;
+    public nativelyFocused = false;
     public readonly goBackCalls: string[] = [];
     public readonly goForwardCalls: string[] = [];
     public historyEntries: Array<{ title: string; url: string }> = [];
@@ -450,6 +451,10 @@ const electronMock = vi.hoisted(() => {
     focus(): void {
       this.focusCalls += 1;
       this.emitFocus();
+    }
+
+    isFocused(): boolean {
+      return this.nativelyFocused;
     }
 
     findInPage(
@@ -868,12 +873,28 @@ class FakeHostWindow implements DesktopBrowserHostWindow {
     this.webContents = new FakeHostWebContents(webContentsId);
   }
 
+  public focused = true;
+  private readonly focusListeners: Array<() => void> = [];
+
   getContentBounds(): DesktopBrowserHostContentBounds {
     return this.contentBounds;
   }
 
   isDestroyed(): boolean {
     return this.destroyed;
+  }
+
+  isFocused(): boolean {
+    return this.focused;
+  }
+
+  once(_event: "focus", listener: () => void): void {
+    this.focusListeners.push(listener);
+  }
+
+  emitFocus(): void {
+    this.focused = true;
+    for (const listener of this.focusListeners.splice(0)) listener();
   }
 }
 
@@ -1642,6 +1663,110 @@ describe("DesktopBrowserCdpAdapter", () => {
     unsubscribe();
     manager.destroyAll();
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns native focus to the host while a controller owns the tab", async () => {
+    vi.useFakeTimers();
+    const focusHostWebContents = vi.fn();
+    const manager = createDesktopBrowserViewManager({
+      partition: "persist:test",
+      focusHostWebContents,
+    });
+    const hostWindow = new FakeHostWindow({
+      contentBounds: { width: 700, height: 450 },
+      webContentsId: 92,
+    });
+    attachBrowserTab({
+      manager,
+      hostWindow,
+      threadId: "thread-1",
+      tabId: "browser:a",
+      url: "https://example.com",
+    });
+    const view = requireFakeView(0);
+    const page = createDesktopBrowserCdpAdapter({
+      manager,
+      createTab: async () => "browser:a",
+      activateTab: async () => undefined,
+      closeTab: async () => undefined,
+    }).listTabs({ hostWebContentsId: 92, threadId: "thread-1" })[0];
+    if (page === undefined) throw new Error("Expected a native CDP page");
+    const focusedPushes = () =>
+      hostWindow.webContents.sentChannels.filter(
+        (channel) => channel === "bb-desktop:browser:focused",
+      ).length;
+    try {
+      page.attach();
+      view.webContents.nativelyFocused = true;
+      view.webContents.emitFocus();
+      expect(focusedPushes()).toBe(0);
+      expect(focusHostWebContents).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(focusHostWebContents).toHaveBeenCalledExactlyOnceWith(92);
+
+      hostWindow.focused = false;
+      view.webContents.emitFocus();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(focusHostWebContents).toHaveBeenCalledTimes(1);
+      hostWindow.emitFocus();
+      expect(focusHostWebContents).toHaveBeenCalledTimes(2);
+
+      view.webContents.nativelyFocused = false;
+      view.webContents.emitFocus();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(focusHostWebContents).toHaveBeenCalledTimes(2);
+
+      manager.focus({ hostWindow, tabId: "browser:a" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(focusHostWebContents).toHaveBeenCalledTimes(2);
+
+      page.detach();
+      view.webContents.nativelyFocused = true;
+      view.webContents.emitFocus();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(focusHostWebContents).toHaveBeenCalledTimes(2);
+      expect(focusedPushes()).toBe(1);
+    } finally {
+      page.detach();
+      manager.destroyAll();
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns native focus to the host from a hidden tab", async () => {
+    vi.useFakeTimers();
+    const focusHostWebContents = vi.fn();
+    const manager = createDesktopBrowserViewManager({
+      partition: "persist:test",
+      focusHostWebContents,
+    });
+    const hostWindow = new FakeHostWindow({
+      contentBounds: { width: 700, height: 450 },
+      webContentsId: 92,
+    });
+    attachBrowserTab({
+      manager,
+      hostWindow,
+      tabId: "browser:a",
+      url: "https://example.com",
+    });
+    manager.setVisible({
+      hostWindow,
+      request: { tabId: "browser:a", visible: false },
+    });
+    const view = requireFakeView(0);
+    try {
+      view.webContents.nativelyFocused = true;
+      view.webContents.emitFocus();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(focusHostWebContents).toHaveBeenCalledExactlyOnceWith(92);
+      expect(hostWindow.webContents.sentChannels).not.toContain(
+        "bb-desktop:browser:focused",
+      );
+    } finally {
+      manager.destroyAll();
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -2490,36 +2615,101 @@ describe("DesktopBrowserViewManager", () => {
     expect(dispatchAppCommand).toHaveBeenCalledTimes(1);
   });
 
-  it("takes host focus for the find command so the find bar can receive typing", () => {
-    const dispatchAppCommand = vi.fn();
-    const focusHostWebContents = vi.fn();
-    const manager = createDesktopBrowserViewManager({
-      dispatchAppCommand,
-      focusHostWebContents,
-      partition: "persist:test",
-      resolveAppCommand: (input) =>
-        input.key === "f" && input.metaKey ? "browser.find" : null,
-    });
-    const hostWindow = new FakeHostWindow({
-      contentBounds: { width: 700, height: 450 },
-      webContentsId: 51,
-    });
+  it.each([
+    "browser.find",
+    "panel.previousTab",
+    "panel.nextTab",
+    "pane.focus.previous",
+    "pane.focus.next",
+  ] as const)(
+    "takes host focus for %s so the selected target can receive typing",
+    (command) => {
+      const dispatchAppCommand = vi.fn();
+      const focusHostWebContents = vi.fn();
+      const manager = createDesktopBrowserViewManager({
+        dispatchAppCommand,
+        focusHostWebContents,
+        partition: "persist:test",
+        resolveAppCommand: (input) =>
+          input.key === "f" && input.metaKey ? command : null,
+      });
+      const hostWindow = new FakeHostWindow({
+        contentBounds: { width: 700, height: 450 },
+        webContentsId: 51,
+      });
 
-    attachBrowserTab({
-      manager,
-      hostWindow,
-      tabId: "browser:a",
-      url: "https://example.com",
-    });
-    const webContents = requireFakeView(0).webContents;
+      attachBrowserTab({
+        manager,
+        hostWindow,
+        tabId: "browser:a",
+        url: "https://example.com",
+      });
+      const webContents = requireFakeView(0).webContents;
 
-    expect(webContents.emitBeforeInput({ key: "f", meta: true })).toBe(true);
-    expect(focusHostWebContents).toHaveBeenCalledWith(51);
-    expect(dispatchAppCommand).toHaveBeenCalledWith({
-      command: "browser.find",
-      hostWebContentsId: 51,
-    });
-  });
+      expect(webContents.emitBeforeInput({ key: "f", meta: true })).toBe(true);
+      expect(focusHostWebContents).toHaveBeenCalledWith(51);
+      expect(dispatchAppCommand).toHaveBeenCalledWith({
+        command,
+        hostWebContentsId: 51,
+      });
+    },
+  );
+
+  it.each(["pane.focus.previous", "pane.focus.next"] as const)(
+    "leaves native page focus and input untouched when %s is unavailable",
+    (command) => {
+      let splitNavigationEnabled = false;
+      const dispatchAppCommand = vi.fn();
+      const focusHostWebContents = vi.fn();
+      const manager = createDesktopBrowserViewManager({
+        dispatchAppCommand,
+        focusHostWebContents,
+        partition: "persist:test",
+        resolveAppCommand: (input, hostWebContentsId) => resolveDesktopBrowserAppCommand({
+          input,
+          isMac: true,
+          splitNavigationEnabled: splitNavigationEnabled && hostWebContentsId === 51,
+          keybindings: [{
+            command,
+            desktopOnly: false,
+            shortcut: {
+              key: "ArrowRight", mod: true, control: true,
+              meta: false, alt: false, shift: false,
+            },
+            when: { all: ["mainSurface", "splitActive"], none: ["modalOpen"] },
+          }],
+        }),
+      });
+      const hostWindow = new FakeHostWindow({
+        contentBounds: { width: 700, height: 450 },
+        webContentsId: 51,
+      });
+      attachBrowserTab({
+        manager, hostWindow, tabId: "browser:a", url: "https://example.com",
+      });
+      const webContents = requireFakeView(0).webContents;
+
+      expect(webContents.emitBeforeInput({
+        key: "ArrowRight", meta: true, control: true,
+      })).toBe(false);
+      expect(focusHostWebContents).not.toHaveBeenCalled();
+      expect(dispatchAppCommand).not.toHaveBeenCalled();
+
+      splitNavigationEnabled = true;
+      expect(webContents.emitBeforeInput({
+        key: "ArrowRight", meta: true, control: true,
+      })).toBe(true);
+      expect(focusHostWebContents).toHaveBeenCalledWith(51);
+      expect(dispatchAppCommand).toHaveBeenCalledWith({ command, hostWebContentsId: 51 });
+
+      splitNavigationEnabled = false;
+      expect(webContents.emitBeforeInput({
+        key: "ArrowRight", meta: true, control: true,
+      })).toBe(false);
+      expect(focusHostWebContents).toHaveBeenCalledTimes(1);
+      expect(dispatchAppCommand).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("drives webContents find-in-page and relays results to the host renderer", () => {
     const manager = createDesktopBrowserViewManager({
@@ -3653,12 +3843,6 @@ describe("DesktopBrowserViewManager", () => {
   });
 
   it("allows clipboard-sanitized-write but denies clipboard-read and device permissions", () => {
-    expect(isAllowedBrowserPermission("clipboard-sanitized-write")).toBe(true);
-    expect(isAllowedBrowserPermission("clipboard-read")).toBe(false);
-    expect(isAllowedBrowserPermission("media")).toBe(false);
-    expect(isAllowedBrowserPermission("notifications")).toBe(false);
-    expect(isAllowedBrowserPermission("geolocation")).toBe(false);
-
     const manager = createDesktopBrowserViewManager({
       partition: "persist:test",
     });
@@ -3686,20 +3870,23 @@ describe("DesktopBrowserViewManager", () => {
       throw new Error("Expected permission handlers to be registered.");
     }
 
-    expect(checkHandler(null, "clipboard-sanitized-write")).toBe(true);
-    expect(checkHandler(null, "clipboard-read")).toBe(false);
-    expect(checkHandler(null, "media")).toBe(false);
+    const permissions = [
+      "clipboard-sanitized-write",
+      "clipboard-read",
+      "media",
+      "notifications",
+      "geolocation",
+    ];
+    expect(
+      permissions.map((permission) => checkHandler(null, permission)),
+    ).toEqual([true, false, false, false, false]);
 
     const requestGrants: boolean[] = [];
-    requestHandler(null, "clipboard-sanitized-write", (granted) => {
-      requestGrants.push(granted);
-    });
-    requestHandler(null, "clipboard-read", (granted) => {
-      requestGrants.push(granted);
-    });
-    requestHandler(null, "media", (granted) => {
-      requestGrants.push(granted);
-    });
-    expect(requestGrants).toEqual([true, false, false]);
+    for (const permission of permissions) {
+      requestHandler(null, permission, (granted) => {
+        requestGrants.push(granted);
+      });
+    }
+    expect(requestGrants).toEqual([true, false, false, false, false]);
   });
 });

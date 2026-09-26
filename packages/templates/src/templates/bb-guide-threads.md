@@ -51,6 +51,7 @@ Spawning:
     --section <id>                 Create the thread in a section
     --visibility <visibility>      visible or hidden; a child inherits its parent by default
     --send-at <when>               Dispatch the first message at an ISO 8601 timestamp or a duration from now (30s, 10m, 2h, 7d)
+    --draft                        Save the prompt as the thread's draft instead of sending it
     --file <path>                  CLI-local absolute path, file: URL, or uploaded file path
     --image <path>                 CLI-local absolute path, file: URL, or uploaded image path
     --origin-kind <kind>           Create a fork thread
@@ -65,7 +66,7 @@ Spawning:
   accept-edits uses workspace sandboxing with user-reviewed escalation. auto uses
   the same workspace sandbox with provider-native automatic review. full is the
   explicit sandbox and approval bypass. Plan mode is separate from permissions.
-  Subagents inherit the parent's permission mode by default, and the parent's mode is a hard ceiling: a child's requested mode can lower it but never exceed it, so a sandboxed parent cannot spawn a full-access child.
+  Subagents inherit the parent's permission mode by default, adapted to the child provider's supported modes. Explicit requests and a thread's recorded mode take precedence; nesting a thread does not cap its permissions. The host permission ceiling still applies.
   Parenting is opt-in. Inside a thread, pass --parent-self to parent the new thread to the current thread.
   Hidden threads are for plugin/background workers. They remain addressable by
   ID while staying out of sidebar organization and unread/pending favicon
@@ -141,8 +142,11 @@ Editing a sent message:
   Failed and incomplete turns are eligible. If the thread is running,
   submission stops the current turn and waits for it to settle. It then
   replaces the selected turn and every later turn while retaining workspace
-  changes. From an agent thread, the command carries `BB_THREAD_ID` so the
-  replacement runs under agent permission policy.
+  changes. Unsent queued messages remain in the queue and dispatch after the
+  replacement turn when their waits clear. An already-sending queued message
+  must finish before the edit can start. Retries of turns replaced by the edit
+  are removed from the queue. From an agent thread, the command
+  carries `BB_THREAD_ID` so the replacement runs under agent permission policy.
   An edit is refused if removing its history would erase ownership evidence
   shared with another thread. Use bb thread clear <id> to start a new session
   while keeping the history and its ownership evidence.
@@ -152,6 +156,7 @@ Listing:
   bb thread list                           List threads
     --project <id>                         Filter by project
     --environment <id>                     Filter by environment
+    --machine <id-or-name>                 Filter by the machine the environment is on (alias --host)
     --parent-thread <id>                   Filter by parent thread
     --archived                             Show only archived threads
     --section <id>                         Filter by section
@@ -349,7 +354,7 @@ Interactions:
 Queued messages:
 
   bb thread queue list [<thread-id>] [--wait-holder plugin:<plugin-id>]
-  bb thread queue create <thread-id> <message>
+  bb thread queue create <thread-id> <message> [--file <path>] [--image <path>]
   bb thread queue update <thread-id> <message-id> <message> [--file <path>] [--image <path>]
   bb thread queue send <thread-id> <message-id> [--mode auto|steer]
   bb thread queue reorder <thread-id> <message-id> [--after <id>] [--before <id>]
@@ -366,6 +371,11 @@ Queued messages:
   queued row in the workspace; `--wait-holder plugin:<plugin-id>` narrows it to
   the rows one plugin is holding.
 
+  Failed rows show their failure reason instead of their previous wait, followed
+  by a recovery command: `bb thread queue send <thread-id> <message-id>`.
+  Use it to retry immediately, including after automatic retries are exhausted.
+  Editing the message does not clear its failure or trigger a retry.
+
   `queue send` dispatches a row now, bypassing ordinary plugin waits and its own
   schedule. Strict plugin admission rules still apply; a blocked send remains
   queued and reports its reason. For every send, the invariants (a running turn, an unfinished workspace, an
@@ -379,6 +389,20 @@ Queued messages:
   offset) or a duration from now (30s, 10m, 2h, 7d). A time that has already
   passed is rejected, as is a bare date, which has no time of day. Several
   queued rows on one thread are normal: two scheduled sends coexist.
+
+Drafts:
+
+  bb thread draft show <thread-id>
+  bb thread draft set <thread-id> <message> [--file <path>] [--image <path>]
+  bb thread draft clear <thread-id>
+
+  A draft is a thread's saved, unsent message. `bb thread spawn --draft`
+  creates a draft thread: it stays `pending`, nothing is provisioned, and the
+  prompt is its draft. The app saves a draft thread when you leave the
+  new-thread composer with text in it, and shows the draft in that thread's
+  composer. Send a message with `bb thread tell` to start the thread. Sending
+  does not clear the draft; `draft clear` does, and the app clears it when the
+  composer sends.
 
 Persisted panel tabs:
 
@@ -421,6 +445,22 @@ Lifecycle:
 
   bb thread unarchive [id]                 Unarchive a thread
     --self                                 Unarchive current thread
+
+  bb thread restore-environment [id]       Restore a destroyed workspace
+    --self                                 Restore current thread
+
+  Archiving a thread retires its environment, and a managed workspace is removed
+  from disk once the provider's grace window passes. Sending to a thread whose
+  workspace is gone fails; `restore-environment` asks the environment provider
+  to build it again and attaches it, leaving the conversation where it was.
+  Each provider decides what that means: a worktree is re-created on the branch
+  it held, a project checkout switches back to that branch, and a personal
+  workspace cannot be restored. It starts no turn — the thread settles back to
+  idle with a live workspace (check `canRestoreEnvironment` on `bb thread show
+  --json`). Unarchive the thread first; the command is refused while the thread
+  is archived, while its workspace is still there, and when the provider does
+  not restore, is gone, or its machine is gone. Uncommitted changes in the
+  removed workspace are not recoverable.
 
   bb thread delete <id>                    Delete permanently
     --yes                                  Skip confirmation

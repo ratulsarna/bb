@@ -32,6 +32,7 @@ import {
   settleArchiveThreadsTransaction,
   settleDeleteThreadTransaction,
   settleThreadListMembershipMutation,
+  settleThreadReadStateTransaction,
   type ArchiveThreadsTransaction,
   type DeleteThreadTransaction,
   type PinnedThreadOrderTransaction,
@@ -57,6 +58,7 @@ interface MoveThreadToSectionRequest {
 interface UpdateThreadMutationOptions {
   errorMessage?: string | undefined;
   lifecycleOperation?: LifecycleErrorOperation | undefined;
+  showErrorToast?: boolean;
 }
 
 interface ArchiveThreadAndChildrenMutationRequest {
@@ -84,6 +86,7 @@ export function useUpdateThread(options?: UpdateThreadMutationOptions) {
   >({
     meta: {
       errorMessage: options?.errorMessage ?? "Failed to update thread.",
+      showErrorToast: options?.showErrorToast ?? true,
       ...(options?.lifecycleOperation
         ? { lifecycleOperation: options.lifecycleOperation }
         : {}),
@@ -343,6 +346,21 @@ export function useUnarchiveThread() {
   });
 }
 
+export function useRestoreThreadEnvironment() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    meta: {
+      errorMessage: "Failed to restore workspace.",
+    },
+    mutationFn: ({ id }: ThreadMutationRequest): Promise<ThreadResponse> =>
+      sdk.threads.restoreEnvironment({ threadId: id }),
+    onSuccess: (thread) => {
+      applyThreadUpdateResult({ queryClient, thread });
+    },
+  });
+}
+
 export function useDeleteThread() {
   const queryClient = useQueryClient();
 
@@ -400,6 +418,9 @@ export function useMarkThreadRead() {
     onSuccess: (thread) => {
       applyThreadReadStateResult({ queryClient, thread });
     },
+    onSettled: (_data, _error, _input, transaction) => {
+      settleThreadReadStateTransaction({ queryClient, transaction });
+    },
   });
 }
 
@@ -413,7 +434,7 @@ export function useMarkThreadUnread() {
     },
     mutationFn: (input: ThreadReadMutationInput) =>
       sdk.threads.markUnread(input),
-    onMutate: (input): Promise<ThreadListMutationTransaction> =>
+    onMutate: (input): Promise<ThreadReadStateTransaction> =>
       beginThreadReadStateTransaction({
         lastReadAt: null,
         queryClient,
@@ -428,6 +449,9 @@ export function useMarkThreadUnread() {
     },
     onSuccess: (thread) => {
       applyThreadReadStateResult({ queryClient, thread });
+    },
+    onSettled: (_data, _error, _input, transaction) => {
+      settleThreadReadStateTransaction({ queryClient, transaction });
     },
   });
 }

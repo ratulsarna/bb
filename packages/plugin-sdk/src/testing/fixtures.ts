@@ -118,8 +118,10 @@ export function makeThreadResponse(
     updatedAt: 0,
     runtime: { displayStatus: "idle", hostReconnectGraceExpiresAt: null },
     activeBackgroundAgentCount: 0,
+    canRestoreEnvironment: false,
     canSpawnChild: true,
     queuedMessageCount: 0,
+    draft: null,
     ...overrides,
   };
 }
@@ -244,6 +246,7 @@ export function makeMessageDispatchHookContext(
     environmentProviderSelection: null,
     environmentProviderInstanceKey: null,
     lifecycle: { phase: "active", retireAt: null, teardown: null },
+    hostLifecycle: "active",
     managed: false,
     workspaceProvisionType: null,
     status: "ready",

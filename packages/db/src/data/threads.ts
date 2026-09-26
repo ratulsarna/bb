@@ -1,10 +1,14 @@
-import { copyProjectAttachmentOwnership } from "./project-attachments.js";
+import {
+  acquireProjectAttachmentOwnership,
+  copyProjectAttachmentOwnership,
+} from "./project-attachments.js";
 import {
   and,
   asc,
   count,
   desc,
   eq,
+  exists,
   getTableColumns,
   inArray,
   isNotNull,
@@ -17,6 +21,7 @@ import {
 } from "drizzle-orm";
 import type {
   JsonObject,
+  PromptInput,
   ReasoningLevel,
   ThreadChangeKind,
   ThreadLifecycleEvent,
@@ -28,6 +33,7 @@ import type {
 } from "@bb/domain";
 import {
   evaluateThreadLifecycleEvent,
+  projectAttachmentPaths,
   threadSearchSourceKindSchema,
 } from "@bb/domain";
 import type { DbConnection, DbTransaction } from "../connection.js";
@@ -37,10 +43,12 @@ import {
   environments,
   pendingInteractions,
   projects,
+  terminalSessions,
   threadSearchSegments,
   threads,
 } from "../schema.js";
 import { createThreadId } from "../ids.js";
+import { NON_TERMINAL_SESSION_STATUSES } from "./terminal-sessions.js";
 import { createOrderKeyBetween } from "./order-keys.js";
 import { insertThreadPluginMetadata } from "./thread-plugin-metadata.js";
 
@@ -268,7 +276,9 @@ export interface CreateThreadInput {
   originKind?: ThreadOriginKind | null;
   originPluginId?: string | null;
   pluginMetadata?: { pluginId: string; metadata: JsonObject } | null;
+  startupContext?: string;
   visibility?: ThreadVisibility;
+  draft?: PromptInput[] | null;
 }
 
 export class InvalidLifecycleOwnerError extends Error {
@@ -318,6 +328,7 @@ export function createThread(
           titleFallback: input.titleFallback ?? null,
           sectionId: input.sectionId ?? null,
           status: input.status ?? "starting",
+          startupContext: input.startupContext ?? null,
           parentThreadId:
             originKind === null ? (input.parentThreadId ?? null) : null,
           sourceThreadId:
@@ -327,6 +338,7 @@ export function createThread(
           originKind,
           originPluginId: input.originPluginId ?? null,
           visibility,
+          draft: serializeThreadDraft(input.draft ?? null),
           lastReadAt: now,
           latestAttentionAt: now,
           createdAt: now,
@@ -334,6 +346,11 @@ export function createThread(
         })
         .returning()
         .get();
+      acquireProjectAttachmentOwnership(
+        tx,
+        createdThread.id,
+        projectAttachmentPaths(input.draft ?? []),
+      );
       if (
         createdThread.originKind === "fork" &&
         createdThread.sourceThreadId !== null
@@ -412,6 +429,7 @@ export function listThreadMentionRowsByIds(
 export interface ListThreadsOptions {
   projectId?: string;
   environmentId?: string;
+  hostId?: string;
   archived?: boolean;
   sectionId?: string;
   unsectioned?: boolean;
@@ -682,6 +700,7 @@ function buildListThreadsFilters(options: ListThreadsOptions) {
     options.environmentId
       ? eq(threads.environmentId, options.environmentId)
       : undefined,
+    options.hostId ? eq(environments.hostId, options.hostId) : undefined,
     options.sectionId ? eq(threads.sectionId, options.sectionId) : undefined,
     options.unsectioned ? isNull(threads.sectionId) : undefined,
     nonDeletedThreads(),
@@ -1310,7 +1329,7 @@ export interface RunningThreadRow {
  * projection of the threads table.
  *
  * Archived and deleted rows are excluded because neither runs: archival stops
- * a thread, and a soft-deleted row is gone. Hidden threads are NOT excluded —
+ * a thread once its undo grace expires, and a soft-deleted row is gone. Hidden threads are NOT excluded —
  * visibility is a UI fact and a hidden thread burns a slot like any other, so
  * hiding it here would under-report real occupancy.
  *
@@ -1348,6 +1367,57 @@ export function listRunningThreads(
     .orderBy(asc(threads.id))
     .all()
     .map((row) => ({ ...row, hostId: row.hostId ?? null }));
+}
+
+const ARCHIVED_TEARDOWN_THREAD_STATUSES: readonly ThreadStatus[] = [
+  "pending",
+  "starting",
+  "active",
+  "stopping",
+];
+
+export interface ArchivedTeardownThreadRow {
+  archivedAt: number | null;
+  environmentId: string | null;
+  id: string;
+  status: ThreadStatus;
+}
+
+export function listArchivedThreadsPendingTeardown(
+  db: DbQueryConnection,
+): ArchivedTeardownThreadRow[] {
+  return db
+    .select({
+      archivedAt: threads.archivedAt,
+      environmentId: threads.environmentId,
+      id: threads.id,
+      status: threads.status,
+    })
+    .from(threads)
+    .where(
+      and(
+        isNotNull(threads.archivedAt),
+        isNull(threads.deletedAt),
+        or(
+          inArray(threads.status, [...ARCHIVED_TEARDOWN_THREAD_STATUSES]),
+          exists(
+            db
+              .select({ id: terminalSessions.id })
+              .from(terminalSessions)
+              .where(
+                and(
+                  eq(terminalSessions.threadId, threads.id),
+                  inArray(
+                    terminalSessions.status,
+                    NON_TERMINAL_SESSION_STATUSES,
+                  ),
+                ),
+              ),
+          ),
+        ),
+      ),
+    )
+    .all();
 }
 
 export function listThreadsWithPendingInteractionState(
@@ -1503,6 +1573,21 @@ export function listThreadEnvironmentAssignmentsOnHost(
       ),
     )
     .all();
+}
+
+export function listExistingThreadIds(
+  db: DbQueryConnection,
+  threadIds: string[],
+): string[] {
+  if (threadIds.length === 0) {
+    return [];
+  }
+  return db
+    .select({ id: threads.id })
+    .from(threads)
+    .where(inArray(threads.id, threadIds))
+    .all()
+    .map((row) => row.id);
 }
 
 export function listHostThreadIds(
@@ -1837,6 +1922,71 @@ export function setThreadExecutionOverride(
     .where(eq(threads.id, input.threadId))
     .returning()
     .get();
+  return updated ?? null;
+}
+
+export function getThreadDraft(
+  db: DbQueryConnection,
+  threadId: string,
+): string | null {
+  return (
+    db
+      .select({ draft: threads.draft })
+      .from(threads)
+      .where(eq(threads.id, threadId))
+      .get()?.draft ?? null
+  );
+}
+
+function serializeThreadDraft(draft: PromptInput[] | null): string | null {
+  return draft === null || draft.length === 0 ? null : JSON.stringify(draft);
+}
+
+export interface SetThreadDraftInput {
+  threadId: string;
+  draft: PromptInput[] | null;
+  titleFallback: string | null;
+}
+
+export function setThreadDraft(
+  db: DbConnection,
+  notifier: DbNotifier,
+  input: SetThreadDraftInput,
+) {
+  const now = Date.now();
+  const updated = db.transaction(
+    (tx) => {
+      const row = tx
+        .update(threads)
+        .set({
+          draft: serializeThreadDraft(input.draft),
+          titleFallback: input.titleFallback,
+          updatedAt: now,
+        })
+        .where(eq(threads.id, input.threadId))
+        .returning()
+        .get();
+      if (!row) return null;
+      acquireProjectAttachmentOwnership(
+        tx,
+        row.id,
+        projectAttachmentPaths(input.draft ?? []),
+      );
+      upsertThreadTitleSearchSegments(tx, {
+        threadId: row.id,
+        title: row.title,
+        titleFallback: row.titleFallback,
+        updatedAt: now,
+      });
+      return row;
+    },
+    { behavior: "immediate" },
+  );
+  if (updated) {
+    notifier.notifyThread(updated.id, ["draft-changed"], {
+      projectId: updated.projectId,
+    });
+  }
   return updated ?? null;
 }
 

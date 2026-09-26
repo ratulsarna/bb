@@ -277,6 +277,7 @@ type ExpectedHostsKey =
   | "cloneDefaultPath"
   | "experimental_create"
   | "experimental_getEnrollmentCommand"
+  | "experimental_reconnect"
   | "createJoinCode"
   | "delete"
   | "experimental_deleteOldServerCopy"
@@ -297,6 +298,8 @@ type ExpectedHostsKey =
 
 type ExpectedPluginsKey =
   | "experimental_discoverRpc"
+  | "experimental_getSafeMode"
+  | "experimental_setSafeMode"
   | "applyUpdate"
   | "callRpc"
   | "catalog"
@@ -348,16 +351,22 @@ type ExpectedProvidersKey = "list" | "models";
 type ExpectedStatusKey = "get";
 
 type ExpectedSystemKey =
+  | "acknowledgeAppUpdate"
+  | "appUpdate"
+  | "applyAppUpdate"
   | "setMachineEnvironmentVariable"
   | "deleteMachineEnvironmentVariable"
   | "machineEnvironment"
   | "replaceMachineEnvironment"
+  | "aiServices"
   | "attention"
   | "cliSkillsStatus"
   | "config"
   | "executionOptions"
   | "installCliSkills"
   | "reloadConfig"
+  | "setAiServiceSelection"
+  | "testAiService"
   | "transcribeVoice"
   | "uiPreferences"
   | "updateExperiments"
@@ -406,6 +415,7 @@ type ExpectedThreadsKey =
   | "queuedMessages"
   | "reorderPinned"
   | "resolveMentions"
+  | "restoreEnvironment"
   | "retry"
   | "search"
   | "send"
@@ -420,6 +430,7 @@ type ExpectedThreadsKey =
   | "unarchive"
   | "unpin"
   | "update"
+  | "updateDraft"
   | "wait";
 
 type ExpectedThreadEventsKey = "list" | "wait";

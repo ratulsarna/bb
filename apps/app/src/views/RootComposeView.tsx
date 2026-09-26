@@ -1,4 +1,8 @@
 import { useInitialPromptDraft } from "@/components/promptbox/mentions/initial-prompt-draft";
+import {
+  ThreadTitle,
+  useThreadTitleDisplayText,
+} from "@/components/thread/ThreadTitleMentions";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -24,7 +28,10 @@ import {
   type NewThreadComposerState,
   type NewThreadComposerSubmission,
 } from "@/components/promptbox/NewThreadComposer";
-import { ProviderCliVersionBanner } from "@/components/promptbox/banner/ProviderCliVersionBanner";
+import {
+  ProviderCliBanner,
+  providerCliBlockedReason,
+} from "@/components/promptbox/banner/ProviderCliBanner";
 import {
   buildProviderCliIssue,
   hasProviderCliAction,
@@ -65,7 +72,12 @@ import { PluginIcon } from "@/components/plugin/PluginIcon";
 import type { FileOpenerOverride } from "@/lib/plugin-slot-resolvers";
 import { usePluginNewThreadPanelActions } from "@/components/plugin/PluginPanelActions";
 import { usePluginSlots } from "@/lib/plugin-slots";
-import { useCreateThread } from "@/hooks/mutations/thread-runtime-mutations";
+import {
+  useCreateDraftThread,
+  useCreateThread,
+} from "@/hooks/mutations/thread-runtime-mutations";
+import { getPromptDraftAccessor } from "@/hooks/usePromptDraftStorage";
+import type { NewThreadRequest } from "@get-bb/plugin-sdk";
 import {
   useCloseTerminal,
   useCloseEnvironmentTerminal,
@@ -83,7 +95,13 @@ import {
 import { PluginComposerHostProvider } from "@/components/plugin/plugin-composer-host";
 import type { PromptMentionLinkResolver } from "@/components/promptbox/editor/prompt-mention-link";
 import { useQuickCreateProjectController } from "@/hooks/useQuickCreateProject";
-import type { PromptDraftAttachment } from "@bb/client-core";
+import {
+  arePromptDraftStatesEqual,
+  emptyPromptDraftState,
+  isPromptDraftEmpty,
+  type PromptDraftAttachment,
+  type PromptDraftState,
+} from "@bb/client-core";
 import {
   buildForkThreadRequest,
   FORK_THREAD_CREATE_SEED_LOCATION_STATE_KEY,
@@ -136,7 +154,9 @@ import {
   toFilePreviewLineRange,
 } from "@/lib/live-file-navigation";
 import {
+  useRootComposeForkSeed,
   useRootComposeProjectId,
+  useRootComposeSectionId,
   useSetRootComposeProjectId,
 } from "@/lib/root-compose-selection";
 import {
@@ -321,6 +341,29 @@ function readReuseEnvironmentIdFromLocationState(
   return null;
 }
 
+export function readNewEnvironmentHostIdFromLocationState(
+  state: unknown,
+): string | null {
+  if (typeof state !== "object" || state === null) return null;
+  if (!("newEnvironmentHostId" in state)) return null;
+  const hostId = state.newEnvironmentHostId;
+  return typeof hostId === "string" && hostId.trim().length > 0
+    ? hostId.trim()
+    : null;
+}
+
+export function readRootComposeEnvironmentTargetFromLocationState(
+  state: unknown,
+):
+  | { kind: "reuse"; environmentId: string }
+  | { kind: "host"; hostId: string }
+  | null {
+  const environmentId = readReuseEnvironmentIdFromLocationState(state);
+  if (environmentId !== null) return { kind: "reuse", environmentId };
+  const hostId = readNewEnvironmentHostIdFromLocationState(state);
+  return hostId === null ? null : { kind: "host", hostId };
+}
+
 export function shouldNavigateAfterThreadCreate({
   isForkDraft,
   navigateToThreadAfterCreate,
@@ -399,7 +442,7 @@ function readForkThreadCreateSeedFromLocationState(
 export function hasSingleUseRootComposeTargetState(state: unknown): boolean {
   return (
     readRootComposeSectionTargetFromLocationState(state) !== null ||
-    readReuseEnvironmentIdFromLocationState(state) !== null ||
+    readRootComposeEnvironmentTargetFromLocationState(state) !== null ||
     readForkThreadCreateSeedFromLocationState(state) !== null
   );
 }
@@ -506,9 +549,9 @@ export function RootComposeView() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const createThread = useCreateThread();
-  const [rootComposeSectionId, setRootComposeSectionId] = useState<
-    string | null
-  >(() => readSectionIdFromLocationState(location.state));
+  const createDraftThread = useCreateDraftThread();
+  const [rootComposeSectionId, setRootComposeSectionId] =
+    useRootComposeSectionId();
   const [lastCreatedThreadId, setLastCreatedThreadId] = useState<string | null>(
     null,
   );
@@ -517,16 +560,14 @@ export function RootComposeView() {
   );
   const [navigateToThreadAfterCreate] =
     useNavigateToThreadAfterCreatePreference();
-  const [forkSeed, setForkSeed] = useState<ForkThreadCreateSeed | null>(() =>
-    readForkThreadCreateSeedFromLocationState(location.state),
-  );
+  const [forkSeed, setForkSeed] = useRootComposeForkSeed();
 
   const handleProjectChange = useCallback(
     (projectId: string) => {
       setForkSeed(null);
       setRootComposeProjectId(projectId);
     },
-    [setRootComposeProjectId],
+    [setForkSeed, setRootComposeProjectId],
   );
   const handleSubmit = useCallback(
     async (request: NewThreadComposerSubmission) => {
@@ -583,7 +624,30 @@ export function RootComposeView() {
       navigate,
       navigateToThreadAfterCreate,
       rootComposeSectionId,
+      setForkSeed,
+      setRootComposeSectionId,
     ],
+  );
+  const handleLeaveWithDraft = useCallback(
+    (request: NewThreadRequest, draft: PromptDraftState) => {
+      if (forkSeed !== null) return;
+      const newThreadDraft = getPromptDraftAccessor({ kind: "new-thread" });
+      if (!arePromptDraftStatesEqual(newThreadDraft.getCurrent(), draft)) {
+        return;
+      }
+      newThreadDraft.setDraft(emptyPromptDraftState());
+      createDraftThread
+        .mutateAsync({
+          ...request,
+          ...(rootComposeSectionId ? { sectionId: rootComposeSectionId } : {}),
+        })
+        .catch(() => {
+          if (isPromptDraftEmpty(newThreadDraft.getCurrent())) {
+            newThreadDraft.setDraft(draft);
+          }
+        });
+    },
+    [createDraftThread, forkSeed, rootComposeSectionId],
   );
   const composerSeed = useMemo(
     () =>
@@ -613,6 +677,7 @@ export function RootComposeView() {
       resetKey={forkSeed?.sourceThreadId ?? null}
       preferReadyProviderWhenUnset={forkSeed === null}
       onSubmit={handleSubmit}
+      onLeaveWithDraft={handleLeaveWithDraft}
     >
       {(composer) => (
         <RootComposeSurface
@@ -684,6 +749,8 @@ function RootComposeSurface({
     textEffects: promptTextEffects,
     isSubmitting,
     seedEnvironmentSelectionValue,
+    hostSelectionReady,
+    selectHostForNewEnvironment,
     setEnvironmentSelectionValue,
     setProviderModelReasoning,
     setPermissionMode,
@@ -752,13 +819,16 @@ function RootComposeSurface({
     const sectionTarget = readRootComposeSectionTargetFromLocationState(
       location.state,
     );
-    const reuseEnvironmentId = readReuseEnvironmentIdFromLocationState(
+    const environmentTarget = readRootComposeEnvironmentTargetFromLocationState(
       location.state,
     );
     const nextForkSeed = readForkThreadCreateSeedFromLocationState(
       location.state,
     );
     if (!hasSingleUseRootComposeTargetState(location.state)) return;
+    if (environmentTarget?.kind === "host" && !hostSelectionReady) {
+      return;
+    }
     if (shouldStartComposingFromLocationState(location.state)) {
       setStartedComposing(true);
     }
@@ -767,8 +837,12 @@ function RootComposeSurface({
     } else if (sectionTarget?.kind === "clear") {
       setRootComposeSectionId(null);
     }
-    if (reuseEnvironmentId !== null) {
-      seedEnvironmentSelectionValue(encodeReuseValue(reuseEnvironmentId));
+    if (environmentTarget?.kind === "reuse") {
+      seedEnvironmentSelectionValue(
+        encodeReuseValue(environmentTarget.environmentId),
+      );
+    } else if (environmentTarget?.kind === "host") {
+      selectHostForNewEnvironment(environmentTarget.hostId);
     }
     if (nextForkSeed !== null) {
       setForkSeed(nextForkSeed);
@@ -780,15 +854,21 @@ function RootComposeSurface({
         encodeReuseValue(nextForkSeed.environmentId),
       );
     }
+    if (shouldStartComposingFromLocationState(location.state)) {
+      window.requestAnimationFrame(focusPromptBox);
+    }
     navigate(getRootComposeRoutePath() + location.search, {
       replace: true,
       state: null,
     });
   }, [
+    focusPromptBox,
     location.search,
     location.state,
+    hostSelectionReady,
     navigate,
     seedEnvironmentSelectionValue,
+    selectHostForNewEnvironment,
     setForkSeed,
     setPermissionMode,
     setProviderModelReasoning,
@@ -864,23 +944,24 @@ function RootComposeSurface({
     useProviderCliInstallRunner();
   const selectedProviderCliStatus =
     providerCliStatus.data?.[selectedProviderId] ?? null;
-  const isProviderCliVersionBlocked =
-    selectedProviderCliStatus?.versionUnsupported === true;
+  const blockingProviderCliStatus =
+    selectedProviderCliStatus !== null &&
+    (!selectedProviderCliStatus.installed ||
+      selectedProviderCliStatus.versionUnsupported)
+      ? selectedProviderCliStatus
+      : null;
+  const isProviderCliBlocked = blockingProviderCliStatus !== null;
   const selectedProviderCliIssue = useMemo(() => {
-    if (!isProviderCliVersionBlocked || selectedProviderCliStatus === null) {
+    if (blockingProviderCliStatus === null) {
       return null;
     }
     const issue = buildProviderCliIssue({
       provider: selectedProviderId,
-      status: selectedProviderCliStatus,
+      status: blockingProviderCliStatus,
     });
     return issue && hasProviderCliAction(issue) ? issue : null;
-  }, [
-    isProviderCliVersionBlocked,
-    selectedProviderCliStatus,
-    selectedProviderId,
-  ]);
-  const handleUpdateProviderCli = useCallback(() => {
+  }, [blockingProviderCliStatus, selectedProviderId]);
+  const handleRunProviderCliAction = useCallback(() => {
     if (selectedProviderCliIssue === null || rootProjectHostId === null) return;
     startInstall({
       hostId: rootProjectHostId,
@@ -1809,16 +1890,11 @@ function RootComposeSurface({
   );
   useEffect(() => {
     if (!startedComposing) return;
-    if (isProviderCliVersionBlocked) return;
+    if (isProviderCliBlocked) return;
     if (isPointerCoarse) return;
     const handle = window.requestAnimationFrame(focusPromptBox);
     return () => window.cancelAnimationFrame(handle);
-  }, [
-    isProviderCliVersionBlocked,
-    isPointerCoarse,
-    focusPromptBox,
-    startedComposing,
-  ]);
+  }, [isProviderCliBlocked, isPointerCoarse, focusPromptBox, startedComposing]);
   const [machineSetupTarget, setMachineSetupTarget] =
     useState<ProjectMachineSetupDialogTarget | null>(null);
   const currentProjectName = currentProject?.name ?? null;
@@ -1858,6 +1934,9 @@ function RootComposeSurface({
     window.requestAnimationFrame(focusPromptBox);
   }, [focusPromptBox, setForkSeed]);
 
+  const forkSourceDisplayTitle = useThreadTitleDisplayText(
+    forkSeed?.sourceThreadTitle ?? "",
+  );
   const promptHeader = useMemo(() => {
     if (forkSeed === null) {
       return null;
@@ -1865,12 +1944,13 @@ function RootComposeSurface({
     return (
       <div className="flex">
         <div
-          aria-label={`Forking ${forkSeed.sourceThreadTitle}`}
+          aria-label={`Forking ${forkSourceDisplayTitle}`}
           className="-ml-1.5 inline-flex h-7 max-w-full items-center gap-1.5 rounded-full bg-muted py-0 pl-2.5 pr-1 text-xs font-medium text-muted-foreground"
         >
           <Icon name="Fork" className="size-3.5 shrink-0" aria-hidden />
-          <span className="min-w-0 truncate">
-            Forking {forkSeed.sourceThreadTitle}
+          <span className="flex min-w-0 items-baseline gap-1">
+            <span className="shrink-0">Forking</span>
+            <ThreadTitle title={forkSeed.sourceThreadTitle} />
           </span>
           <button
             type="button"
@@ -1883,21 +1963,22 @@ function RootComposeSurface({
         </div>
       </div>
     );
-  }, [forkSeed, handleCancelForkDraft]);
+  }, [forkSeed, forkSourceDisplayTitle, handleCancelForkDraft]);
 
   const promptBanner = useMemo(() => {
-    if (!isProviderCliVersionBlocked || selectedProviderCliStatus === null) {
+    if (blockingProviderCliStatus === null) {
       return null;
     }
     return (
-      <ProviderCliVersionBanner
-        displayName={selectedProviderCliStatus.displayName}
-        currentVersion={selectedProviderCliStatus.currentVersion}
+      <ProviderCliBanner
+        displayName={blockingProviderCliStatus.displayName}
+        installed={blockingProviderCliStatus.installed}
+        currentVersion={blockingProviderCliStatus.currentVersion}
         minimumSupportedVersion={
-          selectedProviderCliStatus.minimumSupportedVersion
+          blockingProviderCliStatus.minimumSupportedVersion
         }
-        canUpdate={selectedProviderCliIssue !== null}
-        updating={
+        canRunAction={selectedProviderCliIssue !== null}
+        actionRunning={
           rootProjectHostId !== null &&
           (runningJobKey ===
             providerCliJobKey(rootProjectHostId, selectedProviderId) ||
@@ -1905,17 +1986,16 @@ function RootComposeSurface({
               providerCliJobKey(rootProjectHostId, selectedProviderId),
             ))
         }
-        onUpdate={handleUpdateProviderCli}
+        onAction={handleRunProviderCliAction}
       />
     );
   }, [
+    blockingProviderCliStatus,
     rootProjectHostId,
-    handleUpdateProviderCli,
-    isProviderCliVersionBlocked,
+    handleRunProviderCliAction,
     queuedJobKeys,
     runningJobKey,
     selectedProviderCliIssue,
-    selectedProviderCliStatus,
     selectedProviderId,
   ]);
 
@@ -1943,14 +2023,14 @@ function RootComposeSurface({
 
   const promptBox = renderPromptBox({
     id: "root-compose-prompt",
-    autoFocus: !isProviderCliVersionBlocked,
-    allowSoftKeyboardAutoFocus: isCompactViewport,
+    autoFocus: !isProviderCliBlocked,
     mentionMenuPlacement: isCompactHomeLayout ? "top" : "bottom",
     banner: promptBanner,
     header: promptHeader,
-    blockedReason: isProviderCliVersionBlocked
-      ? `Update ${selectedProviderCliStatus?.displayName ?? selectedProviderId} before starting a thread.`
-      : undefined,
+    blockedReason:
+      blockingProviderCliStatus === null
+        ? undefined
+        : providerCliBlockedReason(blockingProviderCliStatus),
     resolveMentionLink,
     pluginComposerHost,
     textEffects: promptTextEffects,

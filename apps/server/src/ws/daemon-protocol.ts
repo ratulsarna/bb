@@ -331,8 +331,7 @@ export function onDaemonSocketMessage(
 }
 
 export function onDaemonSocketClose(
-  deps: LoggedPendingInteractionWorkSessionDeps &
-    Pick<AppDeps, "sharedPorts">,
+  deps: LoggedPendingInteractionWorkSessionDeps & Pick<AppDeps, "sharedPorts">,
   sessionId: string,
 ): void {
   handleDaemonSocketClosed(deps, {

@@ -30,7 +30,7 @@ import {
   makeThreadQueuedMessage as makeThreadQueuedMessageFixture,
   makeThreadWithRuntime as makeThreadWithRuntimeFixture,
 } from "@bb/test-helpers/domain-fixtures";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { workflowRow } from "@/test/fixtures/thread-timeline-rows";
 import type { PromptDraftAttachment } from "@bb/client-core";
@@ -86,6 +86,7 @@ const mocks = vi.hoisted(() => ({
   setServiceTier: vi.fn(),
   supportsServiceTier: false,
   toastError: vi.fn(),
+  restoreThreadEnvironmentMutate: vi.fn(),
   unarchiveThreadMutate: vi.fn(),
   uploadPromptAttachmentMutateAsync: vi.fn(),
   updateQueuedMessageMutateAsync: vi.fn(),
@@ -100,6 +101,15 @@ vi.mock("react-router-dom", async (importOriginal) => {
   return {
     ...actual,
     useNavigate: () => mocks.navigate,
+  };
+});
+
+vi.mock("@/components/ui/app-route-anchor", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/ui/app-route-anchor")>();
+  return {
+    ...actual,
+    useImmediateRouteNavigate: () => mocks.navigate,
   };
 });
 
@@ -199,7 +209,7 @@ vi.mock("@/components/promptbox/FollowUpPromptBox", async () => {
         </div>
         <div data-testid="composer-boundary" />
         <div data-testid="composer-hidden">
-          {pendingInteraction ? "true" : "false"}
+          {composer === null || pendingInteraction ? "true" : "false"}
         </div>
         <div data-testid="submit-mode">
           {composer?.submitMode.kind}:{composer?.submitMode.reason ?? ""}
@@ -654,6 +664,10 @@ vi.mock("@/hooks/mutations/project-mutations", () => ({
 }));
 
 vi.mock("@/hooks/mutations/thread-runtime-mutations", () => ({
+  useUpdateThreadDraft: () => ({
+    isPending: false,
+    mutate: vi.fn(),
+  }),
   useCancelThreadPlan: () => ({
     isPending: false,
     mutate: mocks.cancelThreadPlanMutate,
@@ -698,6 +712,11 @@ vi.mock("@/hooks/mutations/thread-runtime-mutations", () => ({
 }));
 
 vi.mock("@/hooks/mutations/thread-state-mutations", () => ({
+  useRestoreThreadEnvironment: () => ({
+    isPending: false,
+    mutate: mocks.restoreThreadEnvironmentMutate,
+    variables: null,
+  }),
   useUnarchiveThread: () => ({
     isPending: false,
     mutate: mocks.unarchiveThreadMutate,
@@ -836,6 +855,9 @@ interface RenderPromptAreaOptions {
   modelFallback?: ThreadTimelineModelFallback | null;
   pendingInteractions?: readonly PendingInteraction[];
   childPendingInteractions?: readonly ChildThreadPendingAttention[];
+  environmentGoneStatus?: ComponentProps<
+    typeof ThreadDetailPromptArea
+  >["environmentGoneStatus"];
   pendingInteractionsInitialLoading?: boolean;
   queuedMessageCount?: number;
   sentMessageEdit?: ThreadDetailSentMessageEdit;
@@ -851,6 +873,7 @@ function buildPromptAreaElement({
   modelFallback = null,
   pendingInteractions = [],
   childPendingInteractions = [],
+  environmentGoneStatus = null,
   pendingInteractionsInitialLoading = false,
   queuedMessageCount = 0,
   sentMessageEdit,
@@ -859,6 +882,7 @@ function buildPromptAreaElement({
   return (
     <QueryClientProvider client={testQueryClient}>
       <ThreadDetailPromptArea
+        serverDraft={null}
         activeBackgroundAgentCount={0}
         activeBackgroundCommands={[]}
         activePromptMode={activePromptMode}
@@ -868,7 +892,8 @@ function buildPromptAreaElement({
         childThreadsSection={null}
         composerFocusRequestNonce={0}
         contextBannerMergeBase={null}
-        environmentGoneStatus={null}
+        canRestoreEnvironment={false}
+        environmentGoneStatus={environmentGoneStatus}
         goal={goal}
         modelFallback={modelFallback}
         isEnvironmentActionPending={false}
@@ -945,6 +970,17 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+it.each(["removed", "removing", "cleanup-failed"] as const)(
+  "hides execution for a %s machine even when the environment still exists",
+  (status) => {
+    renderPromptArea({
+      environmentGoneStatus: status,
+      thread: makeThread({ environmentId: "env_retained" }),
+    });
+    expect(screen.getByTestId("composer-hidden").textContent).toBe("true");
+  },
+);
+
 describe("environment follow-up summary", () => {
   it("renders for a thread with an environment even when it has no environment label", () => {
     renderPromptArea({ thread: makeThread({ environmentId: "env_1" }) });
@@ -976,8 +1012,8 @@ describe("ThreadDetailPromptArea", () => {
       screen.getByRole("button", { name: "Capture plugin host" }),
     );
     const pluginSubmission = {
-      pluginId: "drafts",
-      data: { kind: "draft" } as const,
+      pluginId: "example-plugin",
+      data: { kind: "hold" } as const,
     };
 
     await act(async () => {
@@ -1115,7 +1151,7 @@ describe("ThreadDetailPromptArea", () => {
     expect(onCancel).toHaveBeenCalledTimes(2);
   });
 
-  it("blocks a staged sent-message edit when the thread becomes ineligible", () => {
+  it("allows a staged sent-message edit while another message is queued", () => {
     mocks.defaultExecutionOptions = {
       model: "gpt-5",
       permissionMode: "auto",
@@ -1142,13 +1178,11 @@ describe("ThreadDetailPromptArea", () => {
     });
 
     const inlineEditor = within(hostElement);
-    expect(inlineEditor.getByTestId("submit-mode").textContent).toBe(
-      "blocked:unavailable",
-    );
+    expect(inlineEditor.getByTestId("submit-mode").textContent).toBe("ready:");
     fireEvent.click(
       inlineEditor.getByRole("button", { name: "Submit composer" }),
     );
-    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the queued drawer adjacent to the bottom composer", () => {

@@ -36,7 +36,11 @@ import {
   type BbDesktopBrowserViewportBounds,
   type BbDesktopBrowserViewBounds,
 } from "@bb/desktop-contract";
-import type { AppCommandId, AppShortcutInput } from "@bb/domain";
+import {
+  PANE_DIRECTION_APP_COMMAND_IDS,
+  type AppCommandId,
+  type AppShortcutInput,
+} from "@bb/domain";
 import {
   BB_DESKTOP_BROWSER_FIND_RESULT_CHANNEL,
   BB_DESKTOP_BROWSER_GUEST_MESSAGE_CHANNEL,
@@ -219,6 +223,8 @@ export interface DesktopBrowserHostWindow {
   contentView: DesktopBrowserHostContentView;
   getContentBounds(): DesktopBrowserHostContentBounds;
   isDestroyed(): boolean;
+  isFocused(): boolean;
+  once(event: "focus", listener: () => void): unknown;
   webContents: DesktopBrowserHostWebContents;
 }
 
@@ -232,7 +238,10 @@ export interface CreateDesktopBrowserViewManagerArgs {
   focusHostWebContents: (hostWebContentsId: number) => void;
   pagePreloadPath: string | null;
   partition?: string;
-  resolveAppCommand: (input: AppShortcutInput) => AppCommandId | null;
+  resolveAppCommand: (
+    input: AppShortcutInput,
+    hostWebContentsId: number,
+  ) => AppCommandId | null;
 }
 
 interface HostScopedRequestArgs<TRequest> {
@@ -286,6 +295,7 @@ export interface DesktopBrowserViewManager {
     threadId: string;
   }): Array<{ tabId: string; webContents: WebContents }>;
   subscribeAutomationTabs(listener: () => void): () => void;
+  setAutomationControlled(webContents: WebContents, controlled: boolean): void;
   profileSession(profile: DesktopBrowserTabProfile): Session;
   attach(args: HostScopedRequestArgs<BbDesktopBrowserAttachRequest>): void;
   detach(args: HostScopedTabArgs): void;
@@ -415,7 +425,7 @@ function buildBrowserState(
   };
 }
 
-export function isAllowedBrowserPermission(permission: string): boolean {
+function isAllowedBrowserPermission(permission: string): boolean {
   return permission === "clipboard-sanitized-write";
 }
 
@@ -429,6 +439,8 @@ export function createDesktopBrowserViewManager(
   const popupWindows = new Set<BrowserWindow>();
   const resizingHostIds = new Set<number>();
   const hardenedSessions = new Map<string, Session>();
+  const automationControlled = new WeakSet<WebContents>();
+  const pendingHostFocusReturns = new WeakSet<DesktopBrowserHostWindow>();
 
   function notifyAutomationTabs(): void {
     for (const listener of automationTabListeners) {
@@ -680,6 +692,10 @@ export function createDesktopBrowserViewManager(
         entry.suppressNextFocusNotification = false;
         return;
       }
+      if (automationControlled.has(webContents) || !entry.visible) {
+        setTimeout(() => returnFocusToHost(hostWindow), 0);
+        return;
+      }
       send(hostWindow, BB_DESKTOP_BROWSER_FOCUSED_CHANNEL, { tabId });
     });
 
@@ -687,17 +703,28 @@ export function createDesktopBrowserViewManager(
       if (input.type !== "keyDown" || input.isAutoRepeat || input.isComposing) {
         return;
       }
-      const command = args.resolveAppCommand({
-        altKey: input.alt,
-        code: input.code,
-        ctrlKey: input.control,
-        key: input.key,
-        metaKey: input.meta,
-        shiftKey: input.shift,
-      });
+      const command = args.resolveAppCommand(
+        {
+          altKey: input.alt,
+          code: input.code,
+          ctrlKey: input.control,
+          key: input.key,
+          metaKey: input.meta,
+          shiftKey: input.shift,
+        },
+        hostWindow.webContents.id,
+      );
       if (command === null) return;
       event.preventDefault();
-      if (command === "browser.focusLocation" || command === "browser.find") {
+      if (
+        command === "browser.focusLocation" ||
+        command === "browser.find" ||
+        command === "panel.previousTab" ||
+        command === "panel.nextTab" ||
+        PANE_DIRECTION_APP_COMMAND_IDS.some((id) => id === command) ||
+        command === "pane.focus.previous" ||
+        command === "pane.focus.next"
+      ) {
         args.focusHostWebContents(hostWindow.webContents.id);
       }
       args.dispatchAppCommand({
@@ -970,6 +997,41 @@ export function createDesktopBrowserViewManager(
     return false;
   }
 
+  function controlledViewHasFocus(
+    hostWindow: DesktopBrowserHostWindow,
+  ): boolean {
+    const hostPrefix = `${hostWindow.webContents.id}:`;
+    for (const [key, entry] of entries) {
+      if (
+        key.startsWith(hostPrefix) &&
+        (automationControlled.has(entry.webContents) || !entry.visible) &&
+        !entry.webContents.isDestroyed() &&
+        entry.webContents.isFocused()
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function returnFocusToHost(hostWindow: DesktopBrowserHostWindow): void {
+    if (hostWindow.isDestroyed() || hostWindow.webContents.isDestroyed()) {
+      return;
+    }
+    if (!hostWindow.isFocused()) {
+      if (pendingHostFocusReturns.has(hostWindow)) return;
+      pendingHostFocusReturns.add(hostWindow);
+      hostWindow.once("focus", () => {
+        pendingHostFocusReturns.delete(hostWindow);
+        returnFocusToHost(hostWindow);
+      });
+      return;
+    }
+    if (controlledViewHasFocus(hostWindow)) {
+      args.focusHostWebContents(hostWindow.webContents.id);
+    }
+  }
+
   function focusEntryWithoutNotifying(entry: BrowserViewEntry): void {
     entry.suppressNextFocusNotification = true;
     entry.webContents.focus();
@@ -1105,6 +1167,10 @@ export function createDesktopBrowserViewManager(
       return () => {
         automationTabListeners.delete(listener);
       };
+    },
+    setAutomationControlled(webContents, controlled) {
+      if (controlled) automationControlled.add(webContents);
+      else automationControlled.delete(webContents);
     },
     attach({ hostWindow, request }) {
       const key = browserViewKey(hostWindow, request.tabId);

@@ -33,11 +33,6 @@ const mocks = vi.hoisted(() => ({
   updateQueuedMessageMutateAsync: vi.fn(),
 }));
 
-vi.mock("react-router-dom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react-router-dom")>();
-  return { ...actual, useNavigate: () => vi.fn() };
-});
-
 vi.mock("@/components/promptbox/FollowUpPromptBox", () => ({
   FollowUpPromptBox: ({
     composer,
@@ -233,6 +228,7 @@ vi.mock("@/hooks/mutations/thread-runtime-mutations", () => {
     useSetThreadQueuedMessageGroupBoundary: idleMutation,
     useSendThreadQueuedMessage: idleMutation,
     useStopThread: idleMutation,
+    useUpdateThreadDraft: idleMutation,
     useUpdateThreadQueuedMessage: () => ({
       isPending: false,
       mutateAsync: mocks.updateQueuedMessageMutateAsync,
@@ -241,6 +237,11 @@ vi.mock("@/hooks/mutations/thread-runtime-mutations", () => {
 });
 
 vi.mock("@/hooks/mutations/thread-state-mutations", () => ({
+  useRestoreThreadEnvironment: () => ({
+    isPending: false,
+    mutate: vi.fn(),
+    variables: null,
+  }),
   useUnarchiveThread: () => ({
     isPending: false,
     mutate: vi.fn(),
@@ -363,6 +364,7 @@ function buildPromptArea({
       <ShellProbe />
       <PublishedHostDraftProbe />
       <ThreadDetailPromptArea
+        serverDraft={null}
         activeBackgroundAgentCount={0}
         activeBackgroundCommands={[]}
         activePromptMode={null}
@@ -372,6 +374,7 @@ function buildPromptArea({
         childThreadsSection={null}
         composerFocusRequestNonce={0}
         contextBannerMergeBase={null}
+        canRestoreEnvironment={false}
         environmentGoneStatus={null}
         goal={null}
         modelFallback={null}

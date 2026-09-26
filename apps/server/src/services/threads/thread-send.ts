@@ -78,6 +78,7 @@ import {
   type PromptWithGroups,
 } from "./deferred-first-turn-context.js";
 import type { TelemetryEvent } from "../system/telemetry.js";
+import { assertThreadHostAcceptsWork } from "./thread-host-admission.js";
 
 type SendThreadMessageMode = SendMessageRequest["mode"];
 type TextPromptInput = Extract<PromptInput, { type: "text" }>;
@@ -415,6 +416,7 @@ function appendAndQueueSendThreadMessageInTransaction({
   let activeThread: Thread | null = null;
   const request = db.transaction(
     (tx) => {
+      assertThreadHostAcceptsWork(tx, thread);
       beforeAppendInTransaction?.({ tx });
       const appended =
         appendPreparedClientTurnRequestedEventWithNotificationInTransaction(

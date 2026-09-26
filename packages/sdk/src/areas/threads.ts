@@ -75,6 +75,7 @@ import type {
   TimelineTurnSummaryDetailsQuery,
   UpdateThreadTabsRequest,
   UpdateThreadRequest,
+  UpdateThreadDraftRequest,
   UpdateQueuedMessageRequest,
 } from "@bb/server-contract";
 import { signalRequestArgs, type CreateSdkAreaArgs } from "./common.js";
@@ -85,6 +86,7 @@ export const DEFAULT_THREAD_WAIT_POLL_INTERVAL_MS = 250;
 export interface ThreadListArgs {
   archived?: boolean;
   environmentId?: string;
+  hostId?: string;
   sectionId?: string;
   hasParent?: boolean;
   includeHidden?: boolean;
@@ -195,6 +197,7 @@ export type ThreadBannerActionResult = { ok: true };
 export type ThreadUnarchiveResult = { ok: true };
 export type ThreadArchiveAllResult = ThreadArchiveAllResponse;
 export type ThreadReadStateResult = ThreadResponse;
+export type ThreadRestoreEnvironmentResult = ThreadResponse;
 export type ThreadPinOrderResult = ThreadListResponse;
 export type ThreadPromptHistoryResult = PromptHistoryResponse;
 export type ThreadQueuedMessagesResult = ThreadQueuedMessageListResponse;
@@ -248,6 +251,10 @@ export interface ThreadForkArgs extends Omit<
 }
 
 export interface ThreadUpdateArgs extends UpdateThreadRequest {
+  threadId: string;
+}
+
+export interface ThreadUpdateDraftArgs extends UpdateThreadDraftRequest {
   threadId: string;
 }
 
@@ -604,6 +611,16 @@ export interface ThreadsArea {
    * `sendAt` in the future queues it on the clock and a `message.dispatch` hook
    * can still hold it; the response says which of the two happened.
    */
+  /**
+   * Ask the environment provider to restore the destroyed workspace of a
+   * thread and attach it; the provider decides what restoring means, such as
+   * checking the recorded branch out again. Sends fail until this runs. Starts
+   * no turn: the thread settles back to `idle` once the workspace is ready.
+   * Refused unless the thread's `canRestoreEnvironment` is true.
+   */
+  restoreEnvironment(
+    args: ThreadActionArgs,
+  ): Promise<ThreadRestoreEnvironmentResult>;
   retry(args: ThreadRetryArgs): Promise<ThreadRetryResult>;
   search(args: ThreadSearchArgs): Promise<ThreadSearchResult>;
   send(args: ThreadSendArgs): Promise<ThreadSendResult>;
@@ -629,6 +646,12 @@ export interface ThreadsArea {
   unarchive(args: ThreadActionArgs): Promise<ThreadUnarchiveResult>;
   unpin(args: ThreadActionArgs): Promise<ThreadMutationResult>;
   update(args: ThreadUpdateArgs): Promise<ThreadMutationResult>;
+  /**
+   * Replace the thread's saved, unsent draft message. An empty `input` clears
+   * it. On a `pending` thread the draft also becomes the thread's fallback
+   * title. Sending a message does not clear the draft; clear it explicitly.
+   */
+  updateDraft(args: ThreadUpdateDraftArgs): Promise<ThreadMutationResult>;
   wait(args: ThreadWaitArgs): Promise<ThreadWaitResult>;
 }
 
@@ -636,6 +659,7 @@ function listQuery(args: ThreadListArgs | undefined): ThreadListQuery {
   return {
     ...(args?.projectId ? { projectId: args.projectId } : {}),
     ...(args?.environmentId ? { environmentId: args.environmentId } : {}),
+    ...(args?.hostId ? { hostId: args.hostId } : {}),
     ...(args?.parentThreadId ? { parentThreadId: args.parentThreadId } : {}),
     ...(args?.sourceThreadId ? { sourceThreadId: args.sourceThreadId } : {}),
     ...(args?.sectionId ? { sectionId: args.sectionId } : {}),
@@ -1335,6 +1359,13 @@ export function createThreadsArea(args: CreateSdkAreaArgs): ThreadsArea {
         }),
       );
     },
+    async restoreEnvironment(input) {
+      return transport.readJson(
+        transport.api.v1.threads[":id"]["restore-environment"].$post({
+          param: { id: input.threadId },
+        }),
+      );
+    },
     async retry(input) {
       return transport.readJson(
         transport.api.v1.threads[":id"].retry.$post({
@@ -1485,6 +1516,14 @@ export function createThreadsArea(args: CreateSdkAreaArgs): ThreadsArea {
         transport.api.v1.threads[":id"].$patch({
           param: { id: input.threadId },
           json: updateJson(input),
+        }),
+      );
+    },
+    async updateDraft(input) {
+      return transport.readJson(
+        transport.api.v1.threads[":id"].draft.$put({
+          param: { id: input.threadId },
+          json: { input: input.input },
         }),
       );
     },

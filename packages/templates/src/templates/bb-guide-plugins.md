@@ -225,6 +225,18 @@ vault to remove that folder. Use `--workspace-host <id>` when a standalone
 CLI's working directory is not on the server machine. Direct `write`, `mkdir`,
 `move`, and `remove` remain only as deprecated compatibility commands.
 
+Docs can also propose revisions without overwriting the saved document:
+
+  bb docs proposal <path> [--vault <id>] [--json]
+  bb docs propose <path> --file <candidate.md> --expected-sha256 <hash> --version <none|N> [--vault <id>] [--json]
+  bb docs proposal-update <path> --content <markdown> --version <N> [--vault <id>] [--json]
+  bb docs accept|reject|undo|redo <path> --version <N> [--vault <id>] [--json]
+
+Read the current file and proposal before proposing. Use `none` only when no
+proposal exists; otherwise pass its current version. Markdown Docs cards are
+editable in the timeline and can open in a tab. Pending proposals show a live
+diff for the user to accept, reject, edit, or request further changes.
+
 The Tasks plugin is an opt-in official plugin bundled with the app:
 `bb plugin install tasks`. It adds a task tracker, agent delegation,
 and the `bb tasks` command. Common agent operations are:
@@ -315,6 +327,15 @@ added/updated/unchanged counts.
                                  tag, engine ranges, install time, and recent
                                  activation history
   bb plugin enable|disable <id>  Load or unload an installed plugin
+  bb plugin safe-mode [on|off]   Show or change safe mode. `on` stops every
+                                 plugin you installed (official store plugins
+                                 included) without changing its enabled
+                                 setting; plugins included with bb keep
+                                 running. `off` restarts the ones that were
+                                 enabled and exits 1 if any fail to start.
+                                 Installs and updates of stopped plugins are
+                                 refused until it is off. Also in the command
+                                 palette
   bb plugin reload [id]          Re-run factories against current sources.
                                  Exits 1 when a plugin does not come up on
                                  them (previous instance kept, or degraded
@@ -621,12 +642,17 @@ Keep the SDK in exact devDependencies: the builder supplies and bundles its
 small host runtime, so managed installs and remote workers do not resolve an
 SDK package at runtime. That covers the bare `@get-bb/plugin-sdk` import. An
 SDK subpath (`@get-bb/plugin-sdk/host`, `/provider-bridge`,
-`/provider-bridge/acp`, `/ai-services`) imported from server or host code is
+`/provider-bridge/acp`) imported from server or host code is
 bundled from the plugin's own installed SDK, so a plugin that imports one
 needs the SDK as a real dependency; the build names the missing install
 rather than shipping an import bb cannot serve.
-Path installs always load server.ts from source, so `bb plugin dev`/reload see
-edits immediately.
+Path installs compile server.ts into a versioned bb-owned cache and load the
+result with native ESM. The cache follows source, SDK, bb, and Node versions,
+so `bb plugin dev`/reload sees edits immediately without running the source
+transformer on the server event loop.
+The Legacy plugin loader (JITI) experiment restores the previous loader on the
+next install, reload, enable, update, or server restart; running instances are
+unchanged when the experiment is toggled.
 
 `bb plugin dev` is the edit loop: it requires the directory to already be
 installed as a plugin (`bb plugin install .` first), ignores dist/,
@@ -723,7 +749,7 @@ class-variance-authority libraries are runtime-shimmed (never bundled). Shimmed
 does not mean undeclared: tsc resolves their declarations through node_modules,
 so each shimmed package a plugin imports is a type-only devDependency at the
 host's version — the scaffold declares all of them and `bb plugin types`
-repins them; never list one in dependencies, which would bundle a second copy —
+repins declared packages; unused packages may be removed. Never list one in dependencies, which would bundle a second copy —
 though source and diffs should go through the host's own
 experimental_SourceCode / experimental_Diff components rather than
 @pierre/diffs directly, so bb owns patch normalization, syntax
@@ -739,6 +765,9 @@ release packages with their declared production dependencies). A crashing slot c
 touching the rest of the app. Installed plugins and their declared settings
 (same data as `bb plugin config`) appear under both Settings → Installed plugins
 and Plugins → Installed plugins. Both locations manage the same installed plugins.
+On a plugin's detail page, the settings button beside the enable switch opens
+its settings in place; Plugin details returns to the page. A local plugin's
+Source section opens or copies its path.
 
 Plugin CLI commands: a plugin can register one top-level subcommand (for
 example `bb github …`). Unknown `bb` commands are looked up against installed
@@ -832,8 +861,9 @@ without updating them. Run `bb plugin migrate` to receive current SDK types and
 before adding `bb.host` so the `/host` and `/testing/host` declaration subpaths
 are available; migration shows every change and asks first.
 The SDK surface grows every release, so `bb plugin types` syncs a plugin to
-the running bb by repinning the SDK devDependency and the shimmed packages'
-type-only devDependencies. It exits with migration instructions for a plugin
+the running bb by repinning the SDK devDependency and the declared shimmed packages'
+type-only devDependencies. Unused, undeclared shim packages are optional for both
+updates and `--check`; declare packages your source imports. It exits with migration instructions for a plugin
 that still vendors types/. Run it in a cloned or older package-layout plugin,
 and `bb plugin types --check` in CI. Need a symbol the types don't explain?
 Clone the repo: https://github.com/get-bb/bb. The API in

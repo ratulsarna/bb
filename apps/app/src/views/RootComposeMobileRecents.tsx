@@ -16,6 +16,7 @@ import { OverflowFade } from "@/components/ui/overflow-fade";
 import { getThreadRoutePath, isProjectlessProjectId } from "@/lib/route-paths";
 import {
   getThreadListIndicatorLabel,
+  isDraftThread,
   resolveThreadListIndicator,
   threadListIndicatorStateForThread,
   buildChronologicalThreadList,
@@ -24,6 +25,10 @@ import {
   type ThreadListIndicatorState,
 } from "@bb/client-core";
 import { getThreadDisplayTitle } from "@/lib/thread-title";
+import {
+  ThreadTitle,
+  useThreadTitleDisplayText,
+} from "@/components/thread/ThreadTitleMentions";
 import { formatRelativeTime } from "@/lib/relative-time";
 import {
   findEnvironmentDisplayProvider,
@@ -150,9 +155,7 @@ function flattenMobileRecentNodes({
   items: readonly ProjectThreadItem[];
   rows: MobileRecentThreadRow[];
 }): void {
-  for (const item of items) {
-    if (item.kind !== "thread") continue;
-    const { node } = item;
+  for (const { node } of items) {
     const hasChildren = node.children.length > 0;
     const isCollapsed = hasChildren && collapsedThreadIds.has(node.thread.id);
     rows.push({
@@ -238,7 +241,7 @@ function MobileRecentThreadRow({
   } = row;
   const touchStartedBeforeLink = useRef(false);
   const { providers: environmentProviders } = useSystemEnvironmentProviders();
-  const threadTitle = getThreadDisplayTitle(thread);
+  const threadTitle = useThreadTitleDisplayText(getThreadDisplayTitle(thread));
   const indicatorState: ThreadListIndicatorState =
     threadListIndicatorStateForThread(thread, hasUnsubmittedDraft);
   const hasHiddenChildren = hasChildren && isCollapsed;
@@ -376,14 +379,10 @@ function MobileRecentThreadRow({
       >
         <span className="min-w-0 flex-1 space-y-0.5">
           <span className="flex min-w-0 items-center gap-1.5">
-            <span
-              className={cn(
-                "min-w-0 truncate font-medium",
-                COARSE_POINTER_TEXT_BASE_CLASS,
-              )}
-            >
-              {threadTitle}
-            </span>
+            <ThreadTitle
+              title={getThreadDisplayTitle(thread)}
+              className={cn("font-medium", COARSE_POINTER_TEXT_BASE_CLASS)}
+            />
           </span>
           <span
             className={cn(
@@ -426,7 +425,14 @@ export function RootComposeMobileRecents({
     () => new Set(collapsedThreadIdList),
     [collapsedThreadIdList],
   );
-  const draftThreadIds = usePromptDraftInputThreadIds(threads);
+  const localDraftThreadIds = usePromptDraftInputThreadIds(threads);
+  const draftThreadIds = useMemo(() => {
+    const ids = new Set(localDraftThreadIds);
+    for (const thread of threads) {
+      if (isDraftThread(thread)) ids.add(thread.id);
+    }
+    return ids;
+  }, [localDraftThreadIds, threads]);
   const toggleCollapsed = useCallback(
     (threadId: string) => {
       setCollapsedThreadIdList((current) =>

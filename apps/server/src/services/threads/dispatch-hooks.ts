@@ -11,6 +11,7 @@ import {
   type ThreadQueuedMessage,
   type ThreadTurnInitiator,
 } from "@bb/domain";
+import { sliceUtf16Head } from "@bb/text-utils";
 import type {
   ExecutionInputFieldSource,
   SendMessageRequest,
@@ -294,7 +295,7 @@ export function dispatchEnvironmentAndHost(
   // The same DTO `GET /threads/:id?include=host` serves, so a handler reading
   // `host.status` sees the live connection state rather than a stored row.
   return {
-    environment: toEnvironmentResponse(environment),
+    environment: toEnvironmentResponse(deps.db, environment),
     host: getNonDestroyedHostWithStatus(deps, environment.hostId),
   };
 }
@@ -504,7 +505,7 @@ export function dispatchWaitReasonForPass(
       ? outcome.waiter.reason
       : `${outcome.waiter.reason} (also waiting on ${extra})`;
   return reason.length > QUEUED_MESSAGE_WAIT_REASON_MAX_LENGTH
-    ? `${reason.slice(0, QUEUED_MESSAGE_WAIT_REASON_MAX_LENGTH - 1)}…`
+    ? `${sliceUtf16Head(reason, QUEUED_MESSAGE_WAIT_REASON_MAX_LENGTH - 1)}…`
     : reason;
 }
 

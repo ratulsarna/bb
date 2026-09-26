@@ -9,7 +9,10 @@ import {
 import { useCallback, useMemo } from "react";
 import { COMPACT_VIEWPORT_QUERY } from "@bb/shared-ui/hooks/use-compact-viewport";
 import { getMediaQuerySnapshot } from "@bb/shared-ui/hooks/use-media-query";
-import type { PendingInteraction, ThreadListEntry } from "@bb/domain";
+import type {
+  PendingInteraction,
+  ThreadListEntry,
+} from "@bb/domain";
 import type {
   PromptHistoryResponse,
   ThreadQueuedMessageListResponse,
@@ -54,6 +57,7 @@ import {
 } from "./query-placeholders";
 import {
   PROMPT_HISTORY_STALE_TIME_MS,
+  requireEnabledQueryArg,
   requireThreadId,
   shouldRetryTransientReadQuery,
   TRANSIENT_READ_RETRY_DELAY_MS,
@@ -94,7 +98,7 @@ interface QueryOptions {
   staleTime?: number;
 }
 
-const THREAD_LIST_STALE_TIME_MS = 10_000;
+export const THREAD_LIST_STALE_TIME_MS = 10_000;
 const THREAD_SEARCH_STALE_TIME_MS = 10_000;
 const THREAD_DETAIL_STALE_TIME_MS = 5_000;
 const THREAD_MENTION_CANDIDATE_LIMIT = 200;
@@ -390,6 +394,42 @@ export function useThreads(filters: UseThreadsFilters, options?: QueryOptions) {
   });
 }
 
+interface MachineThreadPreview {
+  threads: ThreadListResponse;
+  total: number;
+}
+
+export function useMachineThreadPreview({
+  hostId,
+  limit,
+}: {
+  hostId: string | null;
+  limit: number;
+}) {
+  const enabled = hostId !== null;
+  useThreadListRealtimeSubscription({ enabled });
+  return useQuery<MachineThreadPreview>({
+    queryKey:
+      hostId === null
+        ? disabledThreadListQueryKey({ archived: false, limit })
+        : threadListQueryKey({ archived: false, hostId, limit }),
+    queryFn: async ({ signal }) => {
+      const id = requireEnabledQueryArg({
+        value: hostId,
+        hookName: "useMachineThreadPreview",
+        argName: "host id",
+      });
+      const [threads, count] = await Promise.all([
+        sdk.threads.list({ archived: false, hostId: id, limit, signal }),
+        sdk.threads.count({ hostId: id, signal }),
+      ]);
+      return { threads, total: count.total };
+    },
+    enabled,
+    staleTime: THREAD_LIST_STALE_TIME_MS,
+  });
+}
+
 interface UseChildThreadsArgs {
   enabled: boolean;
   parentThreadId: string | undefined;
@@ -592,7 +632,10 @@ export function useThreadSearch({
     active && liveQueryIsSearchable && trimmedQuery !== debouncedQuery;
   const enabled = active && liveQueryIsSearchable && hasSearchableQuery;
   const threadSearchQuery = useQuery<ThreadSearchResponse>({
-    queryKey: threadSearchQueryKey({ limitPerGroup, query: debouncedQuery }),
+    queryKey: threadSearchQueryKey({
+      limitPerGroup,
+      query: debouncedQuery,
+    }),
     queryFn: ({ signal }) =>
       sdk.threads.search({
         limitPerGroup: String(limitPerGroup),
@@ -649,8 +692,10 @@ function liftThreadListPlaceholder(
   return {
     ...thread,
     activeBackgroundAgentCount: thread.activity.activeBackgroundAgentCount,
+    canRestoreEnvironment: false,
     canSpawnChild: false,
     queuedMessageCount: 0,
+    draft: null,
   };
 }
 

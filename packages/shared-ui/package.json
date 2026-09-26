@@ -94,6 +94,11 @@
       "types": "./src/components/ui/hover-card.tsx",
       "default": "./src/components/ui/hover-card.tsx"
     },
+    "./plugin-icon": {
+      "source": "./src/components/ui/plugin-icon.tsx",
+      "types": "./src/components/ui/plugin-icon.tsx",
+      "default": "./src/components/ui/plugin-icon.tsx"
+    },
     "./icon": {
       "source": "./src/components/ui/icon.tsx",
       "types": "./src/components/ui/icon.tsx",
@@ -238,11 +243,6 @@
       "source": "./src/lib/utils.ts",
       "types": "./src/lib/utils.ts",
       "default": "./src/lib/utils.ts"
-    },
-    "./lib/usage-format": {
-      "source": "./src/lib/usage-format.ts",
-      "types": "./src/lib/usage-format.ts",
-      "default": "./src/lib/usage-format.ts"
     },
     "./lib/portal-scope": {
       "source": "./src/lib/portal-scope.ts",

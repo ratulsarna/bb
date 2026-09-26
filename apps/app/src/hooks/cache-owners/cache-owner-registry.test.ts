@@ -87,7 +87,9 @@ const CACHE_OWNER_QUERY_KEY_IMPORTS: CacheOwnerQueryKeyImportRegistry = {
   ],
   "hooks/cache-owners/environment-workspace-cache-owner.ts": [
     "environmentQueryKey",
+    "sidebarNavigationQueryKey",
     "threadSearchQueryKeyPrefix",
+    "threadsQueryKey",
   ],
   "hooks/cache-owners/host-directory-cache-owner.ts": ["hostDirectoryQueryKey"],
   "hooks/cache-owners/mutation-cache-effects.ts": [
@@ -136,6 +138,7 @@ const CACHE_OWNER_QUERY_KEY_IMPORTS: CacheOwnerQueryKeyImportRegistry = {
     "allPluginListQueryKeyPrefix",
     "pluginListQueryKey",
     "pluginMarketplacesQueryKey",
+    "pluginSafeModeQueryKey",
     "pluginSettingsViewQueryKey",
   ],
   "hooks/cache-owners/realtime-cache-registry.ts": [
@@ -162,8 +165,11 @@ const CACHE_OWNER_QUERY_KEY_IMPORTS: CacheOwnerQueryKeyImportRegistry = {
     "environmentPullRequestQueryKey",
     "environmentWorkStatusQueryKeyPrefix",
     "hostsQueryKey",
+    "pluginSafeModeQueryKey",
     "serverMoveStatusQueryKey",
     "sidebarNavigationQueryKey",
+    "systemAiServicesQueryKey",
+    "systemAppUpdateQueryKey",
     "systemConfigQueryKey",
     "threadDefaultExecutionOptionsQueryKey",
     "threadQueryKey",
@@ -217,11 +223,15 @@ const CACHE_OWNER_QUERY_KEY_IMPORTS: CacheOwnerQueryKeyImportRegistry = {
     "threadSearchQueryKeyPrefix",
     "threadsQueryKey",
   ],
+  "hooks/cache-owners/app-update-cache-owner.ts": ["systemAppUpdateQueryKey"],
   "hooks/cache-owners/server-move-cache-owner.ts": ["serverMoveStatusQueryKey"],
   "hooks/cache-owners/provider-cli-status-cache-owner.ts": [
     "hostProviderCliStatusQueryKey",
   ],
-  "hooks/cache-owners/system-config-cache-owner.ts": ["systemConfigQueryKey"],
+  "hooks/cache-owners/system-config-cache-owner.ts": [
+    "systemAiServicesQueryKey",
+    "systemConfigQueryKey",
+  ],
   "hooks/cache-owners/system-version-cache-owner.ts": ["systemVersionQueryKey"],
   "hooks/cache-owners/terminal-cache-owner.ts": [
     "allTerminalsQueryKeyPrefix",
@@ -241,6 +251,7 @@ const CACHE_OWNER_QUERY_KEY_IMPORTS: CacheOwnerQueryKeyImportRegistry = {
   "hooks/cache-owners/thread-tabs-cache-owner.ts": ["threadTabsQueryKey"],
   "hooks/cache-owners/ui-preferences-cache-owner.ts": ["uiPreferencesQueryKey"],
   "hooks/cache-owners/thread-runtime-cache-owner.ts": [
+    "environmentQueryKey",
     "projectPromptHistoryQueryKey",
     "projectSourceBranchesQueryKeyPrefix",
     "threadPromptHistoryQueryKey",

@@ -4,11 +4,13 @@ import {
 } from "../../src/services/plugins/plugin-hook-registry.js";
 import { listRunningThreadsWithIntendedHosts } from "../../src/services/threads/dispatch-attempt.js";
 import {
-  claimQueuedThreadMessage,
+  claimQueuedThreadMessageGroup,
+  createQueuedThreadMessage,
   createPendingInteraction,
   createPromptHistoryEntry,
   getThread,
   listEvents,
+  listQueuedThreadMessages,
   listStoredProjectPromptHistoryRows,
   listStoredThreadPromptHistoryRows,
 } from "@bb/db";
@@ -1143,6 +1145,56 @@ describe("editThreadMessage", () => {
     });
   });
 
+  it("retains queued messages when editing a sent message", async () => {
+    await withTestHarness(async (harness) => {
+      const { environment, thread } = seedEditableThread(harness);
+      const queuedMessage = seedQueuedMessage(harness.deps, {
+        content: [{ type: "text", text: "Keep this queued", mentions: [] }],
+        threadId: thread.id,
+      });
+      const retry = createQueuedThreadMessage(harness.db, harness.deps.hub, {
+        threadId: thread.id,
+        content: [],
+        model: "gpt-5",
+        reasoningLevel: "medium",
+        permissionMode: "full",
+        serviceTier: "default",
+        waitingOn: { kind: "time" },
+        sendAt: Date.now() + 60_000,
+        payload: {
+          kind: "retry",
+          retryOfTurnRequestId: encodeClientTurnRequestIdNumber({ value: 7 }),
+          attempt: 2,
+          reason: "Rate limited",
+        },
+        systemNotice: null,
+      });
+      const editPromise = editThreadMessage(harness.deps, {
+        environment,
+        thread,
+        payload: {
+          operationId: "edit-op-retain-queue",
+          expectedRequestSequence: 7,
+          input: [{ type: "text", text: "Replacement", mentions: [] }],
+        },
+      });
+      const rewind = await waitForQueuedCommand(
+        harness,
+        (queued) => queued.command.type === "thread.rewind.prepare",
+      );
+      await reportQueuedCommandSuccess(harness, rewind, {
+        providerThreadId: "provider-staged-retain-queue",
+      });
+      await expect(editPromise).resolves.toMatchObject({ ok: true });
+      expect(listQueuedThreadMessages(harness.db, thread.id)).toMatchObject([
+        { id: queuedMessage.id },
+      ]);
+      expect(
+        listQueuedThreadMessages(harness.db, thread.id),
+      ).not.toContainEqual(expect.objectContaining({ id: retry.id }));
+    });
+  });
+
   it("rechecks claimed queued messages after rewind preparation", async () => {
     await withTestHarness(async (harness) => {
       const { environment, thread } = seedEditableThread(harness);
@@ -1166,14 +1218,15 @@ describe("editThreadMessage", () => {
         threadId: thread.id,
       });
       expect(
-        claimQueuedThreadMessage(
+        claimQueuedThreadMessageGroup(
           harness.db,
           harness.deps.hub,
           queuedMessage.id,
+          { kind: "explicit-send" },
         ),
       ).not.toBeNull();
       const rejectedEdit = expect(editPromise).rejects.toThrow(
-        "Send or remove queued messages before editing a message",
+        "Wait for queued messages being sent before editing a message",
       );
       await reportQueuedCommandSuccess(harness, rewind, {
         providerThreadId: "provider-staged-queue-race",

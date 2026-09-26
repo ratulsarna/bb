@@ -5,6 +5,7 @@ import {
 import { dispatchWaitReasonForPass } from "./dispatch-hooks.js";
 import {
   getEnvironment,
+  getHost,
   getThread,
   requireThreadLifecycleEventApplied,
   type DbTransaction,
@@ -48,6 +49,7 @@ import {
 } from "./thread-turn-dispatch.js";
 import { resolvePermissionEscalation } from "./thread-runtime-config.js";
 import { ensureHostSessionReadyForWork } from "../hosts/host-lifecycle.js";
+import { isHostUnavailableApiError } from "../hosts/online-rpc.js";
 import {
   LIVE_DAEMON_COMMAND_TIMEOUT_MS,
   startLiveHostCommand,
@@ -446,6 +448,7 @@ export async function queueParentSystemMessage(
     kind: hasPendingInteraction ? "interaction" : "thread-busy",
   };
   let sendAt: number | null = null;
+  let hostUnavailable = false;
   if (!hasPendingInteraction) {
     try {
       return await deliverParentSystemMessage(deps, {
@@ -462,8 +465,15 @@ export async function queueParentSystemMessage(
           reason: dispatchWaitReasonForPass(error.outcome),
         };
         sendAt = error.outcome.waiter.sendAt;
-      } else if (!(error instanceof ThreadContextClearInProgressError))
-        throw error;
+      } else {
+        hostUnavailable = isHostUnavailableApiError(error);
+        if (
+          !(error instanceof ThreadContextClearInProgressError) &&
+          !hostUnavailable
+        ) {
+          throw error;
+        }
+      }
     }
   }
 
@@ -474,6 +484,15 @@ export async function queueParentSystemMessage(
       threadId: parentThread.id,
     },
   );
+  const host = hostUnavailable
+    ? getHost(
+        deps.db,
+        requireThreadEnvironment(deps.db, parentThread.id).environment.hostId,
+      )
+    : null;
+  if (hostUnavailable && !host) {
+    throw new Error("Parent host disappeared while queueing a system message");
+  }
   createQueuedThreadMessage(deps.db, deps.hub, {
     threadId: parentThread.id,
     content: args.input,
@@ -484,7 +503,7 @@ export async function queueParentSystemMessage(
     reasoningLevel: execution.reasoningLevel,
     permissionMode: execution.permissionMode,
     serviceTier: execution.serviceTier,
-    waitingOn,
+    waitingOn: host ? { kind: "host-offline", hostName: host.name } : waitingOn,
     sendAt,
     payload: { kind: "inline" },
     systemNotice: {
@@ -492,7 +511,11 @@ export async function queueParentSystemMessage(
       subject: args.systemMessageSubject,
     },
   });
-  if (!hasPendingInteraction && waitingOn.kind !== "plugin") {
+  if (
+    !hasPendingInteraction &&
+    !hostUnavailable &&
+    waitingOn.kind !== "plugin"
+  ) {
     requestQueuedMessageDispatch(deps, {
       kind: "thread-ready",
       threadId: parentThread.id,
