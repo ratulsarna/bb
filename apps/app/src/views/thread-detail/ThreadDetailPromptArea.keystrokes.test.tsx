@@ -18,12 +18,21 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   PluginComposerHostScopeProvider,
   usePluginComposerHost,
   usePluginComposerHostDraft,
 } from "@/components/plugin/plugin-composer-host";
+import { LazyQueuedMessagesList } from "@/components/promptbox/banner/LazyQueuedMessagesList";
 import { getPromptDraftAccessor } from "@/hooks/usePromptDraftStorage";
 import { ThreadDetailPromptArea } from "./ThreadDetailPromptArea";
 
@@ -144,10 +153,6 @@ vi.mock(
   }),
 );
 
-vi.mock("@/components/plugin/PluginPendingInteractionComposer", () => ({
-  PluginPendingInteractionComposer: () => null,
-}));
-
 vi.mock("@/components/ui/app-toast", () => ({
   appToast: { error: vi.fn() },
 }));
@@ -228,7 +233,6 @@ vi.mock("@/hooks/mutations/thread-runtime-mutations", () => {
     useSetThreadQueuedMessageGroupBoundary: idleMutation,
     useSendThreadQueuedMessage: idleMutation,
     useStopThread: idleMutation,
-    useUpdateThreadDraft: idleMutation,
     useUpdateThreadQueuedMessage: () => ({
       isPending: false,
       mutateAsync: mocks.updateQueuedMessageMutateAsync,
@@ -364,7 +368,6 @@ function buildPromptArea({
       <ShellProbe />
       <PublishedHostDraftProbe />
       <ThreadDetailPromptArea
-        serverDraft={null}
         activeBackgroundAgentCount={0}
         activeBackgroundCommands={[]}
         activePromptMode={null}
@@ -414,6 +417,8 @@ function getBottomComposerInput(): HTMLInputElement {
 
 let threadCounter = 0;
 let threadId = "";
+
+beforeAll(() => LazyQueuedMessagesList.preload());
 
 beforeEach(() => {
   threadCounter += 1;

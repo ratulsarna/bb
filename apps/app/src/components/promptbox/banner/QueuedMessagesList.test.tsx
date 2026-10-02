@@ -26,8 +26,8 @@ import {
   queuedMessageSortingStrategy,
   resolveQueuedMessageDrag,
   snapGroupBoundaryDragTransform,
-  type QueuedMessagesListProps,
 } from "./QueuedMessagesList";
+import type { QueuedMessagesListProps } from "./LazyQueuedMessagesList";
 import {
   QueuedEditorTypeaheadLayoutContext,
   type QueuedEditorTypeaheadLayout,
@@ -1809,9 +1809,9 @@ describe("queued row affordances", () => {
     setPluginLogoUrls(
       new Map([
         [
-          "approvals",
+          "drafts",
           {
-            displayName: "Approvals",
+            displayName: "Drafts",
             icon: "EditFile",
             compactIconUrl: null,
             logoUrl: null,
@@ -1823,16 +1823,16 @@ describe("queued row affordances", () => {
     );
     const { container, getByText } = renderQueuedMessages([
       {
-        ...makeQueuedMessage("q_held", "Held message"),
+        ...makeQueuedMessage("q_draft", "Draft message"),
         waitingOn: {
           kind: "plugin",
-          pluginId: "approvals",
-          reason: "Awaiting approval",
+          pluginId: "drafts",
+          reason: "Draft",
         },
       },
     ]);
 
-    const waitLine = getByText("Held by Approvals · Awaiting approval").closest(
+    const waitLine = getByText("Held by Drafts · Draft").closest(
       "[data-queued-message-wait]",
     );
     expect(waitLine?.querySelector("[data-icon=EditFile]")).not.toBeNull();
@@ -1987,9 +1987,7 @@ describe("queued row affordances", () => {
         sendAt: 0,
       }),
     ]);
-    expect(
-      container.querySelector("[data-queued-message-sender]"),
-    ).toBeNull();
+    expect(container.querySelector("[data-queued-message-sender]")).toBeNull();
     expect(
       getByText(/^Rate limited · retrying at .* · attempt 2$/u),
     ).toBeDefined();

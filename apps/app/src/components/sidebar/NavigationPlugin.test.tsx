@@ -309,20 +309,7 @@ async function openCustomizeFromContextMenu(
 }
 
 beforeAll(async () => {
-  render(
-    <SidebarVisibilityCustomize
-      items={[]}
-      listLabel="Preloaded editor"
-      onDone={() => {}}
-      onReorder={() => {}}
-      onVisibleChange={() => {}}
-      title="Preloaded editor"
-      variant="card"
-      visibleIds={[]}
-    />,
-  );
-  await screen.findByRole("list", { name: "Preloaded editor" });
-  cleanup();
+  await SidebarVisibilityCustomize.preload();
 });
 
 beforeEach(async () => {
@@ -937,7 +924,7 @@ describe("Navigation plugin in the sidebar navigation region", () => {
         ?.closest("[role=dialog]"),
     ).toBeFalsy();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Back to sidebar" })).toBe(
+      expect(screen.getByRole("button", { name: "Done" })).toBe(
         document.activeElement,
       ),
     );
@@ -966,7 +953,7 @@ describe("Navigation plugin in the sidebar navigation region", () => {
         ?.classList.contains("max-md:pointer-coarse:h-9"),
     ).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "Back to sidebar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
     expect(onCustomizingChange).toHaveBeenLastCalledWith(false);
     expect(
@@ -1027,9 +1014,6 @@ describe("Navigation plugin in the sidebar navigation region", () => {
     expect(
       screen.queryByRole("button", { name: "More sidebar navigation" }),
     ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Back to sidebar" }),
-    ).toBeNull();
     await waitFor(() =>
       expect(
         document.activeElement?.getAttribute(
@@ -1074,12 +1058,14 @@ describe("Navigation plugin in the sidebar navigation region", () => {
   it("closes the inline card on Escape", async () => {
     renderNavigation();
 
-    await openCustomizeFromContextMenu(
+    const list = await openCustomizeFromContextMenu(
       screen.getByRole("button", { name: "New thread" }),
     );
     fireEvent.keyDown(
-      screen.getByTestId("sidebar-navigation-customize-inline"),
-      { key: "Escape" },
+      within(list).getByRole("button", { name: "New thread" }),
+      {
+        key: "Escape",
+      },
     );
 
     expect(
@@ -1612,16 +1598,6 @@ describe("Navigation plugin in the sidebar navigation region", () => {
       ...HOST_KEYS,
       "docs/main",
     ]);
-  });
-
-  it("respects a stored choice to keep Search visible", () => {
-    renderNavigation({
-      storedOrder: HOST_KEYS,
-      storedVisibleKeys: HOST_KEYS,
-    });
-
-    expect(visibleRowKeys()).toEqual(HOST_KEYS);
-    expect(screen.queryByTestId("sidebar-navigation-more-row")).toBeNull();
   });
 
   it("shows More only while something is hidden", async () => {

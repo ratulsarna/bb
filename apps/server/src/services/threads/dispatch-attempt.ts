@@ -479,7 +479,8 @@ async function runDispatchAttemptWithAdmission(
     if (
       dispatchEnvironment !== null &&
       goneThreadEnvironmentDetails(dispatchEnvironment) === null &&
-      dispatchHost?.status === "disconnected"
+      dispatchHost !== null &&
+      !deps.hub.hasDaemonForHost(dispatchHost.id)
     ) {
       continued.outcome = waitOn(
         { kind: "host-offline", hostName: dispatchHost.name },

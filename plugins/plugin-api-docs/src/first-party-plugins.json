@@ -15,6 +15,11 @@
     "icon": "Repeat"
   },
   {
+    "id": "bb-ai",
+    "name": "bb cloud AI",
+    "icon": "AiBrain01"
+  },
+  {
     "id": "browser-automation",
     "name": "Browser Automation",
     "icon": "Globe"
@@ -33,6 +38,11 @@
     "id": "simple-notes",
     "name": "Docs",
     "icon": "FileText"
+  },
+  {
+    "id": "drafts",
+    "name": "Drafts",
+    "icon": "EditFile"
   },
   {
     "id": "monaco-editor",
@@ -80,7 +90,7 @@
     "icon": "Laptop"
   },
   {
-    "id": "provider-usage",
+    "id": "bb--provider-usage",
     "name": "Provider usage",
     "icon": "ChartColumn"
   },
@@ -96,8 +106,8 @@
   },
   {
     "id": "connect",
-    "name": "Remote access",
-    "icon": "Smartphone"
+    "name": "bb connect",
+    "icon": "ComputerCloud"
   },
   {
     "id": "secrets",

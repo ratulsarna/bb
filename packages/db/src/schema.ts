@@ -326,6 +326,9 @@ export const installedPlugins = sqliteTable("plugins", {
   rootDir: text("root_dir").notNull(),
   version: text("version").notNull(),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  enabledFollowsDefault: integer("enabled_follows_default", { mode: "boolean" })
+    .notNull()
+    .default(false),
   removedAt: integer("removed_at"),
   installedAt: integer("installed_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
@@ -605,7 +608,6 @@ export const threads = sqliteTable(
       .notNull()
       .default("starting"),
     startupContext: text("startup_context"),
-    draft: text("draft"),
     parentThreadId: text("parent_thread_id").references(
       (): AnySQLiteColumn => threads.id,
       { onDelete: "set null" },
@@ -953,6 +955,11 @@ export const promptHistoryEntries = sqliteTable(
     index("prompt_history_entries_project_scope_created_idx").on(
       table.projectId,
       table.scope,
+      table.createdAt,
+      table.requestSequence,
+      table.id,
+    ),
+    index("prompt_history_entries_created_idx").on(
       table.createdAt,
       table.requestSequence,
       table.id,

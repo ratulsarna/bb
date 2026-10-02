@@ -107,6 +107,7 @@ export const hostDaemonSessionOpenRequestSchema = z
     localApiPort: z.number().int().min(1).max(65_535).nullable().default(null),
     protocolVersion: z.number().int().positive(),
     activeThreads: z.array(hostDaemonActiveThreadSchema),
+    undeliveredEventThreadIds: z.array(z.string().min(1)).default([]),
     loadedEnvironments: z.array(hostDaemonLoadedEnvironmentSchema).default([]),
   })
   .strict();
@@ -435,7 +436,6 @@ const hostDaemonOnlineRpcResponseSuccessSchema = z.discriminatedUnion(
     onlineRpcResponseSuccessSchemaFor("host.write_skill"),
     onlineRpcResponseSuccessSchemaFor("host.install_global_skills"),
     onlineRpcResponseSuccessSchemaFor("host.global_skills_status"),
-    onlineRpcResponseSuccessSchemaFor("host.file_metadata"),
     onlineRpcResponseSuccessSchemaFor("host.list_branch_options"),
     onlineRpcResponseSuccessSchemaFor("host.inspect_git_source"),
     onlineRpcResponseSuccessSchemaFor("host.read_file"),
@@ -545,6 +545,12 @@ const hostDaemonTerminalOpenMessageSchema = z
           .object({
             mode: z.literal("command"),
             command: z.string().min(1),
+          })
+          .strict(),
+        z
+          .object({
+            mode: z.literal("argv"),
+            argv: z.array(z.string().max(10_000)).min(1).max(256),
           })
           .strict(),
       ])
@@ -860,9 +866,6 @@ export type HostDaemonInternalSchema = {
     $get: Endpoint<Record<never, never>, HostDaemonSkillTree, 200>;
   };
   "/plugins/:pluginId/host/:digest": {
-    $get: Endpoint<Record<never, never>, Uint8Array, 200, "binary">;
-  };
-  "/provider-bridges/:sha256": {
     $get: Endpoint<Record<never, never>, Uint8Array, 200, "binary">;
   };
   "/hosts/enroll-key": {

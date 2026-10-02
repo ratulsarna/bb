@@ -18,6 +18,14 @@
       "https://getbb.app/marketplace/v2/screenshots/automations/automations-sidebar.png"
     ]
   },
+  "bb-account": {
+    "category": "cloud-and-remote",
+    "screenshots": []
+  },
+  "bb-ai": {
+    "category": "cloud-and-remote",
+    "screenshots": []
+  },
   "connect": {
     "category": "cloud-and-remote",
     "screenshots": []
@@ -83,6 +91,10 @@
     "screenshots": []
   },
   "scheduled-send": {
+    "category": "tasks-and-workflows",
+    "screenshots": []
+  },
+  "drafts": {
     "category": "tasks-and-workflows",
     "screenshots": []
   },

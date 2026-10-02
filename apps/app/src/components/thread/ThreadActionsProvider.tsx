@@ -16,6 +16,7 @@ import {
 } from "@/lib/split-layout/atoms";
 import type { Thread } from "@bb/domain";
 import {
+  ArchiveThreadConfirmationRequired,
   useArchiveThreadAndChildren,
   useDeleteThread,
   useMarkThreadRead,
@@ -26,6 +27,7 @@ import {
   useUpdateThread,
 } from "@/hooks/mutations/thread-state-mutations";
 import { sdk } from "@/lib/sdk";
+import { useSystemConfig } from "@/hooks/queries/system-queries";
 import { useRouteState } from "@/hooks/useRouteState";
 import { useDialogState } from "@/hooks/useDialogState";
 import { showMutationErrorToast } from "@/lib/mutation-errors";
@@ -79,6 +81,7 @@ interface ThreadActionsProviderProps {
 }
 
 interface ArchiveThreadActionRequest {
+  childThreadsConfirmed: boolean;
   closeDialog?: () => void;
   thread: Thread;
 }
@@ -91,7 +94,6 @@ interface DeleteThreadActionRequest {
 
 interface ThreadActionContext {
   childThreadCount: number;
-  unarchivedDescendantCount: number;
 }
 
 const ARCHIVE_UNDO_TOAST_DURATION_MS = 10_000;
@@ -99,6 +101,8 @@ const ARCHIVE_UNDO_TOAST_DURATION_MS = 10_000;
 export function ThreadActionsProvider({
   children,
 }: ThreadActionsProviderProps) {
+  const confirmThreadArchive =
+    useSystemConfig().data?.generalSettings.confirmThreadArchive ?? true;
   const navigate = useRouteNavigate();
   const location = useLocation();
   const viewedRoute = `${location.pathname}${location.search}${location.hash}`;
@@ -216,7 +220,6 @@ export function ThreadActionsProvider({
 
         return {
           childThreadCount: childSummary?.nonDeletedChildCount ?? 0,
-          unarchivedDescendantCount: childSummary?.unarchivedDescendantCount ?? 0,
         };
       } catch (error) {
         if (signal.aborted) return null;
@@ -316,15 +319,20 @@ export function ThreadActionsProvider({
   );
 
   const performArchive = useCallback(
-    ({ closeDialog, thread }: ArchiveThreadActionRequest) => {
-      archiveThreadAndChildrenMutateAsync({ id: thread.id }).then(
+    ({
+      childThreadsConfirmed,
+      closeDialog,
+      thread,
+    }: ArchiveThreadActionRequest) => {
+      archiveThreadAndChildrenMutateAsync({
+        id: thread.id,
+        childThreadsConfirmed,
+      }).then(
         (response) => {
           closeDialog?.();
           const viewedThreadId = viewedThreadIdRef.current;
           const archiveDisplacedThread = viewedThreadId === thread.id;
-          const closeResult = closePanesForThreads(
-            response.archivedThreadIds,
-          );
+          const closeResult = closePanesForThreads(response.archivedThreadIds);
           const archiveDestination =
             archiveDisplacedThread &&
             closeResult.removedAny &&
@@ -339,10 +347,7 @@ export function ThreadActionsProvider({
               navigate(getRootComposeRoutePath());
             }
           };
-          syncNavigationAfterClose(
-            closeResult,
-            navigateAwayIfArchived,
-          );
+          syncNavigationAfterClose(closeResult, navigateAwayIfArchived);
           if (archiveDestination !== null) {
             viewedRouteRef.current = archiveDestination;
           }
@@ -389,6 +394,13 @@ export function ThreadActionsProvider({
           });
         },
         (error: unknown) => {
+          if (error instanceof ArchiveThreadConfirmationRequired) {
+            openArchiveDialog({
+              thread,
+              childThreadCount: error.childThreadCount,
+            });
+            return;
+          }
           closeDialog?.();
           showMutationErrorToast({
             error,
@@ -400,6 +412,7 @@ export function ThreadActionsProvider({
     },
     [
       archiveThreadAndChildrenMutateAsync,
+      openArchiveDialog,
       closePanesForThreads,
       navigate,
       syncNavigationAfterClose,
@@ -408,33 +421,19 @@ export function ThreadActionsProvider({
   );
 
   const requestArchive = useCallback(
-    async (thread: Thread) => {
-      const controller = claimThreadActionContextAbortController();
-      const context = await loadThreadActionContext(thread, controller.signal);
-      if (context === null || controller.signal.aborted) return;
-      if (threadActionContextAbortRef.current === controller) {
-        threadActionContextAbortRef.current = null;
-      }
-      if (context.unarchivedDescendantCount === 0) {
-        performArchive({ thread });
-        return;
-      }
-      openArchiveDialog({
+    (thread: Thread) => {
+      performArchive({
         thread,
-        childThreadCount: context.unarchivedDescendantCount,
+        childThreadsConfirmed: !confirmThreadArchive,
       });
     },
-    [
-      claimThreadActionContextAbortController,
-      loadThreadActionContext,
-      openArchiveDialog,
-      performArchive,
-    ],
+    [confirmThreadArchive, performArchive],
   );
 
   const confirmArchive = useCallback(
     (target: ThreadArchiveDialogTarget) => {
       performArchive({
+        childThreadsConfirmed: true,
         closeDialog: closeArchiveDialog,
         thread: target.thread,
       });

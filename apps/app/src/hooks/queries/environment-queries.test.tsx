@@ -8,7 +8,6 @@ import { createQueryClientTestHarness } from "@/test/queryClientTestHarness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { environmentPullRequestQueryKey } from "./query-keys";
 import {
-  buildEnvironmentFilePreview,
   getEnvironmentPullRequestRefetchInterval,
   getEnvironmentPullRequestStaleTime,
   useEnvironmentMergeBaseBranches,
@@ -36,6 +35,8 @@ const pullRequestFixture: ThreadPullRequest = {
   baseRefName: "main",
   headRefName: "bb/pr-refresh",
   updatedAt: "2026-06-16T12:30:00Z",
+  autoMerge: false,
+  inMergeQueue: false,
   checks: {
     state: "passing",
     totalCount: 1,
@@ -136,6 +137,26 @@ describe("useEnvironmentPullRequest", () => {
     ).toBe(ACTIVE_PULL_REQUEST_REFETCH_MS);
   });
 
+  it.each([
+    { autoMerge: true, inMergeQueue: false },
+    { autoMerge: false, inMergeQueue: true },
+  ])("keeps polling automated merges after checks pass: %j", (automation) => {
+    expect(
+      getEnvironmentPullRequestRefetchInterval({
+        ...pullRequestFixture,
+        ...automation,
+      }),
+    ).toBe(ACTIVE_PULL_REQUEST_REFETCH_MS);
+    expect(
+      getEnvironmentPullRequestRefetchInterval({
+        ...pullRequestFixture,
+        ...automation,
+        state: "merged",
+        attention: "merged",
+      }),
+    ).toBe(false);
+  });
+
   it("does not poll draft or settled pull requests", () => {
     expect(
       getEnvironmentPullRequestRefetchInterval({
@@ -215,48 +236,6 @@ describe("useEnvironmentPullRequest", () => {
     );
     await waitFor(() => expect(returned.result.current.data).toEqual(reopened));
     expect(sdk.environments.pullRequest).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("buildEnvironmentFilePreview", () => {
-  const CONTENT_URL = "/api/v1/environments/env-1/diff/file?path=src%2Fa.ts";
-
-  it("keeps text previews on the route URL instead of a base64 data URL", () => {
-    const content = "export const marker = true;\n".repeat(64);
-    const preview = buildEnvironmentFilePreview({
-      contentUrl: CONTENT_URL,
-      path: "src/a.ts",
-      response: {
-        path: "src/a.ts",
-        content,
-        contentEncoding: "utf8",
-        mimeType: "text/typescript",
-        sizeBytes: content.length,
-      },
-    });
-
-    expect(preview.kind).toBe("text");
-    expect(preview.url).toBe(CONTENT_URL);
-    expect(preview.url.startsWith("data:")).toBe(false);
-  });
-
-  it("builds a data URL only for previews that render through a media element", () => {
-    const pngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/Qo3AAAAAElFTkSuQmCC";
-    const preview = buildEnvironmentFilePreview({
-      contentUrl: CONTENT_URL,
-      path: "assets/logo.png",
-      response: {
-        path: "assets/logo.png",
-        content: pngBase64,
-        contentEncoding: "base64",
-        mimeType: "image/png",
-        sizeBytes: 68,
-      },
-    });
-
-    expect(preview.kind).toBe("image");
-    expect(preview.url).toBe(`data:image/png;base64,${pngBase64}`);
   });
 });
 

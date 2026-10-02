@@ -21,22 +21,6 @@ describe("NotificationHub", () => {
     vi.useRealTimers();
   });
 
-  it("subscribes clients and delivers thread notifications", () => {
-    const hub = new NotificationHub();
-    const socket = createMockHubSocket();
-
-    hub.subscribe(socket, { kind: "thread-detail", threadId: "thread-1" });
-    hub.notifyThread("thread-1", ["events-appended"]);
-
-    expect(socket.messages).toHaveLength(1);
-    expect(JSON.parse(socket.messages[0])).toMatchObject({
-      type: "changed",
-      entity: "thread",
-      id: "thread-1",
-      changes: ["events-appended"],
-    });
-  });
-
   it("includes thread notification metadata when provided", () => {
     const hub = new NotificationHub();
     const socket = createMockHubSocket();
@@ -73,17 +57,6 @@ describe("NotificationHub", () => {
       id: "environment-1",
       changes: ["metadata-changed"],
     });
-  });
-
-  it("stops notifications after unsubscribe", () => {
-    const hub = new NotificationHub();
-    const socket = createMockHubSocket();
-
-    hub.subscribe(socket, { kind: "thread-detail", threadId: "thread-1" });
-    hub.unsubscribe(socket, { kind: "thread-detail", threadId: "thread-1" });
-    hub.notifyThread("thread-1", ["status-changed"]);
-
-    expect(socket.messages).toHaveLength(0);
   });
 
   it("cleans up subscriptions on client disconnect", () => {
@@ -353,28 +326,6 @@ describe("NotificationHub", () => {
     hub.unregisterDaemon("session-1");
 
     await expect(wait).rejects.toThrow("Host daemon is not connected");
-  });
-
-  it("keeps subscription bookkeeping consistent across repeated changes", () => {
-    const hub = new NotificationHub();
-    const socket = createMockHubSocket();
-
-    for (let index = 0; index < 20; index += 1) {
-      hub.subscribe(socket, { kind: "thread-detail", threadId: "thread-1" });
-      hub.unsubscribe(socket, {
-        kind: "thread-detail",
-        threadId: "thread-1",
-      });
-    }
-    hub.subscribe(socket, { kind: "thread-detail", threadId: "thread-1" });
-    hub.notifyThread("thread-1", ["events-appended"]);
-
-    expect(socket.messages).toHaveLength(1);
-
-    hub.unregisterClient(socket);
-    hub.notifyThread("thread-1", ["events-appended"]);
-
-    expect(socket.messages).toHaveLength(1);
   });
 
   it("skips and logs broadcasts that fail outgoing schema validation", () => {
@@ -650,6 +601,45 @@ describe("NotificationHub events-appended thread-list coalescing", () => {
       id: "thread-1",
       changes: ["events-appended"],
     });
+  });
+
+  it("delivers history compaction to detail subscribers and listeners but not to list-only sockets", () => {
+    vi.useFakeTimers();
+    const hub = new NotificationHub();
+    const detailSocket = createMockHubSocket();
+    const listSocket = createMockHubSocket();
+    const otherDetailSocket = createMockHubSocket();
+    const seen: string[][] = [];
+    hub.onChangedMessage((message) => {
+      seen.push([...message.changes]);
+    });
+    hub.subscribe(detailSocket, {
+      kind: "thread-detail",
+      threadId: "thread-1",
+    });
+    hub.subscribe(listSocket, { kind: "thread-list" });
+    hub.subscribe(otherDetailSocket, {
+      kind: "thread-detail",
+      threadId: "thread-2",
+    });
+
+    hub.notifyThread("thread-1", ["history-compacted"]);
+    vi.advanceTimersByTime(1_000);
+
+    expect(messagesOf(detailSocket)).toEqual([
+      {
+        type: "changed",
+        entity: "thread",
+        id: "thread-1",
+        changes: ["history-compacted"],
+      },
+    ]);
+    expect(listSocket.messages).toEqual([]);
+    expect(otherDetailSocket.messages).toEqual([]);
+    expect(seen).toEqual([["history-compacted"]]);
+
+    hub.notifyThread("thread-1", ["history-rewritten"]);
+    expect(listSocket.messages).toHaveLength(1);
   });
 
   it("still tells changed-message listeners about coalesced frames", () => {

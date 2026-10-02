@@ -31,7 +31,16 @@ import {
   makeThreadWithRuntime as makeThreadWithRuntimeFixture,
 } from "@bb/test-helpers/domain-fixtures";
 import type { ComponentProps, ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { LazyQueuedMessagesList } from "@/components/promptbox/banner/LazyQueuedMessagesList";
 import { workflowRow } from "@/test/fixtures/thread-timeline-rows";
 import type { PromptDraftAttachment } from "@bb/client-core";
 import { BbHttpError } from "@/lib/sdk";
@@ -551,12 +560,6 @@ vi.mock(
   }),
 );
 
-vi.mock("@/components/plugin/PluginPendingInteractionComposer", () => ({
-  PluginPendingInteractionComposer: () => (
-    <div data-testid="composer-stack-item">Plugin pending interaction</div>
-  ),
-}));
-
 vi.mock("@/components/ui/app-toast", () => ({
   appToast: { error: mocks.toastError },
 }));
@@ -664,10 +667,6 @@ vi.mock("@/hooks/mutations/project-mutations", () => ({
 }));
 
 vi.mock("@/hooks/mutations/thread-runtime-mutations", () => ({
-  useUpdateThreadDraft: () => ({
-    isPending: false,
-    mutate: vi.fn(),
-  }),
   useCancelThreadPlan: () => ({
     isPending: false,
     mutate: mocks.cancelThreadPlanMutate,
@@ -825,29 +824,6 @@ function makePendingInteraction(): PendingInteraction {
   };
 }
 
-function makePluginPendingInteraction(): PendingInteraction {
-  return {
-    id: "plugin-interaction-1",
-    threadId: "thr_1",
-    turnId: null,
-    origin: {
-      kind: "plugin",
-      pluginId: "example-plugin",
-      rendererId: "example-form",
-    },
-    payload: {
-      kind: "plugin",
-      title: "Plugin input",
-      data: null,
-    },
-    resolution: null,
-    status: "pending",
-    statusReason: null,
-    createdAt: 1,
-    resolvedAt: null,
-  };
-}
-
 interface RenderPromptAreaOptions {
   activePromptMode?: ThreadTimelineActivePromptMode | null;
   activeWorkflows?: TimelineWorkflowWorkRow[];
@@ -882,7 +858,6 @@ function buildPromptAreaElement({
   return (
     <QueryClientProvider client={testQueryClient}>
       <ThreadDetailPromptArea
-        serverDraft={null}
         activeBackgroundAgentCount={0}
         activeBackgroundCommands={[]}
         activePromptMode={activePromptMode}
@@ -924,6 +899,8 @@ function buildPromptAreaElement({
 function renderPromptArea(options: RenderPromptAreaOptions = {}) {
   return render(buildPromptAreaElement(options));
 }
+
+beforeAll(() => LazyQueuedMessagesList.preload());
 
 beforeEach(() => {
   testQueryClient = new QueryClient({
@@ -1012,8 +989,8 @@ describe("ThreadDetailPromptArea", () => {
       screen.getByRole("button", { name: "Capture plugin host" }),
     );
     const pluginSubmission = {
-      pluginId: "example-plugin",
-      data: { kind: "hold" } as const,
+      pluginId: "drafts",
+      data: { kind: "draft" } as const,
     };
 
     await act(async () => {
@@ -1037,9 +1014,7 @@ describe("ThreadDetailPromptArea", () => {
 
     renderPromptArea({ queuedMessageCount: 1 });
 
-    expect(screen.getByRole("status").textContent).toContain(
-      "Loading queued message details",
-    );
+    screen.getByRole("status", { name: "Loading queued messages" });
     expect(screen.getByLabelText("Queued messages").textContent).toContain(
       "Queue1",
     );
@@ -1089,6 +1064,15 @@ describe("ThreadDetailPromptArea", () => {
     expect(
       inlineEditor.getByTestId("plugin-customizations-suppressed").textContent,
     ).toBe("true");
+    fireEvent.click(
+      inlineEditor.getByRole("button", { name: "Capture plugin host" }),
+    );
+    expect(mocks.pluginComposerHost?.getSelection?.()).toEqual({
+      providerId: "codex",
+      model: "gpt-5",
+      reasoningLevel: "medium",
+      permissionMode: "auto",
+    });
     expect(
       (
         inlineEditor.getByRole("textbox", {
@@ -1204,7 +1188,6 @@ describe("ThreadDetailPromptArea", () => {
       thread: makeThread({
         runtime: {
           displayStatus: "idle",
-          hostReconnectGraceExpiresAt: null,
         },
         status: "idle",
       }),
@@ -1231,7 +1214,6 @@ describe("ThreadDetailPromptArea", () => {
       thread: makeThread({
         runtime: {
           displayStatus: "provisioning",
-          hostReconnectGraceExpiresAt: null,
         },
         status: "starting",
       }),
@@ -1650,6 +1632,15 @@ describe("ThreadDetailPromptArea", () => {
     expect(inlineEditor.getByTestId("permission-read-only").textContent).toBe(
       "true",
     );
+    fireEvent.click(
+      inlineEditor.getByRole("button", { name: "Capture plugin host" }),
+    );
+    expect(mocks.pluginComposerHost?.getSelection?.()).toEqual({
+      providerId: "codex",
+      model: "queued-model",
+      reasoningLevel: "high",
+      permissionMode: "full",
+    });
   });
 
   it("dismisses an inline edit when its thread changes or its live row disappears", async () => {
@@ -1982,20 +1973,6 @@ describe("ThreadDetailPromptArea", () => {
     ).toEqual(["Plan banner", "Goal banner", "Pending interaction"]);
   });
 
-  it("keeps independent Plan and Goal banners above plugin input", () => {
-    renderPromptArea({
-      activePromptMode: activePlan,
-      goal: activeGoal,
-      pendingInteractions: [makePluginPendingInteraction()],
-    });
-
-    expect(
-      screen
-        .getAllByTestId("composer-stack-item")
-        .map((item) => item.textContent),
-    ).toEqual(["Plan banner", "Goal banner", "Pending interaction"]);
-  });
-
   it("selects the provider fallback model for the next turn", () => {
     mocks.defaultExecutionOptions = {
       model: "claude-fable-5",
@@ -2074,6 +2051,7 @@ describe("ThreadDetailPromptArea", () => {
       reasoningLevel: "medium",
       permissionMode: "auto",
     });
+    expect(host!.getSelection?.()).toEqual(result);
     expect(screen.getByTestId("submit-label").textContent).toBe("New thread");
     expect(screen.getByTestId("command-suggestions").textContent).toBe(
       "claude-code:new-thread",
@@ -2396,7 +2374,7 @@ describe("ThreadDetailPromptArea", () => {
         environmentId: "env_1",
         id: "thr_source",
         projectId: "proj_source",
-        runtime: { displayStatus: "active", hostReconnectGraceExpiresAt: null },
+        runtime: { displayStatus: "active" },
         status: "active",
         title: "Source thread",
         titleFallback: null,

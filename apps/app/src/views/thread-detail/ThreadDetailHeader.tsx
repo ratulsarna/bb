@@ -1,3 +1,4 @@
+import { preloadThreadSecondaryPanel } from "@/components/secondary-panel/lazySecondaryPanelComponents";
 import {
   useCallback,
   useContext,
@@ -15,7 +16,6 @@ import { Pill } from "@bb/shared-ui/pill";
 import { SplitButton } from "@/components/ui/split-button.js";
 import {
   AppPageHeader,
-  COMPACT_SHELF_HIDDEN_PAGE_HEADER_ACTIONS_CLASS,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_PANE_ACTION_ICON_BUTTON_CLASS,
 } from "@/components/layout/AppPageHeader";
@@ -188,10 +188,8 @@ export function ThreadDetailHeader({
       ) : null}
       {actionsMenu == null ? null : (
         <span
-          data-testid="thread-detail-header-actions-menu"
           className={cn(
             "flex items-center",
-            COMPACT_SHELF_HIDDEN_PAGE_HEADER_ACTIONS_CLASS,
             usesDesktopChrome && MACOS_WINDOW_NO_DRAG_CLASS,
           )}
         >
@@ -279,6 +277,9 @@ export function ThreadDetailHeader({
               }
               aria-keyshortcuts={panelShortcut?.ariaKeyshortcuts}
               aria-expanded={isSecondaryPanelOpen}
+              onPointerEnter={preloadThreadSecondaryPanel}
+              onFocus={preloadThreadSecondaryPanel}
+              onPointerDown={preloadThreadSecondaryPanel}
               onClick={onToggleSecondaryPanel}
             >
               <Icon name={rightPanelIconName} />

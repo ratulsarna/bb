@@ -227,9 +227,11 @@ describe("injected skill staging", () => {
     await expect(readFile(stagedScript, "utf8")).resolves.toBe(
       "#!/bin/sh\necho synced\n",
     );
-    await expect(
-      lstat(stagedScript).then((stat) => stat.mode & 0o777),
-    ).resolves.toBe(0o755);
+    if (process.platform !== "win32") {
+      await expect(
+        lstat(stagedScript).then((stat) => stat.mode & 0o777),
+      ).resolves.toBe(0o755);
+    }
     expect(fetchSkillTree).toHaveBeenCalledTimes(1);
     expect(fetchSkillTree).toHaveBeenCalledWith(payload.treeHash);
   });
@@ -437,7 +439,7 @@ describe("injected skill staging", () => {
     }
   });
 
-  it("creates a shared staged snapshot for Codex, Claude Code, Pi, and ACP", async () => {
+  it("stages a workspace-path skill source into the shared catalog", async () => {
     const dataDir = await makeTempDir();
     const skillRootPath = await writeSkill({
       rootPath: path.join(dataDir, "source-skills"),
@@ -484,43 +486,15 @@ describe("injected skill staging", () => {
     await expect(
       readdir(stageRootPath).then((entries) => entries.sort()),
     ).resolves.toEqual(["catalog.json", "skills"]);
-  });
-
-  it("stages workspace-path skill sources into the shared catalog", async () => {
-    const dataDir = await makeTempDir();
-    const bundledRoot = await makeTempDir();
-    const skillRootPath = await writeSkill({
-      rootPath: bundledRoot,
-      name: "workflow-help",
-    });
-
-    const staged = await stageInjectedSkillSources({
-      dataDir,
-      injectedSkillSources: [
-        {
-          kind: "workspace-path",
-          sourceType: "project",
-          name: "workflow-help",
-          description: "Use workflow-help when host staging tests run.",
-          sourceRootPath: skillRootPath,
-          skillFilePath: path.join(skillRootPath, "SKILL.md"),
-        },
-      ],
-    });
-
-    const root = requireSkillRoot(staged.skillRoots);
     await expect(
-      readFile(path.join(root.path, "workflow-help", "SKILL.md"), "utf8"),
-    ).resolves.toContain("name: workflow-help");
-    await expect(
-      readFile(path.join(path.dirname(root.path), "catalog.json"), "utf8").then(
+      readFile(path.join(stageRootPath, "catalog.json"), "utf8").then(
         (content) => JSON.parse(content),
       ),
     ).resolves.toMatchObject({
       catalogHash: staged.catalogHash,
       skills: [
         {
-          name: "workflow-help",
+          name: "release-notes",
           sourceRootPath: skillRootPath,
           sourceType: "project",
         },

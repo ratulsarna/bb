@@ -1,4 +1,4 @@
-import path from "node:path";
+import { posix as path } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { markThreadDeleted } from "@bb/db";
 import type { HostDaemonOnlineRpcRequestMessage } from "@bb/host-daemon-contract";
@@ -85,7 +85,7 @@ describe("thread storage orphan cleanup", () => {
                 directory: rootPath,
                 parent: session.dataDir,
                 entries: [...storedIds].map((name) => ({
-                  kind: "directory",
+                  kind: "directory" as const,
                   name,
                   path: path.join(rootPath, name),
                 })),
@@ -144,7 +144,7 @@ describe("thread storage orphan cleanup", () => {
                 directory: rootPath,
                 parent: session.dataDir,
                 entries: [rejectedPath, removablePath].map((entryPath) => ({
-                  kind: "directory",
+                  kind: "directory" as const,
                   name: path.basename(entryPath),
                   path: entryPath,
                 })),
@@ -238,7 +238,7 @@ describe("thread storage orphan cleanup", () => {
                 directory: rootPath,
                 parent: session.dataDir,
                 entries: [rejectedPath, removablePath].map((entryPath) => ({
-                  kind: "directory",
+                  kind: "directory" as const,
                   name: path.basename(entryPath),
                   path: entryPath,
                 })),
@@ -293,7 +293,7 @@ describe("thread storage orphan cleanup", () => {
                 directory: rootPath,
                 parent: session.dataDir,
                 entries: [slowPath, laterPath].map((entryPath) => ({
-                  kind: "directory",
+                  kind: "directory" as const,
                   name: path.basename(entryPath),
                   path: entryPath,
                 })),

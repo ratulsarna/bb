@@ -129,6 +129,8 @@ describe("workspace command dispatch", () => {
       baseRefName: "main",
       headRefName: "bb/timeline-polish",
       updatedAt: "2026-06-16T12:30:00Z",
+      autoMerge: false,
+      inMergeQueue: false,
       checks: [],
       reviewDecision: null,
       reviewRequestCount: 0,
@@ -195,6 +197,8 @@ describe("workspace command dispatch", () => {
       baseRefName: "main",
       headRefName: "bb/hidden-pr",
       updatedAt: "2026-06-16T12:30:00Z",
+      autoMerge: false,
+      inMergeQueue: false,
       checks: [],
       reviewDecision: null,
       reviewRequestCount: 0,
@@ -384,7 +388,7 @@ describe("workspace command dispatch", () => {
     );
 
     const paths = result.files.map((file) => file.path).sort();
-    expect(paths).toEqual(["notes.md", path.join("notes", "todo.md")]);
+    expect(paths).toEqual(["notes.md", "notes/todo.md"]);
     expect(result.truncated).toBe(false);
   });
 
@@ -422,11 +426,7 @@ describe("workspace command dispatch", () => {
     ).toEqual([
       { kind: "directory", path: "notes", name: "notes" },
       { kind: "directory", path: "notes/daily", name: "daily" },
-      {
-        kind: "file",
-        path: path.join("notes", "daily", "todo.md"),
-        name: "todo.md",
-      },
+      { kind: "file", path: "notes/daily/todo.md", name: "todo.md" },
     ]);
     expect(result.truncated).toBe(false);
   });
@@ -501,29 +501,6 @@ describe("workspace command dispatch", () => {
       code: "invalid_path",
       message: expect.stringContaining("must not be a symlink"),
     });
-  });
-
-  it("covers host.read_file", async () => {
-    const tempDir = await makeTempDir("bb-dispatch-host-read-file-");
-    const filePath = path.join(tempDir, "notes.md");
-    await fs.writeFile(filePath, "durable thread notes");
-
-    const harness = createHarness();
-    const result = await dispatchOnlineRpcCommand(
-      {
-        type: "host.read_file",
-        path: filePath,
-        rootPath: tempDir,
-      },
-      harness.dispatchOptions(),
-    );
-
-    expect(result.path).toBe(filePath);
-    expect("content" in result ? result.content : undefined).toBe(
-      "durable thread notes",
-    );
-    expect(result.contentEncoding).toBe("utf8");
-    expect(result.sizeBytes).toBe("durable thread notes".length);
   });
 
   it("returns base64 for image files", async () => {

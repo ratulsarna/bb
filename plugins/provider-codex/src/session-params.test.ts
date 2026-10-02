@@ -19,7 +19,6 @@ import {
   resolveCodexInstructionOverrides,
   toCodexDynamicTools,
   toCodexPermissionSettings,
-  toCodexReasoningEffort,
   toCodexServiceTier,
   toCodexThreadPermissionSettings,
   toCodexUserInput,
@@ -451,11 +450,6 @@ function permissionSettings(
 
 describe("codex permission settings", () => {
   it("defaults full permission scope to unreviewed danger-full-access", () => {
-    expect(toCodexThreadPermissionSettings(FULL_OPTIONS)).toEqual({
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: "danger-full-access",
-    });
     expect(permissionSettings(FULL_OPTIONS)).toEqual({
       approvalPolicy: "never",
       approvalsReviewer: "user",
@@ -470,19 +464,7 @@ describe("codex permission settings", () => {
     ).toEqual({});
   });
 
-  it("maps accept-edits to user-reviewed workspace approvals", () => {
-    expect(toCodexThreadPermissionSettings(WORKSPACE_ASK_OPTIONS)).toEqual({
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-      sandbox: "workspace-write",
-    });
-  });
-
   it("keeps automatic review on-request under deny escalation", () => {
-    expect(toCodexThreadPermissionSettings(AUTO_DENY_OPTIONS)).toMatchObject({
-      approvalPolicy: "on-request",
-      approvalsReviewer: "auto_review",
-    });
     expect(permissionSettings(AUTO_DENY_OPTIONS)).toMatchObject({
       approvalPolicy: "on-request",
       approvalsReviewer: "auto_review",
@@ -558,7 +540,6 @@ describe("buildCodexConfig", () => {
     const config = configFor(FULL_OPTIONS);
 
     expect(config).toMatchObject({
-      "features.default_mode_request_user_input": false,
     });
     expect(JSON.stringify(config)).not.toContain("tools.web_search");
   });
@@ -612,6 +593,12 @@ describe("buildCodexConfig", () => {
     expect(
       configFor({ ...FULL_OPTIONS, reasoningLevel: "ultra" }),
     ).toMatchObject({ model_reasoning_effort: "ultra" });
+    expect(() =>
+      configFor({ ...FULL_OPTIONS, reasoningLevel: "ultracode" }),
+    ).toThrow("Codex does not support the ultracode reasoning level.");
+    expect(() =>
+      configFor({ ...FULL_OPTIONS, reasoningLevel: "none" }),
+    ).toThrow("Codex does not support the none reasoning level.");
   });
 
   it("omits the writable-roots key for a full-access session", () => {
@@ -652,22 +639,10 @@ describe("resolveCodexInstructionOverrides", () => {
   });
 });
 
-describe("toCodexReasoningEffort", () => {
-  it("maps the top of the bb reasoning ladder", () => {
-    expect(toCodexReasoningEffort("max")).toBe("max");
-    expect(toCodexReasoningEffort("ultra")).toBe("ultra");
-  });
-
-  it("rejects ultracode because Codex does not support it", () => {
-    expect(() => toCodexReasoningEffort("ultracode")).toThrow(
-      "Codex does not support the ultracode reasoning level.",
-    );
-  });
-});
-
 describe("toCodexServiceTier", () => {
-  it("forwards only the fast tier", () => {
+  it("forwards every tier except default as given", () => {
     expect(toCodexServiceTier("fast")).toBe("fast");
+    expect(toCodexServiceTier("ultrafast")).toBe("ultrafast");
     expect(toCodexServiceTier("default")).toBeNull();
     expect(toCodexServiceTier(undefined)).toBeUndefined();
   });

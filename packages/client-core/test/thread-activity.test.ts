@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { makeThreadListEntry } from "@bb/test-helpers/domain-fixtures";
 import {
   getCollapsedChildActivity,
-  hasThreadListWorkingActivity,
   isUnreadDoneThread,
   resolveThreadListIndicator,
   threadListIndicatorStateForThread,
@@ -30,14 +29,14 @@ function makeChild(
       activePlanModeCount: 0,
       activeGoalCount: 0,
     },
-    runtime: { displayStatus: "idle", hostReconnectGraceExpiresAt: null },
+    runtime: { displayStatus: "idle" },
     ...overrides,
   };
 }
 
 const busyChild = makeChild({
   status: "active",
-  runtime: { displayStatus: "active", hostReconnectGraceExpiresAt: null },
+  runtime: { displayStatus: "active" },
 });
 const pendingChild = makeChild({ hasPendingInteraction: true });
 const unreadChild = makeChild({ latestAttentionAt: 20, lastReadAt: 10 });
@@ -62,39 +61,6 @@ const idleIndicatorState: ThreadListIndicatorState = {
 };
 
 describe("thread-activity", () => {
-  describe("hasThreadListWorkingActivity", () => {
-    it.each([
-      "isRuntimeActive",
-      "isWorkflowActive",
-      "isBackgroundAgentActive",
-      "isBackgroundCommandActive",
-      "isPlanModeActive",
-      "isGoalActive",
-    ] as const)(
-      "keeps %s working despite higher-priority attention states",
-      (flag) => {
-        expect(
-          hasThreadListWorkingActivity({
-            ...idleIndicatorState,
-            hasPendingInteraction: true,
-            hasUnreadError: true,
-            [flag]: true,
-          }),
-        ).toBe(true);
-      },
-    );
-
-    it("does not treat attention-only states as work", () => {
-      expect(
-        hasThreadListWorkingActivity({
-          ...idleIndicatorState,
-          hasPendingInteraction: true,
-          hasUnreadError: true,
-        }),
-      ).toBe(false);
-    });
-  });
-
   describe("resolveThreadListIndicator", () => {
     it.each([
       ["hasPendingInteraction", "waiting-for-input"],
@@ -352,7 +318,7 @@ describe("thread-activity", () => {
           activePlanModeCount: 0,
           activeGoalCount: 1,
         },
-        runtime: { displayStatus: "active", hostReconnectGraceExpiresAt: null },
+        runtime: { displayStatus: "active" },
       });
 
       expect(threadListIndicatorStateForThread(thread, false)).toEqual({
@@ -520,7 +486,7 @@ describe("thread-activity", () => {
           activePlanModeCount: 0,
           activeGoalCount: 0,
         },
-        runtime: { displayStatus: "active", hostReconnectGraceExpiresAt: null },
+        runtime: { displayStatus: "active" },
       });
 
       expect(getCollapsedChildActivity([busyUnreadErrorChild])).toEqual({
@@ -542,7 +508,7 @@ describe("thread-activity", () => {
       const busyAndPending = makeChild({
         status: "active",
         hasPendingInteraction: true,
-        runtime: { displayStatus: "active", hostReconnectGraceExpiresAt: null },
+        runtime: { displayStatus: "active" },
       });
       expect(getCollapsedChildActivity([busyAndPending])).toEqual({
         pending: true,
@@ -603,34 +569,6 @@ describe("thread-activity", () => {
         });
       },
     );
-
-    it("keeps workflow activity visible when the same child also has runtime work", () => {
-      const workflowAndRuntimeChild = makeChild({
-        activity: {
-          activeWorkflowCount: 1,
-          activeBackgroundAgentCount: 0,
-          activeBackgroundCommandCount: 0,
-          activePlanModeCount: 0,
-          activeGoalCount: 0,
-        },
-        runtime: { displayStatus: "active", hostReconnectGraceExpiresAt: null },
-        status: "active",
-      });
-
-      expect(getCollapsedChildActivity([workflowAndRuntimeChild])).toEqual({
-        pending: false,
-        working: true,
-        hasUnsubmittedDraft: false,
-        runtimeWorking: true,
-        workflow: true,
-        backgroundAgent: false,
-        backgroundCommand: false,
-        planMode: false,
-        goal: false,
-        unread: false,
-        unreadError: false,
-      });
-    });
 
     it("never flags 'unread' for parented children", () => {
       const unreadButParented = makeChild({
