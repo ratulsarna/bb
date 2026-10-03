@@ -468,7 +468,10 @@ function applySandboxSetting(
     return;
   }
   sessionOptions.sandboxEnabled = enabled;
-  const sandbox = buildWorkspaceWriteSandbox(sessionOptions);
+  const sandbox = buildWorkspaceWriteSandbox({
+    ...sessionOptions,
+    permissionMode: attachment.approvedPlanPermissionMode,
+  });
   if (sandbox) {
     attachment.sessionOptions.sandbox = sandbox;
   } else {
@@ -480,6 +483,63 @@ function applySandboxSetting(
       showRuntimeNote: false,
     };
   }
+}
+
+function applyPermissionSettings(
+  attachment: ThreadAttachment,
+  params: TurnStartParams | TurnSteerParams,
+): boolean {
+  const construction = attachment.sessionConstructionConfig.sessionOptions;
+  const writeRoots =
+    params.permissionScope === "workspace"
+      ? params.additionalWorkspaceWriteRoots
+      : [];
+  if (
+    attachment.approvedPlanPermissionMode === params.permissionMode &&
+    construction.permissionScope === params.permissionScope &&
+    isDeepStrictEqual(
+      construction.additionalWorkspaceWriteRoots ?? [],
+      writeRoots,
+    )
+  ) {
+    return false;
+  }
+  const permissionMode =
+    attachment.permissionMode === "plan" ? "plan" : params.permissionMode;
+  construction.permissionMode = permissionMode;
+  construction.permissionScope = params.permissionScope;
+  construction.additionalWorkspaceWriteRoots = writeRoots;
+  attachment.permissionMode = permissionMode;
+  attachment.approvedPlanPermissionMode = params.permissionMode;
+  attachment.sessionPermissionGrants = [];
+  const rebuilt = buildSessionOptions(
+    {
+      ...construction,
+      ...attachment.liveSettings,
+      permissionMode: params.permissionMode,
+    },
+    attachment.sessionOptions.env ?? {},
+  );
+  attachment.sessionOptions.permissionMode = permissionMode;
+  attachment.sessionOptions.allowBypassPermissions = rebuilt.allowBypassPermissions;
+  if (rebuilt.sandbox) {
+    attachment.sessionOptions.sandbox = rebuilt.sandbox;
+  } else {
+    delete attachment.sessionOptions.sandbox;
+  }
+  if (rebuilt.additionalDirectories) {
+    attachment.sessionOptions.additionalDirectories =
+      rebuilt.additionalDirectories;
+  } else {
+    delete attachment.sessionOptions.additionalDirectories;
+  }
+  if (attachment.residentSession) {
+    attachment.residentSession.restartBeforeNextTurn = {
+      reason: "Claude Code permissions changed",
+      showRuntimeNote: false,
+    };
+  }
+  return true;
 }
 
 function createForwardToolCall(getThreadId: () => string): ToolCallForwarder {
@@ -2328,7 +2388,13 @@ async function runTurnInput(
     applySandboxSetting(attachment, params.sandboxEnabled);
   }
 
-  const threadSession = await getWritableThreadSession(params.threadId, intent);
+  const permissionsChanged = attachment
+    ? applyPermissionSettings(attachment, params)
+    : false;
+  const threadSession = await getWritableThreadSession(
+    params.threadId,
+    permissionsChanged ? "new-turn" : intent,
+  );
   if (!threadSession) {
     sendError(id, -32000, "No active session");
     return;
