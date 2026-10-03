@@ -764,7 +764,7 @@ export interface PluginHooks {
        * registrations retain their Send now override and operation exemptions.
        * Count with sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true })
        * to include admissions awaiting command preparation and tracked work.
-       * Require engines.bbPluginSdk >=0.6.16 when depending on enforcement.
+       * Require engines.bbPluginSdk >=0.6.17 when depending on enforcement.
        */
       experimental_enforcement?: "strict";
     },
