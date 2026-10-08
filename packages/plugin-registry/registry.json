@@ -17,7 +17,6 @@
     "chart",
     "checkbox",
     "chrome-style-tokens",
-    "coarse-pointer-visibility",
     "collapsible",
     "command",
     "context-menu",
@@ -28,6 +27,7 @@
     "empty-state",
     "form",
     "hover-card",
+    "hover-reveal",
     "input",
     "input-otp",
     "label",
@@ -38,6 +38,7 @@
     "plugin-icon",
     "popover",
     "progress",
+    "prompt-stack-disclosure",
     "question-form",
     "radio-group",
     "resizable",
@@ -60,6 +61,7 @@
   ],
   "pluginFlavors": {
     "components/ui/icon.tsx": "flavors/components/ui/icon.tsx",
-    "components/ui/question-form-host.tsx": "flavors/components/ui/question-form-host.tsx"
+    "components/ui/question-form-host.tsx": "flavors/components/ui/question-form-host.tsx",
+    "components/ui/voice-input-textarea.tsx": "flavors/components/ui/voice-input-textarea.tsx"
   }
 }

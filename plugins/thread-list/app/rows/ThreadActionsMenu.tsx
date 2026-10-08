@@ -28,17 +28,24 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Icon, type IconName } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { COARSE_POINTER_ICON_SIZE_CLASS } from "@/components/ui/coarse-pointer-sizing";
 import { useIsCompactViewport } from "@/components/ui/hooks/use-compact-viewport";
 import { cn } from "@/lib/utils";
 import {
+  experimental_copyToClipboard,
   experimental_useSidebarThreadActions,
   useSdk,
 } from "@get-bb/plugin-sdk/app";
-import { ActionMenuItem, ActionMenuSeparator } from "../ui/action-menu-items.js";
+import {
+  ActionMenuItem,
+  ActionMenuSeparator,
+} from "../ui/action-menu-items.js";
 import { CompactLongPressMenu } from "../ui/compact-long-press-menu.js";
-import { copyToClipboardWithToast } from "../ui/clipboard.js";
 import type { SidebarThread } from "../model/sidebar-thread.js";
 import {
   THREAD_ROW_ACTION_IDS,
@@ -297,6 +304,29 @@ function ThreadActionsMenuItems({
           {separator}
         </>
       ) : null}
+      {isCompactViewport &&
+      thread.environment?.id &&
+      thread.environment.path !== null ? (
+        <ActionMenuItem
+          surface={surface}
+          icon="MessageSquarePlus"
+          onSelect={() => {
+            const environmentId = thread.environment?.id;
+            if (!environmentId) return;
+            actions.openNewThread({
+              projectId: thread.projectId,
+              environmentId,
+              experimental_placement: {
+                sectionId: thread.sectionId,
+                pinned: thread.pinnedAt !== null,
+              },
+              focusPrompt: true,
+            });
+          }}
+        >
+          New thread in environment
+        </ActionMenuItem>
+      ) : null}
       {THREAD_ROW_ACTION_IDS.map((id) => (
         <Fragment key={id}>
           {id === "archive" ? (
@@ -381,9 +411,11 @@ function threadRowActionModel(
       return {
         ...THREAD_ROW_ACTIONS.copyLink,
         run: () => {
-          void copyToClipboardWithToast(getThreadUrl(thread), {
-            successMessage: "Thread link copied",
-            errorMessage: "Failed to copy thread link",
+          void experimental_copyToClipboard({
+            text: getThreadUrl(thread),
+          }).then((copied) => {
+            if (copied) toast.success("Thread link copied");
+            else toast.error("Failed to copy thread link");
           });
         },
       };
@@ -631,7 +663,9 @@ function ThreadMoveQuickAction({
         <TooltipContent side="bottom">{label}</TooltipContent>
       </Tooltip>
       <DropdownMenuContent
-        align="end"
+        side="right"
+        align="start"
+        sideOffset={8}
         className="max-h-[min(24rem,calc(100vh-2rem))] min-w-44 overflow-y-auto"
       >
         <DropdownMenuLabel>{label}</DropdownMenuLabel>
@@ -712,7 +746,12 @@ export function ThreadActionsMenu({
           />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" onCloseAutoFocus={onCloseAutoFocus}>
+      <DropdownMenuContent
+        side="right"
+        align="start"
+        sideOffset={8}
+        onCloseAutoFocus={onCloseAutoFocus}
+      >
         <ThreadActionsMenuItems
           thread={thread}
           onOpenInSplit={onOpenInSplit}

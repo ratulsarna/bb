@@ -592,8 +592,23 @@ const OPTIONAL_SERVER_FIELD_GROUPS: readonly OptionalServerFieldGroup[] = [
   },
   {
     reason:
-      "Uploaded attachments may omit mime type when the client could not determine one.",
-    fields: ["uploadedPromptAttachmentSchema.mimeType"],
+      "Uploaded attachments may omit mime type when the client could not determine one. A source project is present only while an uploaded attachment still belongs to a different project, and a machine only on an absolute-path attachment from prompt history or a draft; the server checks and strips both, and destination-relative and legacy references omit them.",
+    fields: [
+      "uploadedPromptAttachmentSchema.mimeType",
+      "uploadedPromptAttachmentSchema.sourceProjectId",
+      "createQueuedMessageRequestSchema.input.sourceProjectId",
+      "createThreadRequestSchema.input.sourceProjectId",
+      "forkThreadRequestSchema.agentContextSeed.sourceProjectId",
+      "forkThreadRequestSchema.input.sourceProjectId",
+      "sendMessageRequestSchema.input.sourceProjectId",
+      "sendQueuedMessageResponseSchema.queuedMessage.content.sourceProjectId",
+      "createQueuedMessageRequestSchema.input.hostId",
+      "createThreadRequestSchema.input.hostId",
+      "forkThreadRequestSchema.agentContextSeed.hostId",
+      "forkThreadRequestSchema.input.hostId",
+      "sendMessageRequestSchema.input.hostId",
+      "sendQueuedMessageResponseSchema.queuedMessage.content.hostId",
+    ],
   },
   {
     reason:
@@ -991,12 +1006,21 @@ describe("public terminal contracts", () => {
   });
 
   it("defaults and validates the terminal websocket replay sequence", () => {
-    expect(terminalWebSocketQuerySchema.parse({})).toEqual({ sinceSeq: 0 });
-    expect(terminalWebSocketQuerySchema.parse({ sinceSeq: "12" })).toEqual({
+    expect(terminalWebSocketQuerySchema.parse({})).toEqual({
+      outputAcks: false,
+      sinceSeq: 0,
+    });
+    expect(
+      terminalWebSocketQuerySchema.parse({ outputAcks: "1", sinceSeq: "12" }),
+    ).toEqual({
+      outputAcks: true,
       sinceSeq: 12,
     });
     expect(
       terminalWebSocketQuerySchema.safeParse({ sinceSeq: "-1" }).success,
+    ).toBe(false);
+    expect(
+      terminalWebSocketQuerySchema.safeParse({ outputAcks: "true" }).success,
     ).toBe(false);
   });
 

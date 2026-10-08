@@ -1,4 +1,5 @@
 import type {
+  ComponentPropsWithRef,
   ComponentPropsWithoutRef,
   ComponentType,
   CSSProperties,
@@ -19,7 +20,6 @@ import type {
 import type {
   CreateExecutionInputSources,
   CreateThreadEnvironmentArgs,
-  UploadedPromptAttachment,
 } from "@bb/server-contract";
 import type {
   BbSdkAreas,
@@ -148,6 +148,31 @@ export interface ExperimentalQuestionFormHost {
    * function to unregister.
    */
   registerChoiceHandler(handler: (index: number) => boolean): () => void;
+}
+
+/**
+ * Props of the host-owned `experimental_VoiceInputTextarea`: a controlled
+ * textarea with bb's voice input. Other textarea attributes, including `ref`
+ * and `className`, reach the underlying `<textarea>`; the caller styles it and
+ * the host adds room for its microphone controls when voice input is
+ * available.
+ */
+export interface ExperimentalVoiceInputTextareaProps
+  extends Omit<
+    ComponentPropsWithRef<"textarea">,
+    "value" | "defaultValue" | "onChange" | "children"
+  > {
+  value: string;
+  /**
+   * Receives typed edits and finished transcripts, which the host appends to
+   * `value`. Transcripts stay editable and are never submitted.
+   */
+  onValueChange(value: string): void;
+  /**
+   * True from the start of recording until transcription finishes or is
+   * cancelled, and false on unmount. Hold submission while it is true.
+   */
+  onVoiceInputActiveChange?(active: boolean): void;
 }
 
 /**
@@ -1342,6 +1367,16 @@ export interface PluginCodeThemeState {
 }
 
 /**
+ * What {@link PluginSdkApp.experimental_copyToClipboard} writes: plain text,
+ * plus an HTML representation for paste targets that accept rich text.
+ * Without `html`, only plain text is written.
+ */
+export interface ExperimentalClipboardContent {
+  text: string;
+  html?: string;
+}
+
+/**
  * The `threads` area of {@link PluginBrowserBbSdk}: bb's public thread API
  * with the calling plugin's identity filled in. `spawn` and `fork` stamp
  * `origin: "plugin"` and `originPluginId` unless the call names another
@@ -1476,6 +1511,8 @@ export interface PluginSidebarThreadActions {
   rename(threadId: string, title: string): Promise<void>;
   /** Confirms before including child threads unless archive confirmation is disabled in Settings → General. */
   archive(threadId: string): void;
+  /** Archives an environment's active thread trees with bb's optimistic updates, pane cleanup, and one Undo toast. Rejects after bb shows an error toast on failure. */
+  experimental_archiveEnvironmentThreads(environmentId: string): Promise<void>;
   /**
    * Opens bb's delete confirmation, which counts child threads first. Deletion
    * is destructive and recursive, so the host owns the confirmation: there is
@@ -1722,6 +1759,13 @@ export interface ThreadChatMessageReference {
   /** Visible text of the message. */
   text: string;
   sourceSeqEnd: number;
+  /**
+   * The event sequence that recorded this message: the `msg` value of a
+   * message link and the seq that `sdk.threads.message` and
+   * `bb thread log --message` read. For a steer this is its request sequence,
+   * which can differ from the acceptance sequence in `sourceSeqEnd`.
+   */
+  experimental_messageSeq: number;
 }
 
 /**
@@ -1766,10 +1810,11 @@ export interface PluginMessageActionContext {
 }
 
 /**
- * An action on chat messages: an icon button in the per-message action bar
- * (user and assistant messages) and an entry in the assistant-message
- * text-selection menu. Host-rendered chrome — the plugin supplies title,
- * icon, and `run` behavior only. Resolved icon names take precedence over
+ * An action on chat messages in the main thread timeline: an icon button in
+ * the per-message action bar (user and assistant messages) and an entry in
+ * the assistant-message text-selection menu. Embedded `ThreadChat` timelines
+ * do not show slot-registered actions. Host-rendered chrome — the plugin
+ * supplies title, icon, and `run` behavior only. Resolved icon names take precedence over
  * plugin branding; omitted or unknown names fall back to branding.
  */
 export interface PluginMessageActionRegistration {
@@ -1791,14 +1836,15 @@ export interface PluginCommandContext {
   threadId: string | null;
   projectId: string | null;
   /**
-   * Open one of this plugin's `threadPanelAction` components in the current
-   * thread's side panel, exactly as `messageAction`'s `openPanel` does.
+   * Open one of this plugin's panel components in the focused side panel.
+   * In a thread, `actionId` resolves against `threadPanelAction`; on the New
+   * thread screen, it resolves against `experimental_newThreadPanelAction`.
+   * Register both slots with the same id to support commands on both screens.
    *
    * Returns true when the host accepted the open; false when it declined —
-   * `params` was not a JSON value, the action id names no `threadPanelAction`
-   * of this plugin, or the surface has no side panel. Only the main thread
-   * view has one, and the palette opens anywhere, so guard with `isAvailable`
-   * rather than assuming.
+   * `params` was not a JSON value, the action id names no matching panel action
+   * of this plugin on the focused surface, or the surface has no side panel.
+   * The palette opens anywhere, so guard with `isAvailable` rather than assuming.
    */
   openPanel(options: PluginTargetedPanelActionOpenOptions): boolean;
 }
@@ -2468,8 +2514,29 @@ export interface ComposerDraft {
   mentions: readonly ComposerMention[];
 }
 
-/** An already uploaded attachment; paths retain their original project or thread ownership. */
-export type ComposerAttachment = UploadedPromptAttachment;
+/**
+ * A composer attachment: an uploaded file, optionally owned by another
+ * project, or an absolute path on one machine. Never both.
+ */
+export type ComposerAttachment = {
+  type: "localImage" | "localFile";
+  path: string;
+  name: string;
+  mimeType?: string;
+  /** Exact size in bytes; omit when unknown. Zero is treated as unknown. A wrong nonzero size can make the send fail when bb stages a file. */
+  sizeBytes?: number;
+} & (
+  | {
+      /** Project that currently owns this uploaded path; omit for destination-relative attachments. */
+      sourceProjectId?: string;
+      hostId?: never;
+    }
+  | {
+      /** Machine whose absolute `path` this is; core rejects sending it to a thread on another machine. */
+      hostId: string;
+      sourceProjectId?: never;
+    }
+);
 
 /** The complete current draft. Snapshots and their entries are immutable. */
 export interface ComposerDraftSnapshot extends ComposerDraft {
@@ -2639,8 +2706,10 @@ export interface PluginComposerApi {
    * an empty list clears them. Does not infer or rebase mention ranges.
    * Ranges are non-overlapping UTF-16 offsets into the supplied text.
    * Invalid results, throwing updaters, and unavailable editors leave the
-   * draft unchanged. Does not focus, submit, upload, or copy files between
-   * projects. Use `insert` for insertion at the editor's cursor.
+   * draft unchanged. Source project references on uploaded attachments are
+   * preserved; core copies them into the destination project when the draft
+   * is submitted. Does not focus or submit. Use `insert` for insertion at the
+   * editor's cursor.
    */
   replace(
     next:
@@ -2847,8 +2916,9 @@ export type ExperimentalComposerSubmitOptions = ComposerSubmitOptions;
 /**
  * A consumer-supplied action on the messages of one `ThreadChat` instance,
  * rendered in the embedded timeline's per-message action bar alongside the
- * native and slot-registered actions. Unlike the `messageAction` slot this is
- * scoped to the rendering component, not registered globally.
+ * native actions. Slot-registered `messageAction`s do not appear there. Unlike
+ * the `messageAction` slot this is scoped to the rendering component, not
+ * registered globally.
  */
 export interface ThreadChatMessageAction {
   /** Unique within this ThreadChat instance; letters, digits, `-`, `_`. */
@@ -3318,9 +3388,11 @@ export interface BbNavigate {
    */
   toCompose(options?: { initialPrompt?: string; focusPrompt?: boolean }): void;
   /**
-   * Open one of this plugin's registered thread-panel actions in the current
-   * thread surface. Returns false when the surface has no thread side panel or
-   * the action is unavailable.
+   * Open one of this plugin's registered panel actions in the current
+   * surface's side panel: a `threadPanelAction` in a thread, or an
+   * `experimental_newThreadPanelAction` on the New thread screen. Plugin
+   * commands use the same opener. Returns false when the surface has no side
+   * panel actions (plugin pages) or the action is unavailable.
    */
   openThreadPanel(options: PluginTargetedPanelActionOpenOptions): boolean;
   /**
@@ -3335,6 +3407,18 @@ export interface BbNavigate {
   experimental_openFileExternally(
     options: ExperimentalFileOpenOptions,
   ): boolean;
+  /**
+   * Show a terminal session in this surface's BB terminal panel: select its
+   * tab, adding one when needed, and reveal the panel. Create the session
+   * first with `useSdk().terminals.create`, whose scope chooses the thread,
+   * environment, or host directory it runs in. A thread surface accepts only
+   * that thread's terminals, the New thread screen only terminals in its
+   * current terminal scope, and a plugin page any terminal. Resolves false
+   * for unknown or exited terminals and surfaces without a terminal panel.
+   * Closing the tab closes the terminal. Experimental: see
+   * docs/api_to_audit.md.
+   */
+  experimental_openTerminal(options: { terminalId: string }): Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -3558,10 +3642,14 @@ export interface PluginSdkApp {
    * surfaces without further work. Reserve `useRpc` for work that needs your
    * server: secrets, host files, or your plugin's own storage.
    *
-   * Thread title, section, and parent updates are optimistic in bb's surfaces
-   * and synchronous calls are applied as one cache transaction. Other writes
-   * land when their realtime update does. `experimental_useSidebarThreadActions()`
-   * stays the optimistic path for pin, read state, rename, and archive.
+   * Thread title, section, parent, pin, and unpin writes are optimistic in
+   * bb's surfaces. Synchronous calls share one cache transaction; writes to
+   * the same thread execute in order, so unpin and move can be submitted
+   * together. Unarchive, environment-group archive, project/machine/environment
+   * renames, and project/section removal are also optimistic and roll back on
+   * failure. Created sections enter the cache when the server assigns their id.
+   * `experimental_useSidebarThreadActions()` owns navigation, read state,
+   * archive confirmation, and delete confirmation.
    *
    * The client is stable for the plugin's lifetime, so it is safe in effect
    * and callback dependency lists.
@@ -3581,6 +3669,19 @@ export interface PluginSdkApp {
    * docs/api_to_audit.md.
    */
   experimental_useCodeTheme(): PluginCodeThemeState;
+  /**
+   * Writes content to the system clipboard through bb's own clipboard writer,
+   * the one bb's copy actions use. A plain function, callable from
+   * components, content scripts, and command callbacks. bb Desktop writes
+   * through the native clipboard, so copies work without window focus or a
+   * secure origin; browsers use the Clipboard API, then the copy command.
+   * Resolves true once the clipboard holds the content and false when every
+   * write path failed; it never rejects. Callers own their success and
+   * failure feedback. Experimental: see docs/api_to_audit.md.
+   */
+  experimental_copyToClipboard(
+    content: ExperimentalClipboardContent,
+  ): Promise<boolean>;
   /**
    * The host-owned chat component (see {@link ThreadChatProps}). Together
    * with `Markdown`, the only components the SDK ships — everything else
@@ -3605,6 +3706,13 @@ export interface PluginSdkApp {
    * docs/api_to_audit.md for what to audit before the prefix drops.
    */
   experimental_NewThreadComposer: ComponentType<NewThreadComposerProps>;
+  /**
+   * BB's textarea with voice input (see
+   * {@link ExperimentalVoiceInputTextareaProps}): the same microphone
+   * preference, transcription service, and error handling as the prompt box.
+   * Experimental: see docs/api_to_audit.md.
+   */
+  experimental_VoiceInputTextarea: ComponentType<ExperimentalVoiceInputTextareaProps>;
   /**
    * BB's controlled provider/model/reasoning picker. Provider changes emit
    * only after the new provider's verified defaults and capabilities resolve,

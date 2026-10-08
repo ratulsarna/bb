@@ -9,6 +9,7 @@ import {
   usePluginCheckoutState,
 } from "@/components/plugin/usePluginBranchPickerState";
 import { PluginNewThreadComposer } from "@/components/plugin/PluginNewThreadComposer";
+import { VoiceInputTextarea } from "@/components/promptbox/VoiceInputTextarea";
 import { PluginProviderModelPicker } from "@/components/plugin/PluginProviderModelPicker";
 import { PluginPermissionModePicker } from "@/components/plugin/PluginPermissionModePicker";
 import { PluginSourceCode } from "@/components/plugin/PluginSourceCode";
@@ -62,6 +63,7 @@ import {
 import { SidebarNavigationIcon } from "@/components/sidebar/SidebarNavigationModel";
 import { useAppNavigationHost } from "./app-navigation-host";
 import { useCodeTheme } from "./plugin-code-theme";
+import { copyToClipboard } from "./clipboard";
 
 export const pluginSdkAppImplementation = {
   definePluginApp,
@@ -85,6 +87,7 @@ export const pluginSdkAppImplementation = {
   experimental_FileLink: ExperimentalFileLink,
   UrlLink: PluginUrlLink,
   experimental_NewThreadComposer: PluginNewThreadComposer,
+  experimental_VoiceInputTextarea: VoiceInputTextarea,
   experimental_ProviderModelPicker: PluginProviderModelPicker,
   experimental_PermissionModePicker: PluginPermissionModePicker,
   experimental_BranchPicker: PluginBranchPicker,
@@ -110,6 +113,7 @@ export const pluginSdkAppImplementation = {
   useSdk,
   experimental_useProviders: useProviders,
   experimental_useCodeTheme: useCodeTheme,
+  experimental_copyToClipboard: copyToClipboard,
 } satisfies PluginSdkApp;
 
 function PluginMarkdown({

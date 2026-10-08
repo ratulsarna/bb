@@ -122,6 +122,9 @@ export const UrlLink = runtimeComponent("UrlLink");
 export const experimental_NewThreadComposer = runtimeComponent(
   "experimental_NewThreadComposer",
 );
+export const experimental_VoiceInputTextarea = runtimeComponent(
+  "experimental_VoiceInputTextarea",
+);
 export const experimental_ProviderModelPicker = runtimeComponent(
   "experimental_ProviderModelPicker",
 );
@@ -217,4 +220,9 @@ export const experimental_useProviders = runtimeFunction(
 // (experimental — see docs/api_to_audit.md).
 export const experimental_useCodeTheme = runtimeFunction(
   "experimental_useCodeTheme",
+);
+// bb's clipboard writer, the one bb's own copy actions use (experimental —
+// see docs/api_to_audit.md).
+export const experimental_copyToClipboard = runtimeFunction(
+  "experimental_copyToClipboard",
 );

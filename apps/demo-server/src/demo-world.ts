@@ -59,6 +59,7 @@ import {
 
 const SYSTEM_CONFIG = systemConfigResponseSchema.parse({
   ...configFixture,
+  performanceDiagnosticsAvailable: false,
   generalSettings: defaultAppSettings,
   experiments: { ...defaultExperiments },
   appearance: defaultAppTheme,
@@ -193,6 +194,9 @@ function createUiPreferences(): UiPreferenceEntries {
     "sidebar.headerProvider": uiPreferenceEntry("sidebar.headerProvider"),
     "sidebar.threadListProvider": uiPreferenceEntry(
       "sidebar.threadListProvider",
+    ),
+    "infoPanel.collapsedSections": uiPreferenceEntry(
+      "infoPanel.collapsedSections",
     ),
   };
 }

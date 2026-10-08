@@ -19,6 +19,7 @@ import {
   type PluginCommandRegistration,
   type PluginMessageActionContext,
   type PluginMessageActionRegistration,
+  type ThreadChatMessageReference,
   type PluginMessageDirectiveProps,
   type PluginNavPanelProps,
   type PluginNavPanelRegistration,
@@ -223,6 +224,7 @@ const THREAD_EVENT_PAYLOAD_FIELDS = {
   "experimental_thread.events": ["thread", "sequence"],
   "experimental_terminal.input": ["terminal"],
   "experimental_host.deleted": ["host"],
+  "experimental_environment.removed": ["removal"],
   "thread.created": ["thread"],
   "thread.active": ["thread"],
   "thread.idle": ["thread", "lastAssistantText"],
@@ -478,6 +480,24 @@ const _assertAllMessageActionRegistrationFieldsListed: MissingMessageActionRegis
   ? true
   : never = true;
 void _assertAllMessageActionRegistrationFieldsListed;
+
+const MESSAGE_REFERENCE_FIELDS = [
+  "id",
+  "threadId",
+  "role",
+  "text",
+  "sourceSeqEnd",
+  "experimental_messageSeq",
+] as const satisfies readonly (keyof ThreadChatMessageReference)[];
+
+type MissingMessageReferenceField = Exclude<
+  keyof ThreadChatMessageReference,
+  (typeof MESSAGE_REFERENCE_FIELDS)[number]
+>;
+const _assertAllMessageReferenceFieldsListed: MissingMessageReferenceField extends never
+  ? true
+  : never = true;
+void _assertAllMessageReferenceFieldsListed;
 
 const COMMAND_PALETTE_ACTION_REGISTRATION_FIELDS = [
   "defaultShortcut",
@@ -751,7 +771,12 @@ describe("bb-plugin-authoring skill", () => {
         `messageAction registration field "${field}" is not documented in the skill`,
       ).toContain(field);
     }
-    expect(skill).toContain("sourceSeqEnd");
+    for (const field of MESSAGE_REFERENCE_FIELDS) {
+      expect(
+        skill,
+        `message reference field "${field}" is not documented in the skill`,
+      ).toContain(field);
+    }
   });
 
   it("documents every commandPaletteAction registration field", () => {

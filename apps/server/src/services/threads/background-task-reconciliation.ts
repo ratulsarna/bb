@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  getLatestThreadSequence,
   listOpenBackgroundTaskItemRowsForHost,
   listOpenBackgroundTaskItemRowsForThread,
   type DbNotifier,
@@ -75,6 +76,9 @@ export function settleDanglingBackgroundTasks(
 
   for (const threadId of settledThreadIds) {
     deps.hub.notifyThread(threadId, ["events-appended"], {
+      timelineSequence: getLatestThreadSequence(deps.db, {
+        threadId: threadId,
+      }),
       eventTypes: ["item/backgroundTask/completed"],
     });
   }
@@ -89,6 +93,9 @@ export function settleDanglingBackgroundTasksForStoppedThreadInTransaction(
   const settledThreadIds = appendDanglingBackgroundTaskCompletions(deps, rows);
   for (const threadId of settledThreadIds) {
     deps.hub.notifyThread(threadId, ["events-appended"], {
+      timelineSequence: getLatestThreadSequence(deps.db, {
+        threadId: threadId,
+      }),
       eventTypes: ["item/backgroundTask/completed"],
     });
   }

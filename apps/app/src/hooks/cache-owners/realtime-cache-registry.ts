@@ -26,6 +26,7 @@ import {
 } from "./query-cache";
 import { bumpDiffPatchFreshnessGeneration } from "./environment-diff-patch-cache-owner";
 import { invalidateSystemExecutionOptions } from "./system-cache-effects";
+import { markThreadTimelineUnseenEvents } from "./thread-timeline-unseen-events";
 import {
   getCachedThreadLists,
   iterateThreadListCacheEntries,
@@ -56,6 +57,8 @@ import {
   hostsQueryKey,
   serverMoveStatusQueryKey,
   systemAppUpdateQueryKey,
+  pluginInstallJobsQueryKey,
+  pluginUpdateJobsQueryKey,
   sidebarNavigationQueryKey,
   systemAiServicesQueryKey,
   systemConfigQueryKey,
@@ -546,6 +549,12 @@ export const REALTIME_SYSTEM_CHANGE_REGISTRY = {
       reconcilePluginFrontendBundles,
     ],
   },
+  "plugin-update-jobs-changed": {
+    dirty: [() => [pluginUpdateJobsQueryKey()]],
+  },
+  "plugin-install-jobs-changed": {
+    dirty: [dirtyPluginInstallJobQueries],
+  },
   "provider-registrations-changed": {
     dirty: [dirtySystemProviderQueries, dirtySystemExecutionOptionQueries],
   },
@@ -572,6 +581,7 @@ interface RealtimeDirtyContext {
 interface ThreadRealtimeDirtyContext extends RealtimeDirtyContext {
   backgroundActivityChanged: boolean | undefined;
   eventTypes: readonly ThreadEventType[] | undefined;
+  timelineSequence: number | undefined;
   flushOnce: (key: string) => boolean;
   hasPendingInteraction: boolean | undefined;
   projectId: string | undefined;
@@ -846,6 +856,7 @@ function dirtyThreadSearchQueriesForCompletedTurn({
 
 function dirtyThreadTimelineQueries({
   eventTypes,
+  timelineSequence,
   queryClient,
   threadId,
 }: ThreadRealtimeDirtyContext): void {
@@ -857,6 +868,9 @@ function dirtyThreadTimelineQueries({
   });
   const outlineMayHaveChanged =
     eventTypes === undefined || eventTypes.includes("turn/completed");
+  if (threadId !== undefined && timelineSequence !== undefined) {
+    markThreadTimelineUnseenEvents(queryClient, threadId, timelineSequence);
+  }
   if (
     threadId !== undefined &&
     !hasActiveQueries(queryClient, threadTimelineQueryKeyPrefix(threadId))
@@ -1168,6 +1182,10 @@ function dirtyServerMoveStatusQueries(): QueryKey[] {
 
 function dirtyAppUpdateStatusQueries(): QueryKey[] {
   return [systemAppUpdateQueryKey()];
+}
+
+function dirtyPluginInstallJobQueries(): QueryKey[] {
+  return [pluginInstallJobsQueryKey()];
 }
 
 function dirtyAllThreadTimelineQueries(): QueryKey[] {

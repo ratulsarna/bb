@@ -42,7 +42,7 @@ import {
   goneThreadEnvironmentDetails,
   throwThreadNotWritable,
 } from "../lib/lifecycle-api-errors.js";
-import { validatePromptAttachmentReferences } from "../projects/attachments.js";
+import { resolvePromptAttachmentReferences } from "../projects/attachments.js";
 import {
   dispatchEnvironmentAndHost,
   dispatchExecutionSources,
@@ -181,6 +181,15 @@ export function intendedThreadHostId(
 ): string | null {
   const intent = intendedThreadIntent(deps, threadId);
   return intent === null ? null : hostIdForEnvironmentIntent(deps, intent);
+}
+
+export function threadTargetHostId(
+  deps: Pick<LoggedPendingInteractionWorkSessionDeps, "db">,
+  thread: Pick<Thread, "id" | "environmentId">,
+): string | null {
+  return thread.environmentId !== null
+    ? (getEnvironment(deps.db, thread.environmentId)?.hostId ?? null)
+    : intendedThreadHostId(deps, thread.id);
 }
 
 /**
@@ -322,7 +331,8 @@ async function runDispatchAttemptWithAdmission(
   reattempted: boolean,
   reserve: (row: RunningThreadRow) => void,
 ): Promise<DispatchAttemptOutcome> {
-  const { payload, thread } = args;
+  const { thread } = args;
+  let { payload } = args;
   // A stopping thread is writable HERE and nowhere upstream: the checkpoint
   // below turns it into a core wait, which is a truthful "not yet" the row can
   // recover from, rather than the 409 that used to make a stop a dead end for
@@ -332,12 +342,15 @@ async function runDispatchAttemptWithAdmission(
   if (args.trigger === "user" && args.source.kind === "inline") {
     // Reject what can never deliver while the sender is still listening; a
     // drain has nobody to tell, and its rows were validated when they were queued.
-    await validatePromptAttachmentReferences({
+    const input = await resolvePromptAttachmentReferences({
       db: deps.db,
       dataDir: deps.config.dataDir,
       input: payload.input,
       projectId: thread.projectId,
+      hostId: threadTargetHostId(deps, thread),
     });
+    payload = { ...payload, input };
+    args = { ...args, payload };
   }
   const senderThreadId = resolveMessageSenderThreadId(deps, {
     ...(payload.senderThreadId !== undefined

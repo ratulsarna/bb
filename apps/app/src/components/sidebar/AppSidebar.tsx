@@ -1,11 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { flushSync } from "react-dom";
+import { useSetAtom } from "jotai";
 import { cn } from "@bb/shared-ui/lib/utils";
 import { THREAD_JUMP_APP_COMMAND_IDS } from "@bb/domain";
 import { useNavigate } from "react-router-dom";
 import { OverflowFade } from "@/components/ui/overflow-fade.js";
 import {
   Sidebar,
+  SidebarCollapsibleBody,
   SidebarContent,
   SidebarFooter,
   SidebarMenu,
@@ -46,9 +55,16 @@ import {
   SidebarNavigationRegion,
 } from "./SidebarNavigationRegion";
 import { SidebarNavigationModelProvider } from "./SidebarNavigationModel";
-import { SIDEBAR_FOOTER_MORE_ID } from "./sidebarFooterPreferences";
+import {
+  SIDEBAR_FOOTER_MORE_ID,
+  sidebarFooterSettingsInRailAtom,
+} from "./sidebarFooterPreferences";
 import { LazySidebarFooterCustomize } from "./LazySidebarFooterCustomize";
 import { SidebarHeaderSlot } from "./SidebarHeaderSlot";
+import {
+  NavRailNewThreadButton,
+  type NavRailCustomizeState,
+} from "./AppNavRail";
 
 const BUG_REPORT_NEW_ISSUE_URL = "https://github.com/get-bb/bb/issues/new";
 
@@ -57,6 +73,11 @@ interface AppSidebarProps {
   isResizing: boolean;
   settingsRoutePath: string;
   mobileHosted?: { hidden: boolean };
+  navRail?: {
+    hidden: boolean;
+    renderRail: (customize: NavRailCustomizeState) => ReactNode;
+    alternateBody: ReactNode;
+  };
 }
 
 export function AppSidebar({
@@ -64,6 +85,7 @@ export function AppSidebar({
   isResizing,
   settingsRoutePath,
   mobileHosted,
+  navRail,
 }: AppSidebarProps) {
   const threadListReplacement = useThreadListReplacement();
   const { threadId: activeThreadId } = useRouteState();
@@ -86,6 +108,12 @@ export function AppSidebar({
   const isAppCommandModifierHeld = useIsAppCommandModifierHeld();
   const settingsShortcut = useAppCommandShortcut("settings.open");
   const pluginSidebarFooter = usePluginSidebarFooterDisclosure();
+  const setFooterSettingsInRail = useSetAtom(sidebarFooterSettingsInRailAtom);
+  const hasNavRail = navRail !== undefined;
+  useLayoutEffect(() => {
+    setFooterSettingsInRail(hasNavRail);
+    return () => setFooterSettingsInRail(false);
+  }, [hasNavRail, setFooterSettingsInRail]);
 
   const handleNewChat = useCallback(() => {
     closeOnMobile();
@@ -157,7 +185,8 @@ export function AppSidebar({
     [activeThreadId, closeOnMobile, navigate],
   );
 
-  const isHiddenHostedBody = mobileHosted?.hidden === true;
+  const isHiddenHostedBody =
+    mobileHosted?.hidden === true || navRail?.hidden === true;
   const isCompactCustomizeModeActive =
     isCompactViewport && isNavigationCustomizing;
   useEffect(() => {
@@ -201,19 +230,35 @@ export function AppSidebar({
     <>
       <SidebarTopReserveRow
         testId="app-sidebar-top-reserve-row"
-        renderHeaderSlot={(startInsetClassName) => (
-          <SidebarHeaderSlot
-            hidden={isNavigationCustomizing}
-            startInsetClassName={startInsetClassName}
-          />
-        )}
+        besideNavRail={navRail !== undefined}
+        renderHeaderSlot={(startInsetClassName) =>
+          navRail ? (
+            <div
+              data-testid="nav-rail-header"
+              data-sidebar-header-slot=""
+              className={cn(
+                "flex h-full min-w-0 flex-1 items-center",
+                startInsetClassName,
+              )}
+            >
+              <NavRailNewThreadButton />
+            </div>
+          ) : (
+            <SidebarHeaderSlot
+              hidden={isNavigationCustomizing}
+              startInsetClassName={startInsetClassName}
+            />
+          )
+        }
       />
-      <SidebarNavigationRegion
-        isCustomizing={isNavigationCustomizing}
-        onCustomizingChange={setNavigationCustomizing}
-        focusReturnTargetRef={customizeFocusReturnRef}
-        onNavigate={closeOnMobile}
-      />
+      {navRail ? null : (
+        <SidebarNavigationRegion
+          isCustomizing={isNavigationCustomizing}
+          onCustomizingChange={setNavigationCustomizing}
+          focusReturnTargetRef={customizeFocusReturnRef}
+          onNavigate={closeOnMobile}
+        />
+      )}
       <SidebarContent
         className={cn(isCompactCustomizeModeActive && "hidden")}
         aria-hidden={isCompactCustomizeModeActive ? true : undefined}
@@ -257,18 +302,22 @@ export function AppSidebar({
             onDisclosureCommand={pluginSidebarFooter.handleCommand}
             onNavigate={closeOnMobile}
             builtInActions={[
-              {
-                id: "settings",
-                href: settingsRoutePath,
-                ariaLabel: settingsShortcut
-                  ? `Settings (${settingsShortcut.label})`
-                  : "Settings",
-                ariaKeyShortcuts: settingsShortcut?.ariaKeyshortcuts,
-                onActivate: () => {
-                  closeOnMobile();
-                  void navigate(settingsRoutePath);
-                },
-              },
+              ...(navRail
+                ? []
+                : [
+                    {
+                      id: "settings" as const,
+                      href: settingsRoutePath,
+                      ariaLabel: settingsShortcut
+                        ? `Settings (${settingsShortcut.label})`
+                        : "Settings",
+                      ariaKeyShortcuts: settingsShortcut?.ariaKeyshortcuts,
+                      onActivate: () => {
+                        closeOnMobile();
+                        void navigate(settingsRoutePath);
+                      },
+                    },
+                  ]),
               {
                 id: "mobile",
                 href: "/settings/mobile",
@@ -319,6 +368,25 @@ export function AppSidebar({
           >
             {body}
           </div>
+        ) : navRail ? (
+          <Sidebar ref={sidebarRef}>
+            <div className="flex min-h-0 flex-1">
+              {navRail.renderRail({
+                isOpen: isNavigationCustomizing,
+                onOpenChange: setNavigationCustomizing,
+              })}
+              <SidebarCollapsibleBody data-testid="nav-rail-sidebar-body">
+                <div
+                  data-testid="app-sidebar-body"
+                  hidden={navRail.hidden}
+                  className="flex min-h-0 min-w-0 flex-1 flex-col"
+                >
+                  {body}
+                </div>
+                {navRail.alternateBody}
+              </SidebarCollapsibleBody>
+            </div>
+          </Sidebar>
         ) : (
           <Sidebar ref={sidebarRef}>{body}</Sidebar>
         )}

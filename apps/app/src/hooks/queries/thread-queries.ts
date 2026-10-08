@@ -88,6 +88,7 @@ import {
 } from "./query-keys";
 import { ARCHIVED_THREADS_PAGE_SIZE } from "./archived-threads-page-size";
 import { ingestThreadDetailBootstrap } from "../cache-owners/thread-detail-cache-owner";
+import { clearThreadTimelineUnseenEvents } from "../cache-owners/thread-timeline-unseen-events";
 import {
   THREAD_OPEN_CACHE_GC_MS,
   touchThreadOpenCache,
@@ -973,9 +974,11 @@ async function fetchThreadTimeline({
       ? { afterSequence: String(previous.maxSeq) }
       : {}),
   });
-  return mergeThreadTimelineDelta(previous, response, () =>
+  const timeline = await mergeThreadTimelineDelta(previous, response, () =>
     sdk.threads.timeline({ threadId, signal, ...pageArgs }),
   );
+  clearThreadTimelineUnseenEvents(queryClient, threadId, timeline.maxSeq);
+  return timeline;
 }
 
 export function useThreadTimeline(
@@ -1102,11 +1105,4 @@ export function getLatestPendingInteraction(
       interaction.createdAt > latest.createdAt ? interaction : latest,
     firstInteraction,
   );
-}
-
-export function isPendingInteractionStateUnknown(
-  interactions: readonly PendingInteraction[] | undefined,
-  isFetching: boolean,
-): boolean {
-  return getLatestPendingInteraction(interactions) === null && isFetching;
 }

@@ -18,6 +18,7 @@ import {
   threadEventTypeSchema,
   type AppSettings,
   type CompletedTurnDisplay,
+  type Thread,
   type ThreadEventType,
 } from "@bb/domain";
 import {
@@ -38,6 +39,7 @@ import { toThreadQueuedMessage } from "../../services/threads/thread-queued-mess
 import {
   toThreadEventWithMeta,
   buildThreadConversationOutlineProjectionKey,
+  getThreadMessage,
   buildThreadTimelineWithProfile,
   buildTimelineTurnSummaryDetails,
   loadThreadConversationOutline,
@@ -211,6 +213,23 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
     ThreadConversationOutlineResponse["items"]
   >();
   const CONVERSATION_OUTLINE_CACHE_MAX_ENTRIES = 128;
+  const resolveConversationRowsOptions = (thread: Thread) => {
+    const providerDisplayName = resolveThreadProviderDisplayName(
+      deps,
+      thread.providerId,
+    );
+    const settings = getAppSettings(deps.db);
+    return {
+      completedTurnDisplay: resolveThreadCompletedTurnDisplay(
+        deps,
+        settings,
+        thread.providerId,
+      ),
+      includeClearedContextHistory: settings.keepHistoryAfterContextClear,
+      maxSeq: getLatestThreadSequence(deps.db, { threadId: thread.id }),
+      ...(providerDisplayName === undefined ? {} : { providerDisplayName }),
+    };
+  };
 
   get(routes.pluginMetadata.get, (context, query) => {
     const thread = requirePublicThread(
@@ -281,6 +300,7 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
     );
     const settings = getAppSettings(deps.db);
     const includeDiagnosticOperations = settings.showDiagnosticEvents;
+    const includeClearedContextHistory = settings.keepHistoryAfterContextClear;
     const completedTurnDisplay = resolveThreadCompletedTurnDisplay(
       deps,
       settings,
@@ -298,6 +318,7 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
       page,
       includeNestedRows,
       summaryOnly,
+      includeClearedContextHistory,
       includeDiagnosticOperations,
       completedTurnDisplay,
     };
@@ -311,6 +332,7 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
           {
             completedTurnDisplay,
             eventBudget,
+            includeClearedContextHistory,
             includeDiagnosticOperations,
             includeNestedRows,
             maxInlineOutputChars: DEFAULT_MAX_INLINE_OUTPUT_CHARS,
@@ -363,24 +385,12 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
   get(routes.conversationOutline, (context) => {
     const thread = requirePublicThread(deps.db, context.req.param("id"));
 
-    const maxSeq = getLatestThreadSequence(deps.db, { threadId: thread.id });
     const outlineSequence = getLatestStoredConversationOutlineSequence(
       deps.db,
       { threadId: thread.id },
     );
-    const providerDisplayName = resolveThreadProviderDisplayName(
-      deps,
-      thread.providerId,
-    );
-    const outlineOptions = {
-      completedTurnDisplay: resolveThreadCompletedTurnDisplay(
-        deps,
-        getAppSettings(deps.db),
-        thread.providerId,
-      ),
-      maxSeq,
-      ...(providerDisplayName === undefined ? {} : { providerDisplayName }),
-    };
+    const outlineOptions = resolveConversationRowsOptions(thread);
+    const { maxSeq } = outlineOptions;
     const cacheKey = JSON.stringify([
       thread.id,
       getDatabaseDataVersion(deps.db),
@@ -411,6 +421,26 @@ export function registerThreadDataRoutes(app: Hono, deps: AppDeps): void {
       conversationOutlineCache.delete(oldest);
     }
     return context.json(response);
+  });
+
+  get(routes.message, (context, query) => {
+    const thread = requirePublicThread(deps.db, context.req.param("id"));
+    const seq = context.req.param("seq");
+    if (!/^\d+$/.test(seq)) {
+      throw new ApiError(
+        400,
+        "invalid_request",
+        "Message seq must be a non-negative integer",
+      );
+    }
+    return context.json(
+      getThreadMessage(deps.db, thread, {
+        ...resolveConversationRowsOptions(thread),
+        seq: parseInteger(seq, "seq"),
+        before: parseOptionalInteger(query.before, "before") ?? 0,
+        after: parseOptionalInteger(query.after, "after") ?? 0,
+      }),
+    );
   });
 
   get(routes.timelineTurnSummaryDetails, (context, query) => {

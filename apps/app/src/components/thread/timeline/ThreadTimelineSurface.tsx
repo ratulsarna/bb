@@ -1,9 +1,6 @@
+import type { LoadOlderTimelineRows } from "./load-older-timeline-rows.js";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import type {
-  ActiveThinking,
-  ThreadOriginKind,
-  ThreadRuntimeDisplayStatus,
-} from "@bb/domain";
+import type { ActiveThinking, ThreadRuntimeDisplayStatus } from "@bb/domain";
 import type { TimelineRow } from "@bb/server-contract";
 import type { PromptMentionLinkResolver } from "@/components/promptbox/editor/prompt-mention-link";
 import { Button } from "@bb/shared-ui/button";
@@ -23,7 +20,6 @@ import type {
   ThreadTimelineEditMessageHandler,
   ThreadTimelineInlineMessageEditor,
   ThreadTimelineAddToChatHandler,
-  ThreadTimelineSendToMainMessageHandler,
   ThreadTimelineConsumerMessageAction,
   ThreadTimelineLinkHandler,
   ThreadTimelineLocalFileLinkHandler,
@@ -39,9 +35,9 @@ export interface ThreadTimelineSurfaceProps {
   activeThinking: ActiveThinking | null;
   canSpawnChild?: boolean;
   contextBoundarySeq: number | null;
-  threadOriginKind?: ThreadOriginKind | null;
   hasOlderTimelineRows?: boolean;
   hostConnectionNotice?: HostConnectionNotice | null;
+  isCatchingUpTimeline?: boolean;
   isLoadingOlderTimelineRows?: boolean;
   isThreadTimelinePending: boolean;
   timelineError: boolean;
@@ -51,11 +47,10 @@ export interface ThreadTimelineSurfaceProps {
   onEditMessage?: ThreadTimelineEditMessageHandler;
   inlineMessageEditor?: ThreadTimelineInlineMessageEditor;
   onMessageAddToChat?: ThreadTimelineAddToChatHandler;
-  onSendToMainMessage?: ThreadTimelineSendToMainMessageHandler;
   onSelectionAddToChat?: ThreadTimelineAddToChatHandler;
   consumerMessageActions?: readonly ThreadTimelineConsumerMessageAction[];
   includePluginMessageActions?: boolean;
-  onLoadOlderRows?: () => Promise<void> | void;
+  onLoadOlderRows?: LoadOlderTimelineRows;
   onOpenLink?: ThreadTimelineLinkHandler;
   onOpenLocalFileLink?: ThreadTimelineLocalFileLinkHandler;
   onOpenPluginPanel?: ThreadTimelineOpenPluginPanelHandler;
@@ -141,9 +136,9 @@ export function ThreadTimelineSurface({
   activeThinking,
   canSpawnChild,
   contextBoundarySeq,
-  threadOriginKind = null,
   hasOlderTimelineRows = false,
   hostConnectionNotice,
+  isCatchingUpTimeline = false,
   isLoadingOlderTimelineRows = false,
   isThreadTimelinePending,
   timelineError,
@@ -153,7 +148,6 @@ export function ThreadTimelineSurface({
   onEditMessage,
   inlineMessageEditor,
   onMessageAddToChat,
-  onSendToMainMessage,
   onSelectionAddToChat,
   consumerMessageActions,
   includePluginMessageActions,
@@ -177,6 +171,11 @@ export function ThreadTimelineSurface({
   unreadDividerPlacement,
   workspaceRootPath,
 }: ThreadTimelineSurfaceProps) {
+  const showCatchUpIndicator =
+    isCatchingUpTimeline &&
+    !isThreadTimelinePending &&
+    !timelineError &&
+    !showOngoingIndicator;
   const showActiveThinking =
     activeThinking !== null && ongoingIndicatorLabel === undefined;
   const activeThinkingText = activeThinking?.text.trim() ?? "";
@@ -222,12 +221,10 @@ export function ThreadTimelineSurface({
         ) : timelineRowsWithPendingStop.length > 0 ? (
           <ThreadTimelineRows
             canSpawnChild={canSpawnChild}
-            threadOriginKind={threadOriginKind}
             onForkMessage={onForkMessage}
             onEditMessage={onEditMessage}
             inlineMessageEditor={inlineMessageEditor}
             onMessageAddToChat={onMessageAddToChat}
-            onSendToMainMessage={onSendToMainMessage}
             onSelectionAddToChat={onSelectionAddToChat}
             consumerMessageActions={consumerMessageActions}
             includePluginMessageActions={includePluginMessageActions}
@@ -256,6 +253,9 @@ export function ThreadTimelineSurface({
             className="mt-4 text-destructive"
           />
         ) : null}
+        <HeightTransition visible={showCatchUpIndicator}>
+          {showCatchUpIndicator ? <DelayedCatchUpIndicator /> : null}
+        </HeightTransition>
         <HeightTransition visible={showOngoingIndicator}>
           <TimelineWorkingIndicator
             key={ongoingIndicatorKey}
@@ -277,7 +277,7 @@ function LoadOlderMessages({
 }: {
   hasOlderTimelineRows: boolean;
   isLoadingOlderTimelineRows: boolean;
-  onLoadOlderRows: () => Promise<void> | void;
+  onLoadOlderRows: LoadOlderTimelineRows;
 }) {
   const { sentinelRef, isAutoLoadEnabled, loadOlderRows } =
     useAutoLoadOlderRows({
@@ -315,6 +315,33 @@ function LoadOlderMessages({
 }
 
 const LOADING_INDICATOR_REVEAL_DELAY_MS = 200;
+const CATCH_UP_INDICATOR_LABEL = "Loading latest messages…";
+
+const CATCH_UP_INDICATOR_REVEAL_DELAY_MS = 1_000;
+
+function DelayedCatchUpIndicator() {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const id = window.setTimeout(
+      () => setVisible(true),
+      CATCH_UP_INDICATOR_REVEAL_DELAY_MS,
+    );
+    return () => window.clearTimeout(id);
+  }, []);
+
+  if (!visible) return null;
+
+  return (
+    <TimelineStatusIndicator
+      label={
+        <span role="status" className="animate-shine">
+          {CATCH_UP_INDICATOR_LABEL}
+        </span>
+      }
+      className="mt-4 flex min-h-7 items-center"
+    />
+  );
+}
 
 function DelayedThreadLoadingIndicator() {
   const [visible, setVisible] = useState(false);

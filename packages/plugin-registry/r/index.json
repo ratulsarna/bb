@@ -70,10 +70,6 @@
       "type": "registry:ui"
     },
     {
-      "name": "coarse-pointer-visibility",
-      "type": "registry:ui"
-    },
-    {
       "name": "collapsible",
       "type": "registry:ui"
     },
@@ -111,6 +107,10 @@
     },
     {
       "name": "hover-card",
+      "type": "registry:ui"
+    },
+    {
+      "name": "hover-reveal",
       "type": "registry:ui"
     },
     {
@@ -174,7 +174,15 @@
       "type": "registry:ui"
     },
     {
+      "name": "prompt-stack-disclosure",
+      "type": "registry:ui"
+    },
+    {
       "name": "question-form",
+      "type": "registry:ui"
+    },
+    {
+      "name": "question-form-draft",
       "type": "registry:ui"
     },
     {
@@ -308,6 +316,10 @@
     {
       "name": "utils",
       "type": "registry:lib"
+    },
+    {
+      "name": "voice-input-textarea",
+      "type": "registry:ui"
     },
     {
       "name": "workflow-progress",

@@ -39,6 +39,7 @@
     "bb-plugin-provider-retry": "workspace:*",
     "bb-plugin-bb--provider-usage": "workspace:*",
     "bb-plugin-push-notifications": "workspace:*",
+    "bb-plugin-bb--prompt-library": "workspace:*",
     "bb-plugin-scheduled-send": "workspace:*",
     "bb-plugin-secrets": "workspace:*",
     "bb-plugin-side-chat": "workspace:*",
@@ -46,6 +47,7 @@
     "bb-plugin-tasks": "workspace:*",
     "bb-plugin-theme-preview": "workspace:*",
     "bb-plugin-thread-list": "workspace:*",
-    "bb-plugin-workflows": "workspace:*"
+    "bb-plugin-workflows": "workspace:*",
+    "bb-plugin-bb--storage-retention": "workspace:*"
   }
 }

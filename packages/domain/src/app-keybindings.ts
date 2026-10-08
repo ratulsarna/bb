@@ -50,6 +50,8 @@ export const APP_COMMAND_IDS = [
   "thread.archive",
   "thread.previous",
   "thread.next",
+  "history.back",
+  "history.forward",
   ...THREAD_JUMP_APP_COMMAND_IDS,
   ...PANE_DIRECTION_APP_COMMAND_IDS,
   "pane.focus.previous",
@@ -92,6 +94,7 @@ export const APP_COMMAND_IDS = [
   "notifications.open",
   "plugins.enterSafeMode",
   "plugins.exitSafeMode",
+  "plugins.pruneCache",
   ...QUESTION_SELECT_APP_COMMAND_IDS,
 ] as const;
 

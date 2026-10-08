@@ -1,4 +1,5 @@
 import { THREAD_RUNTIME_STOPPED_OPERATION } from "@bb/domain";
+import { markThreadPruningWork } from "./thread-pruning-work.js";
 import { isBeforeLatestThreadEvent } from "./event-pruning-guards.js";
 import { acquireProjectAttachmentOwnership } from "./project-attachments.js";
 import {
@@ -336,6 +337,7 @@ export function deleteThreadEventSuffixInTransaction(
     .run();
   if (result.changes > 0) {
     bumpThreadEventRewriteGeneration(args.threadId);
+    markThreadPruningWork(db, [args.threadId]);
   }
   return { deletedEventCount: result.changes };
 }
@@ -484,6 +486,7 @@ export function insertEvents(
           }
         }
       }
+      markThreadPruningWork(tx, eventTypesByThreadId.keys());
       return { insertedCount, insertedInputIndexes };
     },
     { behavior: "immediate" },
@@ -492,6 +495,7 @@ export function insertEvents(
   for (const [threadId, eventTypes] of eventTypesByThreadId) {
     notifier.notifyThread(threadId, ["events-appended"], {
       eventTypes: Array.from(eventTypes),
+      timelineSequence: getLatestThreadSequence(db, { threadId }),
     });
   }
 
@@ -852,6 +856,10 @@ export function appendDaemonEventsInTransaction(
     nextSequencesByThreadId.set(input.threadId, sequence + 1);
   }
 
+  markThreadPruningWork(
+    db,
+    acceptedEvents.map((event) => event.threadId),
+  );
   return {
     acceptedEvents,
     insertedInputIndexes,
@@ -925,6 +933,7 @@ export function copyStoredThreadEventsInTransaction(
     }
     sequence += 1;
   }
+  markThreadPruningWork(db, [args.targetThreadId]);
   return args.rows.length;
 }
 
@@ -1006,6 +1015,7 @@ export function appendStoredThreadEventsInTransaction(
     nextSequencesByThreadId.set(args.threadId, sequence + 1);
   }
 
+  markThreadPruningWork(db, threadIds);
   return sequences;
 }
 
@@ -1025,6 +1035,7 @@ export function appendStoredThreadEvent(
   );
   notifier.notifyThread(args.threadId, ["events-appended"], {
     eventTypes: [args.type],
+    timelineSequence: sequence,
   });
   return sequence;
 }
@@ -1446,13 +1457,15 @@ export function listLatestThreadStateEventRowsByThreadIds(
         candidate.type <> 'thread/extensionState/updated'
         OR json_extract(candidate.data, '$.kind') = ${args.kind}
       )`;
-    const threadPredicate =
+    const requestedThreads =
       threadIds === undefined
-        ? sql`1 = 1`
-        : sql`latest_state.thread_id IN (${sql.join(
-            threadIds.map((threadId) => sql`${threadId}`),
+        ? sql`SELECT DISTINCT state.thread_id AS column1
+          FROM ${events} AS state INDEXED BY events_thread_state_thread_sequence_idx
+          WHERE state.type ${stateTypesPredicate}`
+        : sql`VALUES ${sql.join(
+            threadIds.map((threadId) => sql`(${threadId})`),
             sql`, `,
-          )})`;
+          )}`;
     return db
       .select(storedEventRowFields)
       .from(events)
@@ -1477,17 +1490,16 @@ export function listLatestThreadStateEventRowsByThreadIds(
             ? undefined
             : sql`coalesce(json_extract(${events.data}, '$.payload.status'), json_extract(${events.data}, '$.status')) = ${args.status}`,
           sql`${events}.rowid IN (
-        SELECT latest_state.rowid
-        FROM ${events} AS latest_state INDEXED BY events_thread_state_thread_sequence_idx
-        WHERE ${threadPredicate}
-          AND latest_state.type ${stateTypesPredicate}
-          AND latest_state.sequence = (
-            SELECT MAX(candidate.sequence)
-            FROM ${events} AS candidate INDEXED BY events_thread_state_thread_sequence_idx
-            WHERE candidate.thread_id = latest_state.thread_id
-              AND candidate.type ${stateTypesPredicate}
-              AND ${kindPredicate}
-          )
+        SELECT (
+          SELECT candidate.rowid
+          FROM ${events} AS candidate INDEXED BY events_thread_state_thread_sequence_idx
+          WHERE candidate.thread_id = requested.column1
+            AND candidate.type ${stateTypesPredicate}
+            AND ${kindPredicate}
+          ORDER BY candidate.sequence DESC
+          LIMIT 1
+        )
+        FROM (${requestedThreads}) AS requested
       )`,
         ),
       )
@@ -2730,22 +2742,129 @@ export function listStoredConversationOutlineEventRows(
   db: DbConnection,
   args: ListStoredConversationOutlineEventRowsArgs,
 ): StoredEventRow[] {
+  return selectStoredConversationOutlineEventRows(db, args, false);
+}
+
+export function listStoredRootConversationOutlineEventRows(
+  db: DbConnection,
+  args: ListStoredConversationOutlineEventRowsArgs,
+): StoredEventRow[] {
+  return selectStoredConversationOutlineEventRows(db, args, true);
+}
+
+export function getStoredConversationOutlineProjectionState(
+  db: DbConnection,
+  args: ListStoredConversationOutlineEventRowsArgs & {
+    classificationSequenceStart: number;
+    summaryCompactionDeltaThreshold: number;
+  },
+) {
+  const crossTurnState = db
+    .select({ sequence: events.sequence })
+    .from(events)
+    .where(
+      and(
+        eq(events.threadId, args.threadId),
+        gte(events.sequence, args.classificationSequenceStart),
+        inArray(events.type, [
+          "item/started",
+          "item/completed",
+          "item/backgroundTask/progress",
+          "item/backgroundTask/completed",
+          "item/delegation/progress",
+          "item/delegation/completed",
+        ]),
+        inArray(events.itemKind, ["backgroundTask", "delegation"]),
+      ),
+    )
+    .limit(1)
+    .get();
+  const acceptedNestedRoot = db
+    .select({ found: sql<number>`1` })
+    .from(sql`${events} INDEXED BY events_thread_type_sequence_idx`)
+    .where(
+      and(
+        eq(events.threadId, args.threadId),
+        gte(events.sequence, args.classificationSequenceStart),
+        inArray(events.type, ["turn/input/accepted", "turn/started"]),
+        sql`EXISTS (
+          SELECT 1 FROM events AS nested_start
+            INDEXED BY events_thread_turn_type_item_sequence_idx
+          WHERE nested_start.thread_id = ${events.threadId}
+            AND nested_start.turn_id = ${events.turnId}
+            AND nested_start.type = 'turn/started'
+            AND nested_start.parent_tool_call_id IS NOT NULL
+        ) AND EXISTS (
+          SELECT 1 FROM events AS accepted_root
+          WHERE accepted_root.thread_id = ${events.threadId}
+            AND accepted_root.turn_id = ${events.turnId}
+            AND accepted_root.type = 'turn/input/accepted'
+            AND EXISTS (
+              SELECT 1 FROM events AS root_request
+              WHERE root_request.thread_id = accepted_root.thread_id
+                AND root_request.type = 'client/turn/requested'
+                AND json_extract(root_request.data, '$.requestId') = json_extract(accepted_root.data, '$.clientRequestId')
+                AND json_extract(root_request.data, '$.target.kind') IN ('new-turn', 'thread-start')
+            )
+        )`,
+      ),
+    )
+    .limit(1)
+    .get();
+  const compactionDelta = db
+    .select({ sequence: events.sequence })
+    .from(events)
+    .where(
+      and(
+        eq(events.threadId, args.threadId),
+        gte(events.sequence, args.sequenceStart),
+        eq(events.type, "item/agentMessage/delta"),
+      ),
+    )
+    .offset(args.summaryCompactionDeltaThreshold - 1)
+    .limit(1)
+    .get();
+  return {
+    includeNestedEvents:
+      crossTurnState !== undefined || acceptedNestedRoot !== undefined,
+    summaryCompactionEnabled: compactionDelta !== undefined,
+  };
+}
+
+function selectStoredConversationOutlineEventRows(
+  db: DbConnection,
+  args: ListStoredConversationOutlineEventRowsArgs,
+  rootOnly: boolean,
+): StoredEventRow[] {
+  const rootWhere = rootOnly
+    ? and(
+        isNull(events.parentToolCallId),
+        sql`NOT EXISTS (
+          SELECT 1 FROM events AS nested_turn_started
+            INDEXED BY events_thread_turn_type_item_sequence_idx
+          WHERE nested_turn_started.thread_id = ${events.threadId}
+            AND nested_turn_started.turn_id = ${events.turnId}
+            AND nested_turn_started.type = 'turn/started'
+            AND nested_turn_started.parent_tool_call_id IS NOT NULL
+        )`,
+      )
+    : undefined;
   const lifecycleRows = db
     .select(storedEventRowFields)
     .from(events)
     .where(
-      storedConversationOutlineLifecycleWhere(
-        args.threadId,
-        args.sequenceStart,
+      and(
+        rootWhere,
+        storedConversationOutlineLifecycleWhere(args.threadId, args.sequenceStart),
       ),
     );
   const completedConversationRows = db
     .select(storedEventRowFields)
     .from(events)
     .where(
-      storedConversationOutlineCompletedWhere(
-        args.threadId,
-        args.sequenceStart,
+      and(
+        rootWhere,
+        storedConversationOutlineCompletedWhere(args.threadId, args.sequenceStart),
       ),
     );
   const structuralRows = db
@@ -2753,6 +2872,7 @@ export function listStoredConversationOutlineEventRows(
     .from(events)
     .where(
       and(
+        rootWhere,
         storedConversationOutlineStructuralWhere(
           args.threadId,
           args.sequenceStart,
@@ -3387,7 +3507,7 @@ const isNotDiagnosticEvent = sql`(
 )`;
 
 export function getLatestThreadSequence(
-  db: DbConnection,
+  db: DbQueryConnection,
   args: GetLatestThreadSequenceArgs,
 ): number {
   return getHighWaterMarks(db, [args.threadId])[args.threadId] ?? 0;

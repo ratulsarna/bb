@@ -9,14 +9,10 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { ComponentProps, CSSProperties, ReactNode } from "react";
 import { useComposedRefs } from "@radix-ui/react-compose-refs";
 import { TimelineImageGallery } from "./TimelineImageGallery";
-import type {
-  PromptInput,
-  ThreadOriginKind,
-  ThreadRuntimeDisplayStatus,
-} from "@bb/domain";
+import type { PromptInput, ThreadRuntimeDisplayStatus } from "@bb/domain";
 import type {
   TimelineParentChange,
   TimelineRow,
@@ -31,10 +27,12 @@ import {
   buildTimelineViewRows,
   createTimelineViewRowsCache,
   findActiveLatestBundleId,
+  parseSentThreadMessage,
   workRowGlyph,
   workRowPluginGlyph,
   workRowPresentation,
   type BuildTimelineRowTitleOptions,
+  type ThreadTellCommand,
   type BuildTimelineViewRowsOptions,
   type ThreadTimelineViewRow,
   type TimelineActivityIntentTitle,
@@ -48,13 +46,15 @@ import {
   isNonExpandableSummary,
   isRowExpandable,
 } from "@bb/client-core";
-import { isRunningThreadRuntimeDisplayStatus } from "@bb/client-core";
+import {
+  getMessageLinkPath,
+  isRunningThreadRuntimeDisplayStatus,
+} from "@bb/client-core";
 import type {
   ThreadTimelineAddToChatHandler,
   ThreadTimelineEditMessageHandler,
   ThreadTimelineInlineMessageEditor,
   ThreadTimelineForkMessageHandler,
-  ThreadTimelineSendToMainMessageHandler,
   ThreadTimelineLinkHandler,
   ThreadTimelineLocalFileLinkHandler,
   ThreadTimelineOpenPluginPanelHandler,
@@ -117,6 +117,8 @@ import {
   useArmTopLevelTimelineRowContainment,
 } from "./timeline-row-containment.js";
 import { NESTED_TIMELINE_GROUP_LINE_CLASS_NAME } from "./timeline-nested-group-line.js";
+import { GeneratedConversationMessage } from "./GeneratedConversationMessage.js";
+import { copyToClipboardWithToast } from "@/lib/clipboard";
 import { useThreadTimelineTurnSummaryDetails } from "@/hooks/queries/thread-queries";
 import { type ThreadTimelineTurnSummaryDetailsQueryIdentity } from "@/hooks/queries/query-keys";
 import {
@@ -149,12 +151,10 @@ import {
 export interface ThreadTimelineRowsProps {
   initialExpanded?: ReadonlySet<string>;
   canSpawnChild?: boolean;
-  threadOriginKind?: ThreadOriginKind | null;
   onForkMessage?: ThreadTimelineForkMessageHandler;
   onEditMessage?: ThreadTimelineEditMessageHandler;
   inlineMessageEditor?: ThreadTimelineInlineMessageEditor;
   onMessageAddToChat?: ThreadTimelineAddToChatHandler;
-  onSendToMainMessage?: ThreadTimelineSendToMainMessageHandler;
   onSelectionAddToChat?: ThreadTimelineAddToChatHandler;
   consumerMessageActions?: readonly ThreadTimelineConsumerMessageAction[];
   includePluginMessageActions?: boolean;
@@ -185,7 +185,6 @@ interface TimelineRendererStaticContextValue {
   onEditMessage: ThreadTimelineEditMessageHandler | undefined;
   inlineMessageEditor: ThreadTimelineInlineMessageEditor | undefined;
   onMessageAddToChat: ThreadTimelineAddToChatHandler | undefined;
-  onSendToMainMessage: ThreadTimelineSendToMainMessageHandler | undefined;
   onSelectionAddToChat: ThreadTimelineAddToChatHandler | undefined;
   pluginMessageActions: readonly PluginMessageActionSlot[];
   consumerMessageActions: readonly ThreadTimelineConsumerMessageAction[];
@@ -196,7 +195,6 @@ interface TimelineRendererStaticContextValue {
         message: ThreadChatMessageReference,
       ) => void)
     | undefined;
-  threadOriginKind: ThreadOriginKind | null;
   onOpenLink: ThreadTimelineLinkHandler | undefined;
   onOpenLocalFileLink: ThreadTimelineLocalFileLinkHandler | undefined;
   onOpenPluginPanel: ThreadTimelineOpenPluginPanelHandler | undefined;
@@ -523,7 +521,11 @@ function useTimelineSearchExpansionRowIds(
     ) {
       return inheritedRowIds;
     }
-    const localRowIds = collectSearchedMessageAncestorRowIds(rows, target.seq);
+    const localRowIds = collectSearchedMessageAncestorRowIds(
+      rows,
+      target.seq,
+      target.match,
+    );
     if (localRowIds.size === 0) {
       return inheritedRowIds;
     }
@@ -622,15 +624,6 @@ function timelineRowsListGapClassName(
     case "bundle":
       return "gap-0";
   }
-}
-
-function isForkSeedAnchorRow(row: TimelineConversationViewRow): boolean {
-  return (
-    row.role === "user" &&
-    row.initiator === "agent" &&
-    row.senderThreadId !== null &&
-    row.turnId === null
-  );
 }
 
 function findLastActionableAssistantMessageId(
@@ -864,12 +857,10 @@ const ConversationRowContent = memo(function ConversationRowContent({
     onEditMessage,
     onForkMessage,
     onMessageAddToChat,
-    onSendToMainMessage,
     onSelectionAddToChat,
     pluginMessageActions,
     consumerMessageActions,
     reportProseSelection,
-    threadOriginKind,
     onOpenLink,
     onOpenLocalFileLink,
     onOpenPluginPanel,
@@ -894,6 +885,7 @@ const ConversationRowContent = memo(function ConversationRowContent({
     role: row.role,
     text: row.text,
     sourceSeqEnd: row.sourceSeqEnd,
+    experimental_messageSeq: row.messageSeq,
   };
   const rowSlotActions = buildRowPluginMessageActions({
     slots: pluginMessageActions,
@@ -913,12 +905,32 @@ const ConversationRowContent = memo(function ConversationRowContent({
     rowConsumerActions.length === 0
       ? rowSlotActions
       : [...(rowSlotActions ?? []), ...rowConsumerActions];
+  const isSettledMessage =
+    row.role === "user" ? row.turnRequest.status !== "pending" : !streaming;
+  const onCopyLink =
+    projectId === undefined || !isSettledMessage
+      ? undefined
+      : () => {
+          void copyToClipboardWithToast(
+            new URL(
+              getMessageLinkPath({
+                projectId,
+                threadId: row.threadId,
+                seq: row.messageSeq,
+              }),
+              window.location.origin,
+            ).toString(),
+            {
+              successMessage: "Message link copied",
+              errorMessage: "Failed to copy message link",
+            },
+          );
+        };
   if (row.role === "user") {
     const senderThreadMetadata =
       row.senderThreadId === null
         ? null
         : (senderThreadMetadataById.get(row.senderThreadId) ?? null);
-    const originKind = isForkSeedAnchorRow(row) ? threadOriginKind : null;
     const canEditMessage =
       onEditMessage !== undefined &&
       row.initiator === "user" &&
@@ -952,11 +964,11 @@ const ConversationRowContent = memo(function ConversationRowContent({
     return (
       <ConversationMessageContent
         attachments={row.attachments}
-        originKind={originKind}
         initiator={row.initiator}
         mentions={row.mentions}
         mobileActionDisplay={mobileActionDisplay}
         onAddToChat={onSelectionAddToChat}
+        onCopyLink={onCopyLink}
         onEdit={onEdit}
         onOpenLink={onOpenLink}
         onOpenLocalFileLink={onOpenLocalFileLink}
@@ -986,10 +998,6 @@ const ConversationRowContent = memo(function ConversationRowContent({
     onForkMessage === undefined
       ? undefined
       : () => onForkMessage({ sourceSeqEnd: row.sourceSeqEnd });
-  const onSendToMain =
-    onSendToMainMessage === undefined
-      ? undefined
-      : () => onSendToMainMessage({ messageText: row.text });
   const onSelectProse =
     reportProseSelection === undefined
       ? undefined
@@ -1006,8 +1014,8 @@ const ConversationRowContent = memo(function ConversationRowContent({
       attachments={row.attachments}
       id={row.id}
       onAddToChat={onMessageAddToChat}
+      onCopyLink={onCopyLink}
       onFork={onFork}
-      onSendToMain={onSendToMain}
       forkDisabled={!canSpawnChild}
       onSelectProse={onSelectProse}
       onOpenLink={onOpenLink}
@@ -1432,6 +1440,55 @@ function useLeadingIconUrlForRow(
   );
 }
 
+type GeneratedMessageProps = ComponentProps<
+  typeof GeneratedConversationMessage
+>;
+const NO_ATTACHMENTS: GeneratedMessageProps["attachmentItems"] = {
+  filePaths: [],
+  imageItems: [],
+};
+const NO_MENTIONS: GeneratedMessageProps["mentions"] = [];
+const ACCEPTED_MESSAGE: GeneratedMessageProps["turnRequest"] = {
+  isGrouped: false,
+  kind: "message",
+  status: "accepted",
+};
+
+function SentThreadMessageRow({
+  message,
+  sentAt,
+}: {
+  message: ThreadTellCommand;
+  sentAt: number;
+}) {
+  const context = useTimelineRendererStaticContext();
+  const recipient = useSenderThreadMetadataContext().get(message.threadId);
+  return (
+    <GeneratedConversationMessage
+      attachmentItems={NO_ATTACHMENTS}
+      automationLink={null}
+      mentions={NO_MENTIONS}
+      onOpenLink={context.onOpenLink}
+      onOpenLocalFileLink={context.onOpenLocalFileLink}
+      onTitleAction={context.onTitleAction}
+      projectId={context.projectId}
+      resolveMentionLink={context.resolveMentionLink}
+      sourceIsPluginSideChat={false}
+      sourceKind="agent-recipient"
+      sourceName={recipient?.title ?? "Agent"}
+      sourceProjectId={recipient?.projectId ?? null}
+      sourceThreadId={message.threadId}
+      systemMessageKind="unlabeled"
+      systemMessageSubject={null}
+      text={message.message}
+      threadId={context.threadId}
+      timestamp={sentAt}
+      turnRequest={ACCEPTED_MESSAGE}
+      workspaceRootPath={context.workspaceRootPath}
+    />
+  );
+}
+
 function TimelineRowView({
   activeLatestBundleId,
   compactActivityIntents,
@@ -1458,6 +1515,19 @@ function TimelineRowView({
       <ConversationRow
         row={row}
         showAssistantMessageActions={showAssistantMessageActions}
+      />
+    );
+  }
+
+  const sentThreadMessage =
+    row.kind === "work" && row.workKind === "command"
+      ? parseSentThreadMessage(row)
+      : null;
+  if (sentThreadMessage !== null) {
+    return (
+      <SentThreadMessageRow
+        message={sentThreadMessage}
+        sentAt={row.startedAt}
       />
     );
   }
@@ -1764,10 +1834,11 @@ function TimelineRowsList({
   const measurements = inheritedMeasurements ?? standaloneMeasurements;
   const searchExpandedRowIds = useTimelineSearchExpansionRowIds(rows);
   const stableSearchExpandedRowIds = useStableReadonlySet(searchExpandedRowIds);
-  useScrollToSearchedMessage(rows, threadId, {
+  const isInitialRevealPending = useScrollToSearchedMessage(rows, threadId, {
     hasOlderRows: hasOlderTimelineRows,
     isLoadingOlderRows: isLoadingOlderTimelineRows,
     onLoadOlderRows,
+    reportsMissingTarget: spacing === "top-level",
   });
   const activeLatestBundleId = useMemo(
     () => findActiveLatestBundleId(rows),
@@ -1837,6 +1908,8 @@ function TimelineRowsList({
             className,
           )}
           data-timeline-row-list={spacing}
+          style={isInitialRevealPending ? { visibility: "hidden" } : undefined}
+          aria-busy={isInitialRevealPending || undefined}
         >
           <TimelineWindowedItemsLoader
             alwaysMountedKeys={alwaysMountedKeys}
@@ -1850,6 +1923,11 @@ function TimelineRowsList({
             getScrollElement={getWindowingScrollElement}
             itemKeys={itemKeys}
             measurements={measurements}
+            pinnedToEnd={
+              isTopLevelList &&
+              detailScrollRoot === null &&
+              bottomAnchor?.isAtBottom === true
+            }
             renderItem={(index, windowedState) => {
               const item = items[index];
               if (item === undefined) {
@@ -1989,7 +2067,9 @@ function ThreadTimelineRowsForTimelineView(props: ThreadTimelineRowsProps) {
   const onSelectionAddToChat = props.onSelectionAddToChat;
   const timelineThreadId = props.threadId;
   const hasPluginSelectionActions =
-    timelineThreadId !== undefined && messageActionSlots.length > 0;
+    timelineThreadId !== undefined &&
+    props.includePluginMessageActions !== false &&
+    messageActionSlots.length > 0;
   const hasSelectionActions =
     onSelectionAddToChat !== undefined || hasPluginSelectionActions;
   const [activeSelection, setActiveSelection] = useState<{
@@ -2047,7 +2127,10 @@ function ThreadTimelineRowsForTimelineView(props: ThreadTimelineRowsProps) {
     }
     return (
       buildRowPluginMessageActions({
-        slots: messageActionSlots,
+        slots:
+          props.includePluginMessageActions === false
+            ? EMPTY_PLUGIN_SLOT_SNAPSHOT.messageActions
+            : messageActionSlots,
         timelineThreadId,
         message: activeSelection.message,
         selectedText: activeSelection.selection.text,
@@ -2059,6 +2142,7 @@ function ThreadTimelineRowsForTimelineView(props: ThreadTimelineRowsProps) {
     activeSelection,
     composerHost,
     messageActionSlots,
+    props.includePluginMessageActions,
     onOpenPluginPanel,
     timelineThreadId,
   ]);
@@ -2070,7 +2154,6 @@ function ThreadTimelineRowsForTimelineView(props: ThreadTimelineRowsProps) {
       onEditMessage: props.onEditMessage,
       inlineMessageEditor: props.inlineMessageEditor,
       onMessageAddToChat: props.onMessageAddToChat,
-      onSendToMainMessage: props.onSendToMainMessage,
       onSelectionAddToChat: selectionAddToChatHandler,
       pluginMessageActions:
         timelineThreadId === undefined ||
@@ -2080,7 +2163,6 @@ function ThreadTimelineRowsForTimelineView(props: ThreadTimelineRowsProps) {
       consumerMessageActions:
         props.consumerMessageActions ?? EMPTY_CONSUMER_MESSAGE_ACTIONS,
       reportProseSelection,
-      threadOriginKind: props.threadOriginKind ?? null,
       onOpenLink: props.onOpenLink,
       onOpenLocalFileLink: props.onOpenLocalFileLink,
       onOpenPluginPanel: props.onOpenPluginPanel,
@@ -2099,13 +2181,11 @@ function ThreadTimelineRowsForTimelineView(props: ThreadTimelineRowsProps) {
       props.onEditMessage,
       props.inlineMessageEditor,
       props.onMessageAddToChat,
-      props.onSendToMainMessage,
       selectionAddToChatHandler,
       messageActionSlots,
       props.includePluginMessageActions,
       props.consumerMessageActions,
       reportProseSelection,
-      props.threadOriginKind,
       timelineThreadId,
       props.onOpenLink,
       props.onOpenLocalFileLink,

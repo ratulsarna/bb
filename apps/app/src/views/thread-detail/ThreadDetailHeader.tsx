@@ -52,7 +52,7 @@ const NARROW_SPLIT_HEADER_MAX_WIDTH = 560;
 
 interface ThreadDetailHeaderProps {
   actionsMenu: ((includeResponsiveActions: boolean) => ReactNode) | null;
-  childPillLabel: "child" | "side chat" | null;
+  childPillLabel: "child" | null;
   isSecondaryPanelOpen: boolean;
   onClosePane?: () => void;
   onOpenThreadGitAction: (target: ThreadGitActionDialogTarget) => void;
@@ -109,9 +109,10 @@ export function ThreadDetailHeader({
   const isSplitPaneHeader = beginPaneDrag !== undefined;
   const [measuredPaneWidth, setMeasuredPaneWidth] = useState(0);
   const usesResponsiveActionOverflow =
-    isSplitPaneHeader &&
-    measuredPaneWidth > 0 &&
-    measuredPaneWidth < NARROW_SPLIT_HEADER_MAX_WIDTH;
+    isCompactViewport ||
+    (isSplitPaneHeader &&
+      measuredPaneWidth > 0 &&
+      measuredPaneWidth < NARROW_SPLIT_HEADER_MAX_WIDTH);
   useLayoutEffect(() => {
     if (!isSplitPaneHeader) {
       return;

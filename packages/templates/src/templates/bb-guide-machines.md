@@ -133,14 +133,19 @@ bb updates app apply Download the update and restart bb into it
 bb updates app dismiss Mark the last update result as seen
 
 `bb updates apply` covers provider CLIs only. `bb updates app apply` updates
-bb itself when it was started with `--in-app-updates` from `npx bb-app` (or a
-global `bb-app`) or with `pnpm start` from a `main` checkout: it installs the new version next to the
+bb itself when it was started from `npx bb-app` (or a global `bb-app`) or with
+`pnpm start` from a `main` checkout, without `--no-in-app-updates`: it installs the new version next to the
 running one and restarts into it. It does not roll back if the new version
 fails to start. Source checkouts update only from a clean `main` that
 fast-forwards to `origin/main`.
 Desktop users update through the desktop app's relaunch; development servers
 and `bb-server` cannot update themselves. Connected daemons follow the server
 version automatically.
+
+For source installs, `bb updates` shows the checkout commit and explains manual
+Git updates when no update shim is running. It does not compare that checkout
+with npm releases. Failed or unavailable release checks show “Latest unknown”;
+“Up to date” requires a successful check.
 
 Machine selectors accept either an exact machine ID or an unambiguous machine
 name. `--host` is an alias for `--machine`.

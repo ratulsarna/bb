@@ -117,6 +117,10 @@ function runCompaction(threadId) {
       turnId,
       item: { type: "contextCompaction", id: itemId },
     });
+    if (COMPACTION_MODE === "wait-for-interrupt") {
+      openTurnIdsByThreadId.set(threadId, turnId);
+      return;
+    }
     notify("item/completed", {
       threadId,
       turnId,
@@ -428,6 +432,10 @@ async function handleRequest(message) {
         respond(id, { data: [] });
         return;
       }
+      if (script?.modelList) {
+        respond(id, script.modelList);
+        return;
+      }
       respond(id, {
         data: [
           {
@@ -444,6 +452,13 @@ async function handleRequest(message) {
         ],
       });
       return;
+    case "config/read":
+      if (script?.configReadError) {
+        respondError(id, -32601, "Configuration read unavailable");
+      } else {
+        respond(id, script?.configRead ?? { config: { model: null } });
+      }
+      return;
     case "skills/extraRoots/set":
       respond(id, {});
       return;
@@ -453,7 +468,7 @@ async function handleRequest(message) {
         await new Promise(() => undefined);
       }
       threadCounter += 1;
-      const threadId = `codex-fx-${process.pid}-${threadCounter}`;
+      const threadId = `codex-fx-${processInstanceId}-${threadCounter}`;
       notify("thread/started", { thread: { id: threadId } });
       respond(id, { thread: { id: threadId } });
       return;
@@ -505,8 +520,8 @@ async function handleRequest(message) {
       threadCounter += 1;
       const replaysUsage = String(params.threadId).startsWith("usage-replay-");
       const threadId = replaysUsage
-        ? `usage-replay-fork-${process.pid}-${threadCounter}`
-        : `codex-fx-${process.pid}-fork-${threadCounter}`;
+        ? `usage-replay-fork-${processInstanceId}-${threadCounter}`
+        : `codex-fx-${processInstanceId}-fork-${threadCounter}`;
       respond(id, { thread: { id: threadId } });
 
       if (replaysUsage) {
