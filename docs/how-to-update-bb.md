@@ -157,8 +157,22 @@ ls -d "$GLOBAL_MODULES/bb-app"
   > "$ROLLBACK_ROOT/rollback/pack.json"
 systemctl --user cat bb.service > "$ROLLBACK_ROOT/bb.service"
 
+# Copying ~/.bb is most of the downtime (about 4 minutes for 14G), and only a
+# release that migrates the database needs it to roll back. Any count mismatch,
+# not just a higher one, takes the copy.
+SHIPPED_MIGRATIONS=$(tar -tzf "$TARBALL" \
+  | grep -c '^package/server/dist/drizzle/[^/]*\.sql$')
+APPLIED_MIGRATIONS=$("$BB_PREFIX/bin/node" --no-warnings -e "
+  const { DatabaseSync } = require('node:sqlite');
+  const db = new DatabaseSync('$HOME/.bb/bb.db', { readOnly: true });
+  console.log(db.prepare('SELECT COUNT(*) c FROM __drizzle_migrations').get().c);
+")
+echo "migrations: $APPLIED_MIGRATIONS applied, $SHIPPED_MIGRATIONS shipped"
+
 systemctl --user stop bb.service
-cp -a "$HOME/.bb" "$ROLLBACK_ROOT/bb-state"
+if [ "$SHIPPED_MIGRATIONS" -ne "$APPLIED_MIGRATIONS" ]; then
+  cp -a "$HOME/.bb" "$ROLLBACK_ROOT/bb-state"
+fi
 npm_config_prefix="$BB_PREFIX" npm_config_ignore_scripts=false \
   "$NPM" install --global "$TARBALL"
 systemctl --user start bb.service
@@ -220,12 +234,14 @@ https://srv1191956.tail7af381.ts.net
 
 ## Rollback
 
-Use the backup made immediately before that deployment. Stop BB, preserve the
-failed post-update state separately, restore both the old package tarball and
-the matching `bb-state`, then restart and run the health checks again.
+Use the backup made immediately before that deployment. Stop BB, reinstall the
+old package tarball from `rollback/`, then restart and run the health checks
+again.
 
-Do not roll back only the package after a release that changed the database.
-The newer server may already have migrated the data.
+If that backup has a `bb-state` folder, the release migrated the database.
+Preserve the failed post-update `~/.bb` separately and restore `bb-state` along
+with the package. Rolling back only the package after a migration leaves the
+old server on a database it may not understand.
 
 After a successful update, remove the temporary build worktree but keep the
 artifact and rollback backup:
