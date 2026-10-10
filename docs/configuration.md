@@ -315,7 +315,18 @@ channel key). Web and desktop clients receive system notifications while a bb
 tab or window remains open; browsers require HTTPS or localhost and per-device
 notification permission. Settings → Push notifications offers permission and
 test controls. `bb push-notifications test <web|desktop>` broadcasts a test to
-connected, permitted clients; it does not confirm OS display.
+connected, permitted clients; it does not confirm OS display. A thread uses
+its own level; otherwise a child thread uses `childLevel` (`inherit` for the
+same as `defaultLevel`, `all`, `input-only` or `muted`, default `input-only`)
+and a top-level thread uses `defaultLevel` (`all`, `input-only` or `muted`,
+default `all`). A thread's level also limits its child threads: the result is
+capped by every ancestor's own level, so muting a parent mutes its whole
+subtree, and a parent set to `all` never makes workers louder than their own
+level or `childLevel`.
+`input-only` keeps questions, approvals and errors but skips finished turns.
+Change the defaults with `bb plugin config push-notifications set defaultLevel
+muted` (or `childLevel`). Set one thread with
+`bb push-notifications thread <thread> --level <inherit|all|input-only|muted>`.
 
 The builtin Keep Awake plugin has one autosaving configuration page with an
 enable switch and an all-or-selected host picker. On selected macOS hosts it
@@ -403,8 +414,7 @@ A new install opens a first-run setup guide (connect an agent, add projects,
 pick plugins, set up devices). `onboardingCompletedAt` in general settings
 records when it was finished or skipped; `bb settings replay-onboarding`, or
 Settings → General → Setup guide, clears it so the guide shows again.
-`setupChecklistVisible` controls the "Finish setting up bb" home-screen
-checklist. The projects step lists what `bb project discover` and
+The projects step lists what `bb project discover` and
 `bb.sdk.hosts.experimental_discoverRepos({ hostId })` return.
 
 The "Streamer mode" toggle in Settings → General hides every `customModels`
@@ -784,6 +794,23 @@ CLI is on PATH and can be launched as `grok agent stdio`, and
 `acp-hermes-agent` when Hermes' `hermes` CLI is on PATH. `acp-cursor` is always
 listed.
 
+The rebuilt ACP adapter ships as a second built-in plugin, "ACP providers (new
+adapter)", which is off by default. Turn it on in Settings → Plugins or with
+`bb plugin enable bb--provider-acp-next`. It registers the same provider ids,
+so existing threads keep working, and only one of the two ACP plugins runs at
+a time: turning the new one on turns "ACP providers" off, turning it off
+turns "ACP providers" back on, and the `customAgents` list follows the switch
+in both directions. The new adapter adds agent options in the model picker
+(the agent's mode stays in the composer footer), live slash commands in the
+composer, agent questions as question cards, sign-in
+guidance, and the official ACP registry: its settings page lists the
+registry's agents with an Add button, and `bb acp registry`, `bb acp add
+<agent-id>` and `bb acp remove <agent-id>` do the same from the CLI. Adding
+one writes a `customAgents` entry that runs the registry's `npx` or `uvx`
+package on the thread's host, so the host needs Node.js or uv. Agents the
+registry ships only as a downloadable binary are listed but must be installed
+by hand and added as a custom agent.
+
 Add your own agent through the ACP providers plugin's `customAgents` setting,
 which holds a JSON array. In the app it is the multi-line editor on the
 plugin's settings page (Settings → Plugins → ACP providers); from the CLI:
@@ -1034,18 +1061,10 @@ client wrote first, so a stale window cannot silently clobber a newer value.
 | `sidebar.manualSectionOrder`         | Section id list for **Manually**                                                          |
 | `sidebar.machineSectionOrder`        | Section id list for **By machine**                                                        |
 | `sidebar.hiddenGroups`               | Legacy project, custom section, and machine ids migrated once into the Thread list plugin |
-| `sidebar.collapsedSections`          | Collapsed built-in sections (`pinned`, `threads`)                                         |
-| `sidebar.collapsedProjects`          | Collapsed project ids                                                                     |
-| `sidebar.collapsedThreads`           | Thread ids whose children are collapsed                                                   |
-| `sidebar.collapsedEnvironments`      | Collapsed environment ids                                                                 |
-| `sidebar.collapsedThreadSections`    | Collapsed thread section ids                                                              |
-| `sidebar.collapsedMachines`          | Collapsed machine ids                                                                     |
 | `sidebar.footerOrder`                | Footer action order                                                                       |
 | `sidebar.hiddenFooterItems`          | Footer actions moved into More                                                            |
-| `sidebar.pluginPanelOrder`           | Navigation entry order                                                                    |
-| `sidebar.visiblePluginPanels`        | Navigation entries shown, or `null` for every entry                                       |
-| `sidebar.navigationProvider`         | Plugin key or `__automatic__` (default)                                                   |
-| `sidebar.headerProvider`             | Plugin key, or `__builtin__` for bb's header only                                         |
+| `sidebar.pluginPanelOrder`           | Rail destination order                                                                    |
+| `sidebar.visiblePluginPanels`        | Rail destinations shown, or `null` for every destination                                  |
 | `sidebar.threadListProvider`         | Plugin key or `__automatic__` (default)                                                   |
 | `infoPanel.collapsedSections`        | Collapsed thread Info panel sections (`commits`, `uncommittedChanges`, `forks`, `threadStorage`)                   |
 
@@ -1058,17 +1077,20 @@ Use `bb settings ui reset sidebar.threadListProvider` to restore Automatic, or
 `bb settings ui set sidebar.threadListProvider <plugin-id>/<slot-id>` to select
 another plugin. The SDK exposes the same setting through `uiPreferences`.
 
-The sidebar navigation works the same way: `sidebar.navigationProvider` defaults to
-`__automatic__`, which prefers an installed navigation plugin over the bundled
-Navigation plugin (`navigation/navigation`), and legacy `__builtin__` selections
-resolve to the bundled plugin. Order and visibility stay in
-`sidebar.pluginPanelOrder` and `sidebar.visiblePluginPanels`, shared by every
-navigation plugin.
+A vertical rail of destinations sits on the left edge of the sidebar on every
+screen size. Home is at the top and returns to the last thread; the visible
+destinations (Plugins, Skills, and plugin panels) follow; More holds hidden
+destinations and Customize rail; Settings is at the bottom. New thread sits in
+the sidebar header and cannot be hidden. The list beside the rail swaps between the thread list,
+Plugins, Skills, and Settings, and collapsing the sidebar hides that list and
+leaves the rail. `sidebar.pluginPanelOrder` and `sidebar.visiblePluginPanels`
+order and show or hide rail destinations.
 
-`sidebar.headerProvider` picks a plugin that draws controls in the sidebar header
-row, between the sidebar toggle and the back and forward buttons. It defaults to
-`__builtin__`, which leaves only bb's controls there. Set it with
-`bb settings ui set sidebar.headerProvider <plugin-id>/<slot-id>`.
+In the macOS desktop app, wide windows add a title bar holding the window
+controls, Back and Forward, and the sidebar toggle. It shares the rail's
+background, and the sidebar and page sit in a card below it. On narrow windows
+and phones the rail sits inside the drawer: Home, Plugins, Skills, and Settings
+swap the list beside it and leave the drawer open, and a plugin page closes it.
 
 New installations default to Custom (`chronological`) for `sidebar.organizationMode`.
 Migrated installations with existing projects, threads, or UI preferences fall back
@@ -1185,15 +1207,22 @@ leaves only the actions menu. Done, Escape, or a click elsewhere finishes;
 each change saves immediately.
 Archived rows keep their unarchive button regardless of this setting.
 
-The Thread list plugin's `rowActions` preference defaults to `["archive"]` and
-accepts up to three of `split`, `copyLink`, `read`, `pin`, `move`, `rename`, and
-`archive`, in display order. Duplicates are deduplicated. `split` is skipped
-where a split is unavailable, and `move` is skipped for threads that cannot
-move to another section. `move` opens a menu of sections.
+The Thread list plugin's `rowActions` preference stores up to three thread
+action keys in display order and defaults to `["bb--core/archive"]`. bb's
+keys are `bb--core/split`, `bb--core/newThreadInEnvironment`,
+`bb--core/copyLink`, `bb--core/read`, `bb--core/pin`, `bb--core/rename`,
+`bb--core/archive`, and `bb--core/delete`; the thread list's own Move to
+section is `thread-list/move`, and other plugins add `<pluginId>/<actionId>`.
+Bare legacy ids (`pin`, `archive`, `move`, …) and `core/<id>` keys are
+accepted and migrate to their current keys. Duplicates are deduplicated. A key
+whose action is hidden for a row (`bb--core/split` for the thread in view,
+`thread-list/move` for a thread that cannot move) or whose plugin is not
+installed is skipped on that row. `bb--core/split` reads Focus split for a
+thread open in another split pane. `thread-list/move` opens a menu of sections.
 
 ```sh
 bb thread-list prefs get rowActions
-bb thread-list prefs set rowActions '["pin","copyLink","archive"]'
+bb thread-list prefs set rowActions '["bb--core/pin","bb--core/copyLink","bb--core/archive"]'
 bb thread-list prefs set rowActions '[]'
 bb thread-list prefs reset rowActions
 ```
@@ -1216,14 +1245,14 @@ visibility, and every action in More remains usable.
 Hiding an open disclosure closes it; selecting it from More opens it again.
 
 The UI preferences `sidebar.footerOrder` and `sidebar.hiddenFooterItems` contain
-stable IDs: `builtin:settings`, `builtin:report-bug`, and
+stable IDs: `builtin:mobile`, `builtin:report-bug`, and
 `plugin:<encoded pluginId>/<encoded registrationId>` (URI-encoded components).
 Unknown and disabled-plugin IDs are retained across reloads; new actions default
 visible. The existing SDK UI preferences and CLI manage the same values:
 
 ```sh
 bb settings ui set sidebar.hiddenFooterItems '["builtin:report-bug"]'
-bb settings ui set sidebar.footerOrder '["builtin:report-bug","builtin:settings"]'
+bb settings ui set sidebar.footerOrder '["builtin:report-bug","builtin:mobile"]'
 bb settings ui reset sidebar.hiddenFooterItems
 ```
 
@@ -1474,18 +1503,6 @@ Experimental surfaces are changed in Settings → Experiments or with
 bb stores only the experiments you set; the others follow the shipped default.
 The default-off `changelogPreview` experiment shows the latest release notes
 as a compact, dismissible card on Settings → Updates.
-The default-off `navigationRail` experiment keeps a vertical rail of
-destinations on the left edge of the sidebar on every screen. Home returns to
-the last thread, Settings sits at the bottom, and New thread moves into the
-sidebar header. The sidebar beside the rail still swaps between the thread
-list, Plugins, Skills, and Settings. Collapsing the sidebar hides that list
-and leaves the rail in place. In the macOS desktop app the rail and a title
-bar across the top of the window share one background; the title bar holds
-the window controls, Back and Forward, and the sidebar toggle, and the
-sidebar and page sit in a card with a rounded top-left corner. While it is on, bb draws the navigation
-itself, so the Navigation and Header choices under Settings → Appearance are
-not used; they apply again when the experiment is turned off. Narrow windows
-and phones keep the regular drawer.
 
 BB releases restorable provider sessions after 30 idle minutes. The daemon
 checks for these sessions every five minutes. Active turns, commands, agents,

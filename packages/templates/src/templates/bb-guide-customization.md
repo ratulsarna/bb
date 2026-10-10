@@ -109,12 +109,19 @@ The `threadLifecycles` preference defaults
 to `["active"]`; `bb thread-list prefs set threadLifecycles '["archived"]'`
 shows archived threads, and `'["active","archived"]'` shows both.
 
-The sidebar navigation rows (New thread, Search, Plugins, Skills, plugin
-panels) are drawn by the Navigation builtin plugin. Their order and
-visibility are `bb settings ui` keys (`sidebar.pluginPanelOrder`,
-`sidebar.visiblePluginPanels`), shared by any navigation plugin chosen with
-`sidebar.navigationProvider`. `sidebar.headerProvider` picks a plugin that
-draws controls beside the sidebar toggle; it defaults to `__builtin__`.
+A vertical rail of destinations sits on the left edge of the sidebar on every
+screen size. Home is at the top and returns to the last thread; the visible
+destinations (Plugins, Skills, and plugin panels) follow; More holds hidden
+destinations and Customize rail; Settings is at the bottom. New thread sits in
+the sidebar header and cannot be hidden. The list beside the rail swaps between the thread list,
+Plugins, Skills, and Settings, and collapsing the sidebar hides that list and
+leaves the rail. Rail order and visibility are `bb settings ui` keys
+(`sidebar.pluginPanelOrder`, `sidebar.visiblePluginPanels`). In the macOS
+desktop app, wide windows add a title bar holding the window controls, Back
+and Forward, and the sidebar toggle; it shares the rail's background, and the
+sidebar and page sit in a card below it. On narrow windows and phones the rail
+sits inside the drawer: Home, Plugins, Skills, and Settings swap the list
+beside it and leave the drawer open, and a plugin page closes it.
 
 Settings → Keyboard also includes `showKeyboardHints`, which defaults to true.
 Turn it off to hide the delayed shortcut badges shown while holding Command or
@@ -210,9 +217,7 @@ and `null` clears a preference that can be unset.
 `bb settings replay-onboarding` clears `onboardingCompletedAt`, so the first-run
 setup guide (connect an agent, add projects, pick plugins, set up devices) shows
 again in every open client. Settings → General → Setup guide has the same
-button. `setupChecklistVisible` controls the "Finish setting up bb" checklist
-on the home screen; the guide turns it on when steps are left undone, and
-dismissing the checklist turns it off.
+button.
 
 `bb settings completed-turns` lists how each provider shows a finished turn:
 `collapse` folds the turn's work into one "Worked for" row and keeps the final
@@ -224,18 +229,6 @@ the same per-provider switch.
 
 The default-off `changelogPreview` experiment shows the latest release notes
 as a compact, dismissible card on Settings → Updates.
-The default-off `navigationRail` experiment keeps a vertical rail of
-destinations on the left edge of the sidebar on every screen. Home returns to
-the last thread, Settings sits at the bottom, and New thread moves into the
-sidebar header. The sidebar beside the rail still swaps between the thread
-list, Plugins, Skills, and Settings. Collapsing the sidebar hides that list
-and leaves the rail in place. In the macOS desktop app the rail and a title
-bar across the top of the window share one background; the title bar holds
-the window controls, Back and Forward, and the sidebar toggle, and the
-sidebar and page sit in a card with a rounded top-left corner. While it is on, bb draws the navigation
-itself, so the Navigation and Header choices under Settings → Appearance are
-not used; they apply again when the experiment is turned off. Narrow windows
-and phones keep the regular drawer.
 Message editing is available for eligible, accepted
 root user messages in Codex, Claude Code, and Pi threads, including failed or
 incomplete turns. Opening the editor is
@@ -355,7 +348,10 @@ windows must stay open; browser permission is requested in the plugin settings.
   bb push-notifications remove <id>
   bb push-notifications status
   bb push-notifications test <web|desktop>
+  bb push-notifications thread <thread> [--level inherit|all|input-only|muted]
   bb plugin config push-notifications set <mobileEnabled|webEnabled|desktopEnabled> <true|false>
+  bb plugin config push-notifications set defaultLevel <all|input-only|muted>
+  bb plugin config push-notifications set childLevel <inherit|all|input-only|muted>
 
 `add` is an upsert by token: a known token refreshes its label and last-seen
 time and keeps its id. Expo tokens that are no longer registered are removed
@@ -366,6 +362,12 @@ config push-notifications set expoPushUrl <url>`. Add `--json` to `list` or
 The three channel switches default to true and apply immediately across this
 server. `test` broadcasts to all connected clients of the selected type with
 permission; OS notification settings still control whether a banner appears.
+`thread` prints a thread's resolved notification level and its source; with
+`--level` it sets the thread's own level. A thread uses its own level, else
+`childLevel` if it has a parent (default `input-only`; `inherit` follows
+`defaultLevel`), else `defaultLevel` (default `all`). A thread's level also
+limits its child threads: every ancestor's own level caps the result. `all` notifies on finished turns too, `input-only` keeps
+questions, approvals, and errors only, and `muted` sends nothing.
 
 Host files and voice transcription
 
@@ -485,7 +487,7 @@ Right-click an action and choose Hide to move it into the More menu. Hidden
 shortcuts remain actionable; hiding an open disclosure closes it. The More menu
 appears only when hidden actions are available and links back to customization.
 `sidebar.footerOrder` and `sidebar.hiddenFooterItems` are string lists. Keys are
-`builtin:settings`, `builtin:report-bug`, or `plugin:<encoded pluginId>/<encoded registrationId>`.
+`builtin:mobile`, `builtin:report-bug`, or `plugin:<encoded pluginId>/<encoded registrationId>`.
 Preferences survive plugin reloads and temporarily unavailable plugins; new items
 are visible by default. Example:
 
