@@ -58,70 +58,22 @@ during this merge. Do not keep both implementations.
 
 ## 2. Build and test an isolated package
 
-Keep the deployment checkout clean. Build from a temporary detached worktree:
+Keep the deployment checkout clean. `scripts/build-deploy-package.sh` builds
+from a temporary detached worktree of `codex/deployment`:
 
 ```bash
 cd ~/Developer/Projects/bb
-corepack enable pnpm
-umask 0022
-
-DEPLOY_SHA="$(git rev-parse codex/deployment)"
-SHORT_SHA="$(git rev-parse --short=12 codex/deployment)"
-STAMP="$(date -u +%Y%m%d%H%M%S)"
-BUILD_DIR="$(mktemp -d ~/Developer/Projects/bb-builds/${SHORT_SHA}-${STAMP}.XXXXXX)"
-ARTIFACT_DIR="$HOME/bb-artifacts/${SHORT_SHA}-${STAMP}"
-mkdir -p "$ARTIFACT_DIR"
-
-git worktree add --detach "$BUILD_DIR" "$DEPLOY_SHA"
-cd "$BUILD_DIR"
-pnpm install --frozen-lockfile --prefer-offline
-
-BASE_VERSION="$(node -p "require('./packages/bb-app/package.json').version")"
-CUSTOM_VERSION="$(node -e '
-  const [version, stamp, sha] = process.argv.slice(1);
-  const match = /^(\d+)\.(\d+)\.(\d+)/u.exec(version);
-  if (match === null) throw new Error(`Invalid version: ${version}`);
-  console.log(`${match[1]}.${match[2]}.${Number(match[3]) + 1}-deploy.${stamp}.${sha}`);
-' "$BASE_VERSION" "$STAMP" "$SHORT_SHA")"
-
-node scripts/bump-version.mjs "$CUSTOM_VERSION"
-node .github/workflows/check-version-lockstep.mjs
-
-# --concurrency=2 is deliberate. At the default, the app, server, and
-# host-daemon suites run at once and starve the VPS, and tests that pass in
-# isolation fail on their own timeouts.
-pnpm exec turbo run typecheck \
-  --filter=@bb/app \
-  --filter=@bb/config \
-  --filter=@bb/server \
-  --filter=@bb/host-daemon \
-  --filter=bb-app \
-  --concurrency=2 \
-  --output-logs=new-only
-
-# Tests run separately so --testTimeout only reaches vitest, never tsc.
-# Vitest's default 5s per-test timeout is budgeted for fast machines; even at
-# --concurrency=2 this VPS starves one heavy test past 5s most builds, while
-# the same test passes in isolation. 30s absorbs the load spikes and still
-# fails real hangs. If a test fails here for any reason other than a timeout,
-# treat it as real.
-pnpm exec turbo run test \
-  --filter=@bb/app \
-  --filter=@bb/config \
-  --filter=@bb/server \
-  --filter=@bb/host-daemon \
-  --filter=bb-app \
-  --concurrency=2 \
-  --output-logs=new-only \
-  -- --testTimeout=30000
-
-pnpm exec turbo run smoke:tarball --filter=bb-app --force --output-logs=new-only
-npm pack ./packages/bb-app --pack-destination "$ARTIFACT_DIR" --json \
-  > "$ARTIFACT_DIR/pack.json"
-sha256sum "$ARTIFACT_DIR"/bb-app-*.tgz | tee "$ARTIFACT_DIR/sha256.txt"
-printf 'commit=%s\nversion=%s\n' "$DEPLOY_SHA" "$CUSTOM_VERSION" \
-  > "$ARTIFACT_DIR/build-metadata.txt"
+scripts/build-deploy-package.sh 2>&1 | tee "/tmp/bb-build-$(date -u +%Y%m%d%H%M%S).log"
 ```
+
+It stamps a version of `X.Y.(Z+1)-deploy.<UTC stamp>.<short sha>`, then runs
+the typechecks, the app, config, server, host-daemon, bb-app and codex plugin
+tests, and the tarball smoke test. The tarball, its sha256, and
+`build-metadata.txt` land in `~/bb-artifacts/<short sha>-<stamp>/`. The script
+ends with `::: BUILD OK`.
+
+The script owns the test budgets for this VPS and explains each one inline. If
+a test fails for any reason other than a timeout, treat it as real.
 
 The version change exists only in the temporary build worktree. Do not commit
 generated deployment versions to `codex/deployment`.
