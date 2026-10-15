@@ -305,7 +305,7 @@ function hostThreadActions({
     });
     const isArchived = thread.archivedAt !== null;
     return [
-      entry("bb--core/copyLink", "Copy thread link", "Copy"),
+      entry("bb--core/copyLink", "Copy link", "Copy"),
       entry(
         "bb--core/pin",
         thread.pinnedAt === null ? "Pin" : "Unpin",
@@ -460,6 +460,33 @@ describe("ThreadRow", () => {
     await waitFor(() => expect(restore.disabled).toBe(false));
   });
 
+  it("names a choice row action with its current value", () => {
+    getDefaultStore().set(preferenceValueAtom("rowActions"), [
+      "push-notifications/notifications",
+    ]);
+    renderThreadRow({
+      threadActions: () => [
+        {
+          key: "push-notifications/notifications",
+          pluginId: "push-notifications",
+          group: "1_state",
+          action: {
+            label: "Notifications",
+            detail: "Muted",
+            icon: "Notification",
+            choices: {
+              items: [{ id: "muted", label: "Muted", selected: true }],
+            },
+            run: async () => undefined,
+          },
+        },
+      ],
+    });
+    expect(
+      screen.getByRole("button", { name: "Notifications, Muted" }),
+    ).not.toBeNull();
+  });
+
   it("shows the configured row actions in order and reserves their width", async () => {
     getDefaultStore().set(preferenceValueAtom("rowActions"), [
       "bb--core/pin",
@@ -473,7 +500,7 @@ describe("ThreadRow", () => {
       Array.from(controls?.querySelectorAll("button") ?? []).map((button) =>
         button.getAttribute("aria-label"),
       ),
-    ).toEqual(["Pin", "Copy thread link", "Archive", "Thread actions"]);
+    ).toEqual(["Pin", "Copy link", "Archive", "Thread actions"]);
     expect(
       document
         .querySelector<HTMLElement>(".bb-sidebar-hover-actions-inset")
@@ -547,7 +574,7 @@ describe("ThreadRow", () => {
   });
 
   it.each(["dropdown", "context"] as const)(
-    "adds Customize row actions to the %s menu",
+    "adds Customize actions to the %s menu",
     async (surface) => {
       const customize = vi.fn();
       renderThreadRow({ onCustomizeRowActions: customize });
@@ -559,18 +586,18 @@ describe("ThreadRow", () => {
         );
       }
       fireEvent.click(
-        await screen.findByRole("menuitem", { name: "Customize row actions" }),
+        await screen.findByRole("menuitem", { name: "Customize actions" }),
       );
       expect(customize).toHaveBeenCalledWith("thr_test");
     },
   );
 
-  it("leaves Customize row actions out when the list cannot customize", async () => {
+  it("leaves Customize actions out when the list cannot customize", async () => {
     renderThreadRow();
     fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
     await screen.findByRole("menuitem", { name: "Rename" });
     expect(
-      screen.queryByRole("menuitem", { name: "Customize row actions" }),
+      screen.queryByRole("menuitem", { name: "Customize actions" }),
     ).toBeNull();
   });
 
@@ -1039,7 +1066,7 @@ describe("ThreadRow", () => {
   });
 
   it.each([true, false])(
-    "reserves a stable action slot beside a parent disclosure (collapsed: %s)",
+    "gives a parent title the action space while actions are hidden (collapsed: %s)",
     (isCollapsed) => {
       const onToggleCollapsed = vi.fn();
       renderThreadRow({
@@ -1074,15 +1101,7 @@ describe("ThreadRow", () => {
         titleContainer?.classList.contains(
           "pr-(--bb-sidebar-hover-actions-inset)",
         ),
-      ).toBe(true);
-      expect(
-        titleContainer?.style.getPropertyValue(
-          "--bb-sidebar-hover-actions-inset",
-        ),
-      ).toBe("calc(var(--spacing) * 7.5)");
-      expect(
-        titleContainer?.classList.contains("[@media(hover:none)]:pr-0"),
-      ).toBe(true);
+      ).toBe(false);
       expect(navigationTarget?.classList.contains("flex-1")).toBe(true);
       expect(titleWrapper?.classList.contains("flex-1")).toBe(false);
       fireEvent.click(toggle);

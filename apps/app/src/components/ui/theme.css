@@ -316,6 +316,21 @@
     );
   }
 
+  @media (hover: hover) {
+    .bb-sidebar-hover-actions-row:is(:hover, :has(:focus-visible))
+      .bb-sidebar-hover-actions-mask,
+    .bb-sidebar-hover-actions-row:has(
+        .bb-sidebar-hover-actions[data-sidebar-hover-actions-open="true"]
+      )
+      .bb-sidebar-hover-actions-mask {
+      mask-image: linear-gradient(
+        to left,
+        transparent var(--bb-sidebar-hover-actions-inset),
+        black calc(var(--bb-sidebar-hover-actions-inset) + var(--spacing) * 4)
+      );
+    }
+  }
+
   .bb-sidebar-hover-actions-fade {
     opacity: 1;
     transition-property: opacity;

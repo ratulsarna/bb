@@ -124,6 +124,11 @@ export default definePluginApp((app) => {
     onActivate: ({ openPluginDetails }) => openPluginDetails(),
   });
   app.slots.messageDirective({ id: "inline-vis", component: InlineVis });
+  app.slots.experimental_codeFenceRenderer({
+    id: "ui-blocks",
+    languages: ["ui"],
+    component: UiBlock,
+  });
   app.slots.experimental_threadList({
     id: "inbox",
     title: "Inbox",
@@ -162,7 +167,7 @@ surface them here instead, filtering `experimental_useSidebarThreads()` by
 
 `app.slots.experimental_threadAction` adds an entry to the thread header's
 actions menu, the sidebar row's menu, its right-click menu, the compact
-long-press drawer, and, when the user picks it in Customize row actions, a
+long-press drawer, and, when the user picks it in Customize actions, a
 sidebar row's quick-action buttons. bb's own actions are registrations of the
 same shape.
 
@@ -175,17 +180,21 @@ example `useSdk().threads.experimental_listPluginMetadata({ threadIds })`).
 `useSdk()` and `useBbNavigate()`) and returns the action for that thread, or
 null to hide it. Menus and the quick-action picker sort registrations by
 their static `group`, a separator between groups, then by `order`. Join one
-of bb's groups through `experimental_THREAD_ACTION_GROUPS` or name your own. `choices` renders as a submenu, a drawer step with Back, or
-a popover; the picked id reaches `run` as `value`. Set `detail` to show the
-current value on a muted line under the label, and `choices.hint` for a footnote below the
-choices.
+of bb's groups through `experimental_THREAD_ACTION_GROUPS` (`open`, `state`,
+`organize`, `settings`, `lifecycle`) or name your own. Within a group, give an
+action with `choices` a higher `order` than plain actions so items that open a
+submenu sit last. `choices` renders as a submenu, a drawer step with Back, or
+a popover; the picked id reaches `run` as `value`. Set `detail` to the
+current value: it shows on a muted line under the label, except on rows with
+`choices`, where only tooltips and screen readers include it. Set
+`choices.hint` for a footnote below the choices.
 
 ```tsx
 app.slots.experimental_threadAction({
   id: "notifications",
   title: "Notifications",
   icon: "Notification",
-  group: experimental_THREAD_ACTION_GROUPS.settings,
+  group: experimental_THREAD_ACTION_GROUPS.state,
   useData: ({ threadIds }) => useNotificationLevels(threadIds),
   item: ({ thread, data, sdk }) => ({
     label: "Notifications",
@@ -193,8 +202,16 @@ app.slots.experimental_threadAction({
     icon: "Notification",
     choices: {
       items: [
-        { id: "all", label: "All activity", selected: data.get(thread.id) === "all" },
-        { id: "muted", label: "Muted", selected: data.get(thread.id) === "muted" },
+        {
+          id: "all",
+          label: "All activity",
+          selected: data.get(thread.id) === "all",
+        },
+        {
+          id: "muted",
+          label: "Muted",
+          selected: data.get(thread.id) === "muted",
+        },
       ],
     },
     run: ({ value }) => saveLevel(sdk, thread.id, value),

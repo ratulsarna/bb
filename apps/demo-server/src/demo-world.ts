@@ -27,6 +27,7 @@ import {
   type ThreadQueuedMessageListResponse,
   type ThreadTabsResponse,
   type SystemAppUpdateStatus,
+  type SystemCliCommandStatus,
   type ServerMoveStatusResponse,
   type UiPreferencesResponse,
   type ThreadTimelineResponse,
@@ -264,6 +265,20 @@ export class DemoWorld {
             runningThreadCount: 0,
             support: { kind: "unsupported", reason: "unmanaged" },
           } satisfies SystemAppUpdateStatus);
+        case "/system/cli-command":
+          return json({
+            installedPath: null,
+            onPath: false,
+            shadowedBy: null,
+            supported: false,
+          } satisfies SystemCliCommandStatus);
+        case "/system/cli-command":
+          return json({
+            installedPath: null,
+            onPath: false,
+            shadowedBy: null,
+            supported: false,
+          } satisfies SystemCliCommandStatus);
         case "/system/version":
           return json(SYSTEM_VERSION);
         case "/system/execution-options":
@@ -540,11 +555,10 @@ export class DemoWorld {
         usedTokens: 12_400,
       },
       timelinePage: {
-        kind: "latest",
-        segmentLimit: 20,
         returnedSegmentCount: 1,
-        hasOlderRows: false,
         olderCursor: null,
+        historySnapshot: "demo",
+        olderRowsSourceSeqEnd: null,
       },
     };
   }

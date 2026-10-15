@@ -34,12 +34,12 @@ import { useAppCommandShortcut } from "@/components/commands/AppCommandProvider"
 import {
   CHROME_ROW_HEIGHT_CLASS,
   getBbDesktopInfo,
-  MACOS_CHROME_CONTROL_AXIS_CLASS,
   MACOS_WINDOW_DRAG_CLASS,
   shouldUseMacosDesktopChrome,
 } from "@/lib/bb-desktop";
 import { getRootComposeRoutePath } from "@/lib/route-paths";
 import { NAV_RAIL_WIDTH_CLASS } from "./navRailWidth";
+import { useSidebarHeaderControlAxisClass } from "./SidebarChrome";
 import { SidebarNavigationCustomize } from "./SidebarNavigationCustomize";
 import {
   SidebarNavigationIcon,
@@ -201,31 +201,18 @@ function RailItem({
 
 function RailMoreMenu({
   buttonRef,
-  topItemRef,
   hidden,
   onCustomize,
   onMenuCloseAutoFocus,
 }: {
   buttonRef: RefObject<HTMLButtonElement | null>;
-  topItemRef: RefObject<HTMLButtonElement | null>;
   hidden: readonly SidebarNavigationItem[];
   onCustomize: () => void;
   onMenuCloseAutoFocus: (event: Event) => void;
 }) {
   const { actions } = useSidebarNavigation();
-  const [topItemOffset, setTopItemOffset] = useState(0);
   return (
-    <DropdownMenu
-      onOpenChange={(isOpen) => {
-        const button = buttonRef.current;
-        const topItem = topItemRef.current;
-        if (!isOpen || button === null || topItem === null) return;
-        setTopItemOffset(
-          topItem.getBoundingClientRect().top -
-            button.getBoundingClientRect().top,
-        );
-      }}
-    >
+    <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <RailButton ref={buttonRef} label="More">
           <Icon name="MoreHorizontal" aria-hidden="true" />
@@ -234,8 +221,6 @@ function RailMoreMenu({
       <DropdownMenuContent
         side="right"
         align="start"
-        alignOffset={topItemOffset}
-        sticky="always"
         sideOffset={RAIL_MENU_SIDE_OFFSET}
         data-testid="nav-rail-more-menu"
         onCloseAutoFocus={onMenuCloseAutoFocus}
@@ -262,22 +247,16 @@ function RailMoreMenu({
 
 export function AppNavRail({
   isAppMode,
-  isSettingsActive,
-  settingsRoutePath,
   customize,
 }: {
   isAppMode: boolean;
-  isSettingsActive: boolean;
-  settingsRoutePath: string;
   customize: NavRailCustomizeState;
 }) {
   const { items, activeItemId } = useSidebarNavigation();
   const moreButtonRef = useRef<HTMLButtonElement>(null);
-  const homeButtonRef = useRef<HTMLButtonElement>(null);
   const customizeAfterMenuCloseRef = useRef(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const settingsShortcut = useAppCommandShortcut("settings.open");
   const [desktopInfo] = useState(getBbDesktopInfo);
   const isFramed = useIsSidebarFramed();
   const isCompactViewport = useIsCompactViewport();
@@ -316,7 +295,7 @@ export function AppNavRail({
         "relative z-10 flex shrink-0 flex-col",
         NAV_RAIL_WIDTH_CLASS,
         !isFramed &&
-          "-mt-[env(safe-area-inset-top)] -mb-[env(safe-area-inset-bottom)] bg-surface-recessed pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]",
+          "-mt-[env(safe-area-inset-top)] bg-surface-recessed pt-[env(safe-area-inset-top)]",
       )}
     >
       {isFramed ? null : (
@@ -332,8 +311,8 @@ export function AppNavRail({
       <nav
         aria-label="Primary navigation"
         className={cn(
-          "flex min-h-0 flex-1 flex-col items-center gap-2.5",
-          isFramed ? "pt-2" : "pb-2.5",
+          "flex min-h-0 flex-1 flex-col items-center gap-2.5 pb-2",
+          isFramed && "pt-2",
         )}
       >
         <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-2.5 overflow-y-auto py-0.5 [scrollbar-width:none]">
@@ -343,7 +322,6 @@ export function AppNavRail({
           >
             <PopoverAnchor asChild>
               <RailButton
-                ref={homeButtonRef}
                 label="Home"
                 active={isHomeActive}
                 onClick={() => {
@@ -363,7 +341,6 @@ export function AppNavRail({
             ))}
             <RailMoreMenu
               buttonRef={moreButtonRef}
-              topItemRef={homeButtonRef}
               hidden={hidden}
               onCustomize={
                 isCompactViewport
@@ -391,29 +368,41 @@ export function AppNavRail({
             </PopoverContent>
           </Popover>
         </div>
-        <RailButton
-          label={
-            settingsShortcut
-              ? `Settings (${settingsShortcut.label})`
-              : "Settings"
-          }
-          active={isSettingsActive}
-          aria-keyshortcuts={settingsShortcut?.ariaKeyshortcuts}
-          onClick={() => {
-            if (!isSettingsActive) void navigate(settingsRoutePath);
-          }}
-        >
-          <Icon name="Settings" aria-hidden="true" />
-        </RailButton>
       </nav>
     </div>
+  );
+}
+
+export function NavRailSettingsButton({
+  isSettingsActive,
+  settingsRoutePath,
+}: {
+  isSettingsActive: boolean;
+  settingsRoutePath: string;
+}) {
+  const navigate = useNavigate();
+  const settingsShortcut = useAppCommandShortcut("settings.open");
+  return (
+    <RailButton
+      label={
+        settingsShortcut ? `Settings (${settingsShortcut.label})` : "Settings"
+      }
+      active={isSettingsActive}
+      className="h-8 max-md:pointer-coarse:h-9"
+      aria-keyshortcuts={settingsShortcut?.ariaKeyshortcuts}
+      onClick={() => {
+        if (!isSettingsActive) void navigate(settingsRoutePath);
+      }}
+    >
+      <Icon name="Settings" aria-hidden="true" />
+    </RailButton>
   );
 }
 
 export function NavRailNewThreadButton() {
   const { items, actions, isShortcutModifierHeld } = useSidebarNavigation();
   const split = useSidebarNavigationSplit(NEW_THREAD_NAVIGATION_ITEM_ID);
-  const [desktopInfo] = useState(getBbDesktopInfo);
+  const axisClass = useSidebarHeaderControlAxisClass();
   const item = items.find(
     (candidate) => candidate.action.kind === "new-thread",
   );
@@ -428,8 +417,7 @@ export function NavRailNewThreadButton() {
       className={cn(
         PROJECT_LIST_ACTION_BUTTON_CLASS,
         "w-auto flex-1",
-        shouldUseMacosDesktopChrome(desktopInfo) &&
-          MACOS_CHROME_CONTROL_AXIS_CLASS,
+        axisClass,
       )}
       disabled={item.isDisabled}
       aria-keyshortcuts={item.shortcut?.ariaKeyShortcuts}

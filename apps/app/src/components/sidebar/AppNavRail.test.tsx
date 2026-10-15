@@ -50,7 +50,11 @@ import {
 } from "@/lib/route-paths";
 import { makePluginRegistrationSet as registrationSet } from "@/test/fixtures/plugins";
 import { SidebarUpdatesBadge } from "./SidebarUpdatesBadge";
-import { AppNavRail, NavRailNewThreadButton } from "./AppNavRail";
+import {
+  AppNavRail,
+  NavRailNewThreadButton,
+  NavRailSettingsButton,
+} from "./AppNavRail";
 import { SidebarVisibilityCustomize } from "./SidebarVisibilityControls";
 import { SidebarNavigationModelProvider } from "./SidebarNavigationModel";
 
@@ -76,12 +80,19 @@ vi.mock("@/views/useMobileRecentsThreadReveal", () => ({
 vi.mock("@/components/sidebar/AppSidebar", () => ({
   AppSidebar: ({
     renderRail,
+    railFooter,
   }: {
+    railFooter: ReactNode;
     renderRail: (customize: {
       isOpen: boolean;
       onOpenChange: () => void;
     }) => ReactNode;
-  }) => renderRail({ isOpen: false, onOpenChange: () => {} }),
+  }) => (
+    <>
+      {renderRail({ isOpen: false, onOpenChange: () => {} })}
+      {railFooter}
+    </>
+  ),
 }));
 
 vi.mock("@/components/settings/SettingsSidebar", () => ({
@@ -147,12 +158,16 @@ function RailHarness({ useLayout = false }: { useLayout?: boolean }) {
           <SidebarUpdatesBadge onNavigate={closeMobileSidebar} />
         </>
       ) : (
-        <AppNavRail
-          isAppMode={isAppMode}
-          isSettingsActive={isSettings}
-          settingsRoutePath={SETTINGS_ROUTE_PATH}
-          customize={{ isOpen: isCustomizing, onOpenChange: setCustomizing }}
-        />
+        <>
+          <AppNavRail
+            isAppMode={isAppMode}
+            customize={{ isOpen: isCustomizing, onOpenChange: setCustomizing }}
+          />
+          <NavRailSettingsButton
+            isSettingsActive={isSettings}
+            settingsRoutePath={SETTINGS_ROUTE_PATH}
+          />
+        </>
       )}
       <NavRailNewThreadButton />
       <output data-testid="pathname">{location.pathname}</output>
@@ -196,22 +211,29 @@ function rail(): HTMLElement {
 }
 
 function railButton(name: string): HTMLElement {
-  const button = Array.from(rail().querySelectorAll("button")).find(
-    (candidate) => candidate.getAttribute("aria-label") === name,
-  );
+  const button = Array.from(
+    document.querySelectorAll<HTMLButtonElement>(
+      '[data-testid="app-nav-rail"] button, button[aria-label="Settings"]',
+    ),
+  ).find((candidate) => candidate.getAttribute("aria-label") === name);
   if (!button) throw new Error(`Expected a rail button named ${name}`);
   return button;
 }
 
 function railLabels(): (string | null)[] {
-  return Array.from(rail().querySelectorAll("button"), (button) =>
-    button.getAttribute("aria-label"),
+  return Array.from(
+    document.querySelectorAll<HTMLButtonElement>(
+      '[data-testid="app-nav-rail"] button, button[aria-label="Settings"]',
+    ),
+    (button) => button.getAttribute("aria-label"),
   );
 }
 
 function currentRailLabels(): (string | null)[] {
   return Array.from(
-    rail().querySelectorAll('button[aria-current="page"]'),
+    document.querySelectorAll<HTMLButtonElement>(
+      '[data-testid="app-nav-rail"] button[aria-current="page"], button[aria-label="Settings"][aria-current="page"]',
+    ),
     (button) => button.getAttribute("aria-label"),
   );
 }
@@ -266,25 +288,6 @@ describe("AppNavRail", () => {
       "Settings",
     ]);
     expect(currentRailLabels()).toEqual(["Home"]);
-  });
-
-  it("rests Settings on the window card's bottom edge in the framed shell, and keeps its own bottom padding otherwise", () => {
-    const framed = renderRail(THREAD_PATH, { isFramed: true });
-    const framedNav = screen.getByRole("navigation", {
-      name: "Primary navigation",
-    });
-    expect(framedNav.lastElementChild).toBe(
-      screen.getByRole("button", { name: /^Settings/ }),
-    );
-    expect(framedNav.classList.contains("pb-2.5")).toBe(false);
-    framed.unmount();
-
-    renderRail(THREAD_PATH);
-    expect(
-      screen
-        .getByRole("navigation", { name: "Primary navigation" })
-        .classList.contains("pb-2.5"),
-    ).toBe(true);
   });
 
   it("moves the highlight from Home to a plugin panel and to Settings as the route changes", () => {
@@ -507,6 +510,44 @@ describe("AppNavRail", () => {
     ]);
   });
 
+  it.each([
+    { name: "Docs", isCompactViewport: false },
+    { name: "Search threads", isCompactViewport: false },
+    { name: "Docs", isCompactViewport: true },
+    { name: "Search threads", isCompactViewport: true },
+  ])(
+    "toggles $name visibility from its customization row (compact: $isCompactViewport) without activating it",
+    async ({ name, isCompactViewport }) => {
+      renderRail(THREAD_PATH, {
+        visibleKeys: ["__bb__/skills"],
+        isCompactViewport,
+      });
+      if (isCompactViewport) fireEvent.click(railButton("More"));
+      else fireEvent.keyDown(railButton("More"), { key: "Enter" });
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "Customize rail" }),
+      );
+
+      const editor = await screen.findByTestId("nav-rail-customize");
+      const checkbox = within(editor).getByRole("checkbox", {
+        name: `Show ${name} in sidebar`,
+      });
+      expect(checkbox.getAttribute("aria-checked")).toBe("false");
+
+      for (const checked of [true, false]) {
+        fireEvent.click(within(editor).getByRole("button", { name }), {
+          ctrlKey: !checked,
+        });
+        expect(checkbox.getAttribute("aria-checked")).toBe(String(checked));
+        expect(railLabels().includes(name)).toBe(checked);
+        expect(screen.getByTestId("nav-rail-customize")).toBe(editor);
+        expect(pathname()).toBe(THREAD_PATH);
+        expect(mocks.onNavigate).not.toHaveBeenCalled();
+        expect(mocks.dispatch).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("customizes the rail from a popover beside it without leaving Settings", async () => {
     renderRail(THREAD_PATH);
     fireEvent.click(railButton("Settings"));
@@ -581,7 +622,7 @@ describe("AppNavRail", () => {
     expect(wrapper.style.transform).toBe(openedAt);
   });
 
-  it("opens the More menu at the top of the rail instead of beside the More button", async () => {
+  it("opens the More menu beside the More button instead of at the top of the rail", async () => {
     renderRail(THREAD_PATH);
     vi.spyOn(railButton("Home"), "getBoundingClientRect").mockImplementation(
       () => new DOMRect(12, 40, 28, 28),
@@ -608,7 +649,7 @@ describe("AppNavRail", () => {
       if (!wrapper) throw new Error("Expected the menu position wrapper");
 
       await waitFor(() =>
-        expect(wrapper.style.transform).toBe("translate(52px, 40px)"),
+        expect(wrapper.style.transform).toBe("translate(52px, 200px)"),
       );
     } finally {
       for (const spy of viewport) spy.mockRestore();

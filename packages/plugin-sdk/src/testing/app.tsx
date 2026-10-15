@@ -31,6 +31,7 @@ import {
   type PluginAppDefinition,
   type PluginAppSetup,
   type ExperimentalClipboardContent,
+  type ExperimentalSaveFileOutcome,
   type PluginCodeThemeState,
   type PluginContentScriptDisposer,
   type PluginContentScriptRegistration,
@@ -43,6 +44,7 @@ import {
   type PluginHomepageSectionRegistration,
   type PluginMessageActionRegistration,
   type PluginMessageDirectiveRegistration,
+  type ExperimentalCodeFenceRendererRegistration,
   type PluginDiffRendererRegistration,
   type PluginNavPanelRegistration,
   type PluginNewThreadPanelActionRegistration,
@@ -1345,6 +1347,9 @@ const testPluginSdkApp = {
   ): Promise<boolean> {
     return activeClipboard?.(content) ?? Promise.resolve(true);
   },
+  experimental_saveFile(): Promise<ExperimentalSaveFileOutcome> {
+    return Promise.resolve("started");
+  },
   experimental_useSidebarThreadActions(): PluginSidebarThreadActions {
     return useSlotEnv("experimental_useSidebarThreadActions").sidebarActions;
   },
@@ -1507,6 +1512,7 @@ export interface CapturedPluginApp {
   sourceCodeRenderers: PluginSourceCodeRendererRegistration[];
   diffRenderers: PluginDiffRendererRegistration[];
   messageDirectives: PluginMessageDirectiveRegistration[];
+  codeFenceRenderers: ExperimentalCodeFenceRendererRegistration[];
   messageActions: PluginMessageActionRegistration[];
   providerIcons: CollectedPluginProviderIconRegistration[];
   icons: ExperimentalIconRegistration[];

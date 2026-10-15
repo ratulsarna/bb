@@ -7,12 +7,11 @@ import {
 import { describe, expect, it } from "vitest";
 import { threadScope, turnScope } from "@bb/domain";
 import {
-  createConnection,
   type DbConnection,
   type SlowDbQueryLogger,
   type SlowDbQueryLogFields,
 } from "../src/connection.js";
-import { migrate } from "../src/migrate.js";
+import { createMigratedConnection } from "../src/testing.js";
 import { noopNotifier } from "../src/notifier.js";
 import {
   createPendingInteraction,
@@ -53,6 +52,7 @@ import { replaceStoredProviderModelCatalog } from "../src/data/provider-model-ca
 import { openSession } from "../src/data/sessions.js";
 import {
   listDueScheduledQueuedThreadMessages,
+  listRetryableFailedQueuedThreadMessages,
   listQueuedThreadMessagesByWaitHolder,
 } from "../src/data/queued-thread-messages.js";
 import { listEnvironments } from "../src/data/environments.js";
@@ -135,11 +135,10 @@ class CapturingSlowQueryLogger implements SlowDbQueryLogger {
 
 function setup(): TestDb {
   const logger = new CapturingSlowQueryLogger();
-  const db = createConnection(":memory:", {
+  const db = createMigratedConnection({
     slowQueryLogger: logger,
     slowQueryThresholdMs: 0,
   });
-  migrate(db);
   const host = upsertHost(db, noopNotifier, {
     name: "query-plan-host",
   });
@@ -371,11 +370,7 @@ describe("slow query index plans", () => {
     },
   );
 
-  // Both queue indexes are PARTIAL. A partial index is only usable when the
-  // query repeats its WHERE clause, so a refactor that drops one liveness
-  // predicate from the query — or adds one to the index — silently degrades
-  // the sweep to a full table scan. Nothing else would notice.
-  it("finds due scheduled queued messages through the partial due index", () => {
+  it("finds due scheduled queued messages through the state due index", () => {
     const { db } = setup();
 
     const captured = captureStatements(db, () => {
@@ -388,6 +383,24 @@ describe("slow query index plans", () => {
       sql: captured[0]!.sql,
     });
     expect(details).toMatch(/USING INDEX queued_thread_messages_due_idx/u);
+    expect(details).not.toMatch(/SCAN queued_thread_messages/u);
+
+    db.$client.close();
+  });
+
+  it("finds retryable failed queued messages through the state retry index", () => {
+    const { db } = setup();
+
+    const captured = captureStatements(db, () => {
+      expect(listRetryableFailedQueuedThreadMessages(db, 1_000)).toEqual([]);
+    });
+    expect(captured).toHaveLength(1);
+    const details = queryPlanDetails({
+      db,
+      params: captured[0]!.params,
+      sql: captured[0]!.sql,
+    });
+    expect(details).toMatch(/USING INDEX queued_thread_messages_retry_idx/u);
     expect(details).not.toMatch(/SCAN queued_thread_messages/u);
 
     db.$client.close();

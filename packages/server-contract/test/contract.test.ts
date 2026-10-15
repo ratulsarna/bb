@@ -325,10 +325,7 @@ const OPTIONAL_SERVER_FIELD_GROUPS: readonly OptionalServerFieldGroup[] = [
     reason:
       "Timeline snapshot fields are absent on older servers; content metadata and detail continuation inputs only apply to paginated content; older row updates only appear when a latest page omits rows that changed inside its window; a detail item scope is absent when the whole turn is requested, and content stays inline unless deferral is requested.",
     fields: [
-      "threadTimelineResponseSchema.timelinePage.contentPage",
-      "threadTimelineResponseSchema.timelinePage.historySnapshot",
       "threadTimelineResponseSchema.timelinePage.olderRowUpdates",
-      "threadTimelineResponseSchema.timelinePage.olderRowsSourceSeqEnd",
       "timelineTurnSummaryDetailsQuerySchema.beforeCursor",
       "timelineTurnSummaryDetailsQuerySchema.deferContent",
       "timelineTurnSummaryDetailsQuerySchema.itemId",
@@ -526,10 +523,11 @@ const OPTIONAL_SERVER_FIELD_GROUPS: readonly OptionalServerFieldGroup[] = [
   },
   {
     reason:
-      "System provider lookups may target a host indirectly or directly, omit provider id to use the host default, and omit capability to return the full roster.",
+      "System provider lookups may target a host indirectly or directly, omit provider id to use the host default, omit the project when no project checkout should scope the model list, and omit capability to return the full roster.",
     fields: [
       "systemExecutionOptionsQuerySchema.environmentId",
       "systemExecutionOptionsQuerySchema.hostId",
+      "systemExecutionOptionsQuerySchema.projectId",
       "systemExecutionOptionsQuerySchema.providerId",
       "systemProvidersQuerySchema.capability",
       "systemProvidersQuerySchema.environmentId",

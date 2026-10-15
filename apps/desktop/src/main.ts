@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { attachServerUpdateControl } from "./server-update-control.js";
 import { registerServerChoiceIpc } from "./server-choice-ipc.js";
 import { randomUUID } from "node:crypto";
 import { accessSync, constants as fsConstants } from "node:fs";
@@ -5,6 +7,7 @@ import { arch, homedir, release, type as osType } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   app,
+  autoUpdater as nativeAutoUpdater,
   BrowserWindow,
   clipboard,
   dialog,
@@ -29,7 +32,11 @@ import {
 } from "@bb/config/app-surface";
 import { findMachineServiceFile } from "@bb/config/machine-service";
 import {
+  DEFAULT_CONNECT_BASE_URL,
   deriveConnectBaseUrl,
+  resolveDefaultConnectBaseUrl,
+  serverUrlForHandle,
+  type ConnectAccountSession,
   type ConnectCredential,
 } from "@bb/connect-client";
 import {
@@ -290,6 +297,7 @@ const OWNED_RUNTIME_KILL_TIMEOUT_MS = 1_000;
 const FOREIGN_RUNTIME_STOP_TIMEOUT_MS = 15_000;
 const FOREIGN_RUNTIME_KILL_TIMEOUT_MS = 3_000;
 const REMOTE_SYSTEM_CONFIG_POLL_INTERVAL_MS = 5 * 60 * 1000;
+const CONNECT_ACCOUNT_API_HANDLE = "connect";
 
 interface DesktopRuntime {
   bbProcess: BbAppProcess | null;
@@ -420,6 +428,7 @@ let startupErrorPage: StartupErrorPage | null = null;
 let startupActionPending = false;
 let connectSignInWindow: BrowserWindow | null = null;
 let stoppingForQuit = false;
+let appImageRelaunchPath: string | null = null;
 let quitting = false;
 let serverTargetStore: ServerTargetStore | null = null;
 let connectServerSync: ConnectServerSync | null = null;
@@ -789,14 +798,16 @@ function buildServerMenuArgs(): ServerMenuArgs {
     addServer() {
       void openSetServerUrlDialog(true);
     },
-    connectServersSkipReason:
-      connectServers.length === 0 ? connectServerSyncSkipReason : null,
+    connectServersSkipReason: connectServerSyncSkipReason,
     selectServer(serverId) {
       void setActiveServerTarget(serverId);
     },
     servers: buildMenuServerItems(connectServers),
     setServerUrl() {
       void openSetServerUrlDialog();
+    },
+    signInToConnect() {
+      openConnectSignIn(getFocusedApplicationWindow());
     },
   };
 }
@@ -1227,19 +1238,10 @@ async function authenticateConnectTarget(
     }
     cachedFailure = movedResult;
   }
-  const accountUrl = deriveConnectBaseUrl(remoteServerUrl);
-  const accountCookieName =
-    new URL(accountUrl).protocol === "http:"
-      ? "better-auth.session_token"
-      : "__Secure-better-auth.session_token";
-  const accountCookies = await cookieStore.get({
-    name: accountCookieName,
-    url: accountUrl,
-  });
-  const accountCookie = accountCookies.find(
-    (cookie) => cookie.name === accountCookieName,
+  const accountCookie = await readConnectAccountCookie(
+    deriveConnectBaseUrl(remoteServerUrl),
   );
-  if (accountCookie !== undefined) {
+  if (accountCookie !== null) {
     const accountResult = await installConnectDesktopSession({
       cookieStore,
       mintCookie: createAccountCookieSource({
@@ -1285,6 +1287,82 @@ async function authenticateConnectTarget(
     void ensureDesktopMachineEnrolled();
   }
   return localResult;
+}
+
+function connectAccountCookieName(accountUrl: string): string {
+  return new URL(accountUrl).protocol === "http:"
+    ? "better-auth.session_token"
+    : "__Secure-better-auth.session_token";
+}
+
+async function readConnectAccountCookie(
+  accountUrl: string,
+): Promise<{ name: string; value: string } | null> {
+  const name = connectAccountCookieName(accountUrl);
+  const cookies = await session.defaultSession.cookies.get({
+    name,
+    url: accountUrl,
+  });
+  const cookie = cookies.find((candidate) => candidate.name === name);
+  return cookie === undefined ? null : { name, value: cookie.value };
+}
+
+function resolveConnectAccountUrl(): string {
+  const target = serverTargetStore?.getTarget();
+  const serverUrl =
+    target?.kind === "connect"
+      ? target.server.url
+      : (listMenuConnectServers()[0]?.url ??
+        cachedConnectCredential?.serverUrl ??
+        null);
+  if (serverUrl !== null) {
+    return deriveConnectBaseUrl(serverUrl);
+  }
+  try {
+    return resolveDefaultConnectBaseUrl(process.env);
+  } catch (error) {
+    desktopLogger.warn(
+      `[desktop] using ${DEFAULT_CONNECT_BASE_URL} for bb Connect: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return DEFAULT_CONNECT_BASE_URL;
+  }
+}
+
+async function readConnectAccountSession(): Promise<ConnectAccountSession | null> {
+  const serverUrls = listMenuConnectServers().map(
+    (server) => new URL(server.url).origin,
+  );
+  if (serverUrls.length === 0) {
+    serverUrls.push(
+      serverUrlForHandle(
+        resolveConnectAccountUrl(),
+        CONNECT_ACCOUNT_API_HANDLE,
+      ),
+    );
+  }
+  for (const serverUrl of serverUrls) {
+    const cookie = await readConnectAccountCookie(
+      deriveConnectBaseUrl(serverUrl),
+    );
+    if (cookie !== null) {
+      return { serverUrl, cookie };
+    }
+  }
+  return null;
+}
+
+async function adoptSavedConnectServers(): Promise<void> {
+  if (serverTargetStore === null) {
+    return;
+  }
+  const switched = await serverTargetStore.adoptConnectServers(
+    listMenuConnectServers(),
+  );
+  if (switched) {
+    await applyServerTarget();
+    return;
+  }
+  refreshApplicationMenu();
 }
 
 async function clearCachedConnectCredential(): Promise<void> {
@@ -1641,25 +1719,24 @@ async function runStartupAction(
 }
 
 function openConnectSignIn(parentWindow: BrowserWindow | null): void {
-  const target = serverTargetStore?.getTarget();
-  if (target?.kind !== "connect") return;
-  const targetUrl = target.server.url;
   if (connectSignInWindow !== null && !connectSignInWindow.isDestroyed()) {
     connectSignInWindow.focus();
     return;
   }
-  const accountUrl = deriveConnectBaseUrl(targetUrl);
+  const target = serverTargetStore?.getTarget();
+  const targetUrl = target?.kind === "connect" ? target.server.url : null;
+  const accountUrl = resolveConnectAccountUrl();
   const accountHost = new URL(accountUrl).hostname;
-  const cookieName =
-    new URL(accountUrl).protocol === "http:"
-      ? "better-auth.session_token"
-      : "__Secure-better-auth.session_token";
+  const cookieName = connectAccountCookieName(accountUrl);
   const signInUrl = new URL("/dashboard", accountUrl);
-  signInUrl.searchParams.set("returnTo", targetUrl);
+  if (targetUrl !== null) {
+    signInUrl.searchParams.set("returnTo", targetUrl);
+  }
   const signInWindow = new BrowserWindow({
     height: 720,
     parent: parentWindow ?? undefined,
-    title: "Reconnect bb Connect",
+    title:
+      targetUrl === null ? "Sign in to bb Connect" : "Reconnect bb Connect",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -1685,8 +1762,10 @@ function openConnectSignIn(parentWindow: BrowserWindow | null): void {
     completed = true;
     session.defaultSession.cookies.removeListener("changed", onCookieChanged);
     if (!signInWindow.isDestroyed()) signInWindow.close();
+    connectServerSync?.syncNow().catch(() => {});
     const currentTarget = serverTargetStore?.getTarget();
     if (
+      targetUrl !== null &&
       currentTarget?.kind === "connect" &&
       currentTarget.server.url === targetUrl
     ) {
@@ -1753,7 +1832,6 @@ async function loadServerMovedView(move: DesktopServerMove): Promise<void> {
 
 async function applyServerTarget(): Promise<void> {
   startupErrorPage = null;
-  desktopBrowserBrokerClient?.reconnect();
   if (serverTargetStore === null) {
     return;
   }
@@ -1761,6 +1839,13 @@ async function applyServerTarget(): Promise<void> {
   serverTargetGeneration += 1;
   const generation = serverTargetGeneration;
   const isCurrent = (): boolean => serverTargetGeneration === generation;
+  desktopBrowserBrokerClient?.suspend();
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (applicationWindowWebContentsIds.has(window.webContents.id))
+      desktopBrowserViewManager?.prepareWindowReload(window);
+  }
+  await loadLoadingView();
+  if (!isCurrent()) return;
   if (serverTargetStore.getTarget().kind === "builtin") {
     await activateLocalServerMoveIfLocked();
     if (!isCurrent()) {
@@ -1768,6 +1853,7 @@ async function applyServerTarget(): Promise<void> {
     }
   }
   const target = serverTargetStore.getTarget();
+  desktopBrowserBrokerClient?.reconnect();
 
   if (target.kind === "builtin") {
     startServerMovedWatcher();
@@ -1828,7 +1914,7 @@ async function applyServerTarget(): Promise<void> {
         details: unauthorized
           ? "The desktop app could not establish a session for this Connect server. " +
             (result.detail === "this account does not own the selected server"
-              ? `(unauthorized: This account does not own ${target.server.name}.)`
+              ? `(unauthorized: This account does not own ${new URL(target.server.url).host}.)`
               : "(unauthorized: The app was rejected.)")
           : "The desktop app could not establish a session for this Connect server. " +
             `(${result.code}: ${result.detail})`,
@@ -1920,9 +2006,36 @@ async function openSetServerUrlDialog(add = false): Promise<void> {
   if (serverTargetStore === null || serverUrlDialogPreloadPath === null) {
     return;
   }
-  const previousUrl = add ? null : serverTargetStore.getCustomServerUrl();
+  const target = serverTargetStore.getTarget();
+  if (!add && target.kind === "connect") {
+    const result = await openServerUrlDialog({
+      initialName: serverTargetStore.getConnectServerName(target.server.handle),
+      initialUrl: target.server.url,
+      mode: "rename",
+      parentWindow: getFocusedApplicationWindow(),
+      preloadPath: serverUrlDialogPreloadPath,
+    });
+    if (result.kind !== "set") {
+      return;
+    }
+    await serverTargetStore.setConnectServerName(
+      target.server.handle,
+      result.name,
+    );
+    refreshApplicationMenu();
+    return;
+  }
+  if (!add && target.kind !== "custom") {
+    return;
+  }
+  const previousUrl = !add && target.kind === "custom" ? target.url : null;
   const result = await openServerUrlDialog({
+    initialName:
+      serverTargetStore
+        .getCustomServers()
+        .find((server) => server.url === previousUrl)?.name ?? null,
     initialUrl: previousUrl,
+    mode: add ? "add" : "edit",
     parentWindow: getFocusedApplicationWindow(),
     preloadPath: serverUrlDialogPreloadPath,
   });
@@ -1935,10 +2048,21 @@ async function openSetServerUrlDialog(add = false): Promise<void> {
   ) {
     return;
   }
+  if (result.kind === "set" && result.url === previousUrl) {
+    await serverTargetStore.setCustomServerName(previousUrl, result.name);
+    refreshApplicationMenu();
+    return;
+  }
   await serverTargetStore.setCustomServerUrl(
     result.kind === "set" ? result.url : null,
-    previousUrl ?? undefined,
+    {
+      ...(previousUrl === null ? {} : { replacedUrl: previousUrl }),
+      ...(result.kind === "set" && !(add && result.name === null)
+        ? { name: result.name }
+        : {}),
+    },
   );
+  await serverTargetStore.adoptConnectServers(listMenuConnectServers());
   await applyServerTarget();
 }
 
@@ -2204,6 +2328,15 @@ function handleBeforeQuit(event: Event): void {
   event.preventDefault();
   stoppingForQuit = true;
   void finishQuit().finally(() => {
+    if (appImageRelaunchPath !== null) {
+      app.releaseSingleInstanceLock();
+      const replacement = spawn(appImageRelaunchPath, process.argv.slice(1), {
+        detached: true,
+        stdio: "ignore",
+      });
+      replacement.on("error", (error) => desktopLogger.error(error.message));
+      replacement.unref();
+    }
     app.quit();
   });
 }
@@ -2220,6 +2353,30 @@ async function finishQuit(): Promise<void> {
   desktopFindViewManager?.destroyAll();
   await desktopWindowFactory?.persistOpenWindows();
   await stopOwnedRuntime();
+}
+
+async function checkDesktopUpdates(): Promise<void> {
+  await Promise.all([
+    desktopUpdateService?.checkForUpdates(),
+    desktopAutoUpdateService?.checkForUpdates(),
+  ]);
+}
+
+async function installDesktopUpdate(): Promise<void> {
+  if (
+    desktopAutoUpdateService === null ||
+    !desktopAutoUpdateService.getInfo().updateDownloaded
+  )
+    return;
+  const appImagePath = process.env.APPIMAGE?.trim() ?? "";
+  if (
+    process.platform === "linux" &&
+    (appImagePath.length === 0 || !canReplaceAppImage(appImagePath))
+  ) {
+    throw new Error("This AppImage cannot be replaced in place.");
+  }
+  await desktopWindowFactory?.persistOpenWindows();
+  await desktopAutoUpdateService.installUpdate();
 }
 
 function registerDesktopUpdateIpc(): void {
@@ -2255,35 +2412,10 @@ function registerDesktopUpdateIpc(): void {
     await openDataDirectory();
   });
   ipcMain.handle(BB_DESKTOP_CHECK_FOR_UPDATES_CHANNEL, async () => {
-    await Promise.all([
-      desktopUpdateService?.checkForUpdates() ?? Promise.resolve(null),
-      desktopAutoUpdateService?.checkForUpdates() ?? Promise.resolve(null),
-    ]);
+    await checkDesktopUpdates();
     return getCurrentDesktopInfo();
   });
-  ipcMain.handle(BB_DESKTOP_INSTALL_UPDATE_CHANNEL, async () => {
-    if (desktopAutoUpdateService === null) {
-      return;
-    }
-    if (!desktopAutoUpdateService.getInfo().updateDownloaded) {
-      desktopAutoUpdateService.installUpdate();
-      return;
-    }
-    const appImagePath = process.env.APPIMAGE?.trim() ?? "";
-    if (
-      process.platform === "linux" &&
-      (appImagePath.length === 0 || !canReplaceAppImage(appImagePath))
-    ) {
-      desktopLogger.error(
-        `Desktop update install skipped: ${appImagePath || "this build"} cannot be replaced in place. The runtime stays up; download the new AppImage instead.`,
-      );
-      return;
-    }
-    quitting = true;
-    stoppingForQuit = true;
-    await finishQuit();
-    desktopAutoUpdateService.installUpdate();
-  });
+  ipcMain.handle(BB_DESKTOP_INSTALL_UPDATE_CHANNEL, installDesktopUpdate);
   ipcMain.on(
     BB_DESKTOP_SET_SPLIT_NAVIGATION_ENABLED_CHANNEL,
     (event, enabled: unknown, directionalCommands: unknown) => {
@@ -2414,6 +2546,29 @@ async function spawnOwnedRuntime(
       processExecPath: process.execPath,
     }),
   });
+  const updater = desktopAutoUpdateService;
+  if (updater !== null) {
+    attachServerUpdateControl({
+      child: bbProcess.childProcess,
+      getInfo: () => ({
+        ...updater.getInfo(),
+        downloadState: updater.getInfo().downloadState ?? "idle",
+        supported:
+          shouldEnableDesktopAutoUpdate({
+            env: process.env,
+            isPackaged: app.isPackaged,
+          }) &&
+          resolveDesktopUpdateSupport({
+            canReplaceAppImage,
+            env: process.env,
+            platform: resolveBbDesktopPlatform(process.platform),
+          }).autoUpdate,
+      }),
+      check: checkDesktopUpdates,
+      install: installDesktopUpdate,
+      subscribe: (listener) => updater.subscribe(listener),
+    });
+  }
   const runtime: DesktopRuntime = {
     bbProcess,
     ownership: "spawned",
@@ -2842,6 +2997,7 @@ async function runDesktopApp(): Promise<void> {
     storagePath: join(userDataPath, SERVER_TARGET_FILE_NAME),
   });
   await serverTargetStore.load();
+  await serverTargetStore.adoptConnectServers(listMenuConnectServers());
   const dataDir = resolveDataDirFromEnv({
     env: process.env,
     homeDir: homedir(),
@@ -2859,6 +3015,7 @@ async function runDesktopApp(): Promise<void> {
   });
   cachedConnectCredential = await connectCredentialCache.read();
   connectServerSync = createConnectServerSync({
+    getAccountSession: readConnectAccountSession,
     getCredential: () => cachedConnectCredential,
     getLocalServerUrl: () =>
       localServerMove === null ? (currentRuntime?.serverUrl ?? null) : null,
@@ -2883,7 +3040,7 @@ async function runDesktopApp(): Promise<void> {
           url: synced.url,
         });
       }
-      refreshApplicationMenu();
+      void adoptSavedConnectServers();
     },
     log: (message) => {
       desktopLogger.info(`[desktop] ${message}`);
@@ -2937,7 +3094,18 @@ async function runDesktopApp(): Promise<void> {
       !app.isPackaged && process.env.BB_DESKTOP_AUTO_UPDATE === "1",
     logger: desktopLogger,
     platform: desktopPlatform,
-    updater: createElectronAutoUpdaterAdapter(autoUpdater),
+    updater: createElectronAutoUpdaterAdapter(
+      autoUpdater,
+      nativeAutoUpdater,
+      process.platform === "linux" && process.env.APPIMAGE
+        ? {
+            path: process.env.APPIMAGE,
+            relaunch: (execPath) => {
+              appImageRelaunchPath = execPath;
+            },
+          }
+        : null,
+    ),
   });
   desktopUpdateService.subscribe(() => {
     sendDesktopInfoChanged();

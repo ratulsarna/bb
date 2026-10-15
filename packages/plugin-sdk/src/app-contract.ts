@@ -160,11 +160,10 @@ export interface ExperimentalQuestionFormHost {
  * the host adds room for its microphone controls when voice input is
  * available.
  */
-export interface ExperimentalVoiceInputTextareaProps
-  extends Omit<
-    ComponentPropsWithRef<"textarea">,
-    "value" | "defaultValue" | "onChange" | "children"
-  > {
+export interface ExperimentalVoiceInputTextareaProps extends Omit<
+  ComponentPropsWithRef<"textarea">,
+  "value" | "defaultValue" | "onChange" | "children"
+> {
   value: string;
   /**
    * Receives typed edits and finished transcripts, which the host appends to
@@ -492,6 +491,51 @@ export interface PluginMessageDirectiveProps {
    * when the message surface has no workspace viewer available.
    */
   openWorkspaceFile: PluginMessageDirectiveOpenWorkspaceFile | null;
+}
+
+/**
+ * Where a fenced code block stands while its message is written.
+ *
+ * - `"streaming"`: the closing delimiter has not arrived and the message is
+ *   still being written; `code` is a prefix of the final body.
+ * - `"closed"`: the closing delimiter is present; `code` is final.
+ * - `"unclosed"`: the message ended without a closing delimiter (for example
+ *   an interrupted reply); `code` will not grow.
+ *
+ * @experimental Audit before relying on this as a stable contract.
+ */
+export type ExperimentalCodeFenceStatus = "streaming" | "closed" | "unclosed";
+
+/**
+ * Props passed to an `experimental_codeFenceRenderer` component — one fenced
+ * code block whose info-string language the plugin claimed, inside assistant
+ * (or nested agent) message Markdown. BB mounts the component once per fence
+ * and keeps that instance for as long as the message stays on screen, so
+ * component state survives the whole stream, including the moment the fence
+ * closes and the moment the reply finishes.
+ *
+ * @experimental Audit before relying on this as a stable contract.
+ */
+export interface ExperimentalCodeFenceRendererProps {
+  /** The fence body received so far, without the fence delimiters. */
+  code: string;
+  /** The matched lowercase info-string language (e.g. `"ui"`). */
+  language: string;
+  status: ExperimentalCodeFenceStatus;
+  /**
+   * Zero-based ordinal of this fence among the fences of the same language in
+   * the same message. It does not change while the message streams, so
+   * `${message.id}#${language}#${index}` keys state that must outlive the
+   * mounted component (a reload, or the message scrolling out of the rendered
+   * window).
+   */
+  index: number;
+  message: PluginMessageDirectiveMessage;
+  /**
+   * BB's own code block for this fence. Render it to show the source, for
+   * example while `status` is `"streaming"` or when `code` does not parse.
+   */
+  Original: ComponentType;
 }
 
 // ---------------------------------------------------------------------------
@@ -1182,6 +1226,23 @@ export interface ExperimentalClipboardContent {
 }
 
 /**
+ * What {@link PluginSdkApp.experimental_saveFile} saves: a URL on the bb
+ * server (such as one of the plugin's own HTTP routes), or bytes already in
+ * the page, plus the file name the user sees.
+ */
+export type ExperimentalSaveFileRequest =
+  | { fileName: string; url: string }
+  | { fileName: string; blob: Blob };
+
+/**
+ * How {@link PluginSdkApp.experimental_saveFile} started. `started` means
+ * the browser or native shell took over the download; completion and share
+ * cancellation are not reported to the page. `failed` means the download
+ * could not start; bb already showed an error toast.
+ */
+export type ExperimentalSaveFileOutcome = "started" | "failed";
+
+/**
  * The `threads` area of {@link PluginBrowserBbSdk}: bb's public thread API
  * with the calling plugin's identity filled in. `spawn` and `fork` stamp
  * `origin: "plugin"` and `originPluginId` unless the call names another
@@ -1190,7 +1251,9 @@ export interface ExperimentalClipboardContent {
  */
 export type PluginBoundThreadsArea = Omit<
   BbSdkAreas["threads"],
-  "getPluginMetadata" | "updatePluginMetadata" | "experimental_listPluginMetadata"
+  | "getPluginMetadata"
+  | "updatePluginMetadata"
+  | "experimental_listPluginMetadata"
 > & {
   getPluginMetadata(
     args: Omit<ThreadPluginMetadataArgs, "pluginId"> & { pluginId?: string },
@@ -1453,8 +1516,9 @@ export interface PluginThreadActionRunInput {
 export interface PluginThreadAction {
   label: string;
   /**
-   * Short secondary text on a muted second line under the label, e.g. the
-   * current value of a choice list.
+   * Short secondary text, e.g. the current value of a choice list. Shown on
+   * a muted second line under the label, except on rows with `choices`,
+   * where only tooltips and screen readers include it.
    */
   detail?: string;
   icon: BbIconName;
@@ -1500,7 +1564,7 @@ export interface PluginThreadActionItemInput<Data> {
  * Add an action to every thread actions menu: the thread header's menu, the
  * sidebar row's menu and right-click menu, the compact long-press drawer, and,
  * when the user picks it, a sidebar row's quick-action buttons. bb's own
- * actions (Open in split, Copy thread link, Mark read, Pin, Rename, Archive,
+ * actions (Open in split, Copy link, Mark read, Pin, Rename, Archive,
  * Delete, …) are registrations of this same shape.
  *
  * `useData` is a React hook the host calls once for the whole app, never per
@@ -1783,6 +1847,31 @@ export interface PluginMessageDirectiveRegistration {
    */
   id: string;
   component: ComponentType<PluginMessageDirectiveProps>;
+}
+
+/**
+ * Render fenced code blocks of chosen languages inside assistant (and nested
+ * agent) message Markdown. ` ```ui ` matches a registration whose `languages`
+ * include `"ui"`. Fences elsewhere (user messages, file previews, plugin
+ * Markdown) keep BB's code block.
+ *
+ * BB's code block also renders when two plugins claim the same language (BB
+ * logs a warning naming them), when the plugin is disabled, and for a fence
+ * whose component throws. A throw affects that fence only, and BB tries the
+ * component again when the fence's `code` or `status` changes.
+ *
+ * @experimental Audit before relying on this as a stable contract.
+ */
+export interface ExperimentalCodeFenceRendererRegistration {
+  /** Unique within the plugin; letters, digits, `-`, `_`. */
+  id: string;
+  /**
+   * Lowercase info-string languages, e.g. `["ui", "app"]`. Each starts with a
+   * letter or digit and contains only `a-z`, `0-9`, `+`, `#`, `.`, `_`, `-`.
+   * A language may be claimed once per plugin.
+   */
+  languages: readonly string[];
+  component: ComponentType<ExperimentalCodeFenceRendererProps>;
 }
 
 /**
@@ -2209,6 +2298,14 @@ export interface PluginAppSlots {
    */
   experimental_diffRenderer(registration: PluginDiffRendererRegistration): void;
   messageDirective(registration: PluginMessageDirectiveRegistration): void;
+  /**
+   * Render fenced code blocks of chosen languages in assistant messages (see
+   * {@link ExperimentalCodeFenceRendererRegistration}). Experimental: see
+   * docs/api_to_audit.md.
+   */
+  experimental_codeFenceRenderer(
+    registration: ExperimentalCodeFenceRendererRegistration,
+  ): void;
   messageAction(registration: PluginMessageActionRegistration): void;
   /**
    * @deprecated Use `app.commands.register` with the same registration.
@@ -3637,11 +3734,13 @@ export interface PluginSdkApp {
   experimental_ThreadActionsContextMenu: ComponentType<PluginThreadActionsContextMenuProps>;
   /**
    * bb's thread menu groups, for a registration that joins one:
-   * `open` (split), `organize` (copy, read, pin, move, rename), `settings`,
-   * and `lifecycle` (archive, delete). Experimental: see docs/api_to_audit.md.
+   * `open` (split, copy link, new thread in environment), `state` (pin,
+   * read, notifications), `organize` (rename, move), `settings`, and
+   * `lifecycle` (archive, delete). Experimental: see docs/api_to_audit.md.
    */
   experimental_THREAD_ACTION_GROUPS: {
     readonly open: "1_open";
+    readonly state: "1_state";
     readonly organize: "2_organize";
     readonly settings: "3_settings";
     readonly lifecycle: "4_lifecycle";
@@ -3782,6 +3881,21 @@ export interface PluginSdkApp {
   experimental_copyToClipboard(
     content: ExperimentalClipboardContent,
   ): Promise<boolean>;
+  /**
+   * Saves a file through bb's own download path, the one bb's file preview
+   * and attachment downloads use. Browsers and bb Desktop start an ordinary
+   * download. In the bb iOS app, where a download link would otherwise
+   * replace the app, the file goes to the system share sheet (Save to Files,
+   * AirDrop, other apps). A plain function: call it from a click handler and
+   * keep a real `href` on the link for copy-link and accessibility. Resolves
+   * with `started` or `failed` and never rejects. Completion and share-sheet
+   * cancellation are not reported. The native shell shows download errors;
+   * bb shows an error toast when the download cannot start.
+   * Experimental: see docs/api_to_audit.md.
+   */
+  experimental_saveFile(
+    request: ExperimentalSaveFileRequest,
+  ): Promise<ExperimentalSaveFileOutcome>;
   /**
    * The host-owned chat component (see {@link ThreadChatProps}). Together
    * with `Markdown`, the only components the SDK ships — everything else
