@@ -1,3 +1,4 @@
+import type { ComponentType } from "react";
 import { z } from "zod";
 import type {
   ComposerCustomization,
@@ -31,6 +32,9 @@ import type {
   PluginThreadHeaderActionRegistration,
   PluginThreadActionRegistration,
   ExperimentalPluginBrowserToolbarActionRegistration,
+  ExperimentalSidebarHeaderProps,
+  ExperimentalSidebarNavigationPlacement,
+  ExperimentalSidebarNavigationRegistration,
   PluginThreadListRegistration,
   PluginThreadPanelActionRegistration,
   PluginTimelineRendererRegistration,
@@ -257,31 +261,48 @@ const NAV_PANEL_REGISTRATION_KEYS: ReadonlySet<string> = new Set(
     path: true,
     component: true,
     fixedTabs: true,
-    experimental_sidebarAccessory: true,
+    experimental_useBadge: true,
     headerContent: true,
   } satisfies Record<keyof PluginNavPanelRegistration, true>),
 );
 
-/** Old navPanel keys and the names that replaced them (SDK 0.4.16). */
+/** Old navPanel keys whose registration fails, naming the replacement. */
 const RENAMED_NAV_PANEL_KEYS: ReadonlyMap<string, string> = new Map([
-  ["experimental_fixedTabs", "fixedTabs"],
+  ["experimental_fixedTabs", 'was renamed to "fixedTabs" in SDK 0.4.16'],
+]);
+
+/** Old navPanel keys that are ignored with a warning, naming the replacement. */
+const RETIRED_NAV_PANEL_KEYS: ReadonlyMap<string, string> = new Map([
+  [
+    "experimental_sidebarAccessory",
+    'is ignored: it was replaced by "experimental_useBadge", a hook returning a badge value, in SDK 0.6.53',
+  ],
 ]);
 
 /**
- * A plugin built against an SDK before 0.4.16 still passes
- * `experimental_fixedTabs`. Silently dropping it would leave the panel
- * without its tabs and no error (accepted-but-ignored fields are forbidden),
- * so a renamed key fails with its new name and any other stale
- * `experimental_` key fails as unknown.
+ * A plugin built against an older SDK still passes a replaced key. A renamed
+ * key such as `experimental_fixedTabs` fails naming its new name, because
+ * dropping it would silently remove behavior the plugin still relies on. A
+ * retired key whose host surface no longer exists, such as
+ * `experimental_sidebarAccessory`, already showed nothing, so it is dropped
+ * with a warning naming its replacement and the plugin keeps loading. Any
+ * other stale `experimental_` key fails as unknown.
  */
-function rejectStaleNavPanelKeys(kind: string, registration: object): void {
+function checkStaleNavPanelKeys(
+  kind: string,
+  registration: object,
+  onWarning: (message: string) => void,
+): void {
   for (const key of Object.keys(registration)) {
     if (NAV_PANEL_REGISTRATION_KEYS.has(key)) continue;
-    const renamedTo = RENAMED_NAV_PANEL_KEYS.get(key);
-    if (renamedTo !== undefined) {
-      throw new Error(
-        `${kind}: "${key}" was renamed to "${renamedTo}" in SDK 0.4.16`,
-      );
+    const renamed = RENAMED_NAV_PANEL_KEYS.get(key);
+    if (renamed !== undefined) {
+      throw new Error(`${kind}: "${key}" ${renamed}`);
+    }
+    const retired = RETIRED_NAV_PANEL_KEYS.get(key);
+    if (retired !== undefined) {
+      onWarning(`${kind}: "${key}" ${retired}`);
+      continue;
     }
     if (key.startsWith("experimental_")) {
       throw new Error(`${kind}: unknown field "${key}"`);
@@ -356,6 +377,7 @@ export interface CollectedPluginAppRegistrations {
   sidebarFooterActions: PluginSidebarFooterActionRegistration[];
   experimentalSidebarFooterItems: CollectedExperimentalSidebarFooterItem[];
   threadLists: PluginThreadListRegistration[];
+  experimentalSidebarNavigations: CollectedSidebarNavigationRegistration[];
   threadHeaderActions: PluginThreadHeaderActionRegistration[];
   threadActions: PluginThreadActionRegistration<unknown>[];
   browserToolbarActions: ExperimentalPluginBrowserToolbarActionRegistration[];
@@ -372,6 +394,10 @@ export interface CollectedPluginAppRegistrations {
   environmentProviderInputs: PluginEnvironmentProviderInputsRegistration[];
   machineProviderInputs: PluginMachineProviderInputsRegistration[];
   contentScripts: PluginContentScriptRegistration[];
+}
+
+export interface CollectedSidebarNavigationRegistration extends ExperimentalSidebarNavigationRegistration {
+  placement: ExperimentalSidebarNavigationPlacement;
 }
 
 const sidebarFooterItemsByRegistrationSet = new WeakMap<
@@ -466,8 +492,7 @@ function collectPanelAction<C, Run>(
  */
 export function collectPluginAppRegistrations(
   definition: PluginAppDefinition,
-  onComposerCustomizationRejected: (reason: string) => void = (reason) =>
-    console.warn(reason),
+  onWarning: (message: string) => void = (message) => console.warn(message),
 ): CollectedPluginAppRegistrations {
   const sidebarFooterItems: CollectedSidebarFooterItem[] = [];
   const collected: CollectedPluginAppRegistrations = {
@@ -482,6 +507,7 @@ export function collectPluginAppRegistrations(
     sidebarFooterActions: [],
     experimentalSidebarFooterItems: [],
     threadLists: [],
+    experimentalSidebarNavigations: [],
     threadHeaderActions: [],
     threadActions: [],
     browserToolbarActions: [],
@@ -512,6 +538,8 @@ export function collectPluginAppRegistrations(
     pendingInteraction: new Set<string>(),
     sidebarFooterItem: new Set<string>(),
     threadList: new Set<string>(),
+    sidebarNavigation: new Set<string>(),
+    sidebarHeader: new Set<string>(),
     threadHeaderAction: new Set<string>(),
     threadAction: new Set<string>(),
     browserToolbarAction: new Set<string>(),
@@ -580,9 +608,24 @@ export function collectPluginAppRegistrations(
     });
   }
 
+  const legacySidebarHeaders: ComponentType<ExperimentalSidebarHeaderProps>[] =
+    [];
+  const legacySlotAliases = {
+    experimental_sidebarHeader(registration: LegacySidebarHeaderRegistration) {
+      legacySidebarHeaders.push(
+        collectTitledComponent(
+          "slots.experimental_sidebarHeader",
+          seenIds.sidebarHeader,
+          registration,
+        ).component,
+      );
+    },
+  };
+
   definition.setup({
     commands: { register: registerCommand },
     slots: {
+      ...legacySlotAliases,
       homepageSection(registration) {
         const kind = "slots.homepageSection";
         const id = requireSlotId(kind, registration?.id);
@@ -628,7 +671,7 @@ export function collectPluginAppRegistrations(
         const kind = "slots.navPanel";
         const id = requireSlotId(kind, registration?.id);
         requireUniqueId(kind, seenIds.navPanel, id);
-        rejectStaleNavPanelKeys(kind, registration);
+        checkStaleNavPanelKeys(kind, registration, onWarning);
         const panelId = id;
         const path = requireNonEmptyString(kind, "path", registration.path);
         if (!PLUGIN_SLOT_ID_PATTERN.test(path)) {
@@ -645,11 +688,11 @@ export function collectPluginAppRegistrations(
           );
         }
         if (
-          registration.experimental_sidebarAccessory !== undefined &&
-          typeof registration.experimental_sidebarAccessory !== "function"
+          registration.experimental_useBadge !== undefined &&
+          typeof registration.experimental_useBadge !== "function"
         ) {
           throw new Error(
-            `${kind}: "experimental_sidebarAccessory" must be a React component function when set`,
+            `${kind}: "experimental_useBadge" must be a React hook function when set`,
           );
         }
         const fixedTabs: PluginNavPanelFixedTabRegistration[] = (() => {
@@ -724,10 +767,9 @@ export function collectPluginAppRegistrations(
           path,
           component: requireComponent(kind, registration.component),
           ...(fixedTabs.length > 0 ? { fixedTabs } : {}),
-          ...(registration.experimental_sidebarAccessory !== undefined
+          ...(registration.experimental_useBadge !== undefined
             ? {
-                experimental_sidebarAccessory:
-                  registration.experimental_sidebarAccessory,
+                experimental_useBadge: registration.experimental_useBadge,
               }
             : {}),
           ...(registration.headerContent !== undefined
@@ -786,6 +828,36 @@ export function collectPluginAppRegistrations(
             registration,
           ),
         );
+      },
+      experimental_sidebarNavigation(registration) {
+        const kind = "slots.experimental_sidebarNavigation";
+        const collectedRegistration = collectTitledComponent(
+          kind,
+          seenIds.sidebarNavigation,
+          registration,
+        );
+        const placement = registration.placement;
+        if (
+          placement !== undefined &&
+          placement !== "rail" &&
+          placement !== "list"
+        ) {
+          throw new Error(`${kind}: "placement" must be "rail" or "list"`);
+        }
+        const headerComponent = registration.headerComponent;
+        if (
+          headerComponent !== undefined &&
+          typeof headerComponent !== "function"
+        ) {
+          throw new Error(
+            `${kind}: "headerComponent" must be a React component function`,
+          );
+        }
+        collected.experimentalSidebarNavigations.push({
+          ...collectedRegistration,
+          placement: placement ?? "list",
+          ...(headerComponent !== undefined ? { headerComponent } : {}),
+        });
       },
       experimental_threadHeaderAction(registration) {
         const kind = "slots.experimental_threadHeaderAction";
@@ -1016,7 +1088,7 @@ export function collectPluginAppRegistrations(
         const customization = collectComposerCustomization(
           registration,
           seenIds.composerCustomization,
-          onComposerCustomizationRejected,
+          (reason) => onWarning(`composer customization rejected: ${reason}`),
           seenIds.composerPopup,
         );
         if (customization !== null) {
@@ -1057,5 +1129,43 @@ export function collectPluginAppRegistrations(
     },
   });
 
+  attachLegacySidebarHeaders(
+    collected.experimentalSidebarNavigations,
+    legacySidebarHeaders,
+    onWarning,
+  );
   return collected;
+}
+
+interface LegacySidebarHeaderRegistration {
+  id: string;
+  title: string;
+  description?: string;
+  component: ComponentType<ExperimentalSidebarHeaderProps>;
+}
+
+function attachLegacySidebarHeaders(
+  navigations: CollectedSidebarNavigationRegistration[],
+  headers: readonly ComponentType<ExperimentalSidebarHeaderProps>[],
+  onWarning: (message: string) => void,
+): void {
+  const [header, ...extraHeaders] = headers;
+  if (header === undefined) return;
+  const kind = "slots.experimental_sidebarHeader";
+  if (extraHeaders.length > 0) {
+    onWarning(
+      `${kind}: only the first header is used; pass "headerComponent" to each experimental_sidebarNavigation instead`,
+    );
+  }
+  let attached = false;
+  navigations.forEach((navigation, index) => {
+    if (navigation.headerComponent !== undefined) return;
+    navigations[index] = { ...navigation, headerComponent: header };
+    attached = true;
+  });
+  if (!attached) {
+    onWarning(
+      `${kind}: ignored because the plugin registers no navigation without a "headerComponent"`,
+    );
+  }
 }

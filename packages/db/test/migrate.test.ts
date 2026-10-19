@@ -8,6 +8,7 @@ import {
   dropIdleLifecycleIndexes,
   rewindThreadPruningWork,
   dropMarketplaceSourceGitSubdirectoryColumn,
+  dropThreadParentNotificationsColumn,
   dropQueuedMessageEditHeldUntilColumn,
   rewindQueuedMessageStateMigration,
 } from "./helpers/rewind.js";
@@ -723,6 +724,7 @@ function rewindEnvironmentProvisioningMigration(db: DbConnection): void {
   dropPluginEnabledFollowsDefaultColumn(db);
   dropQueuedMessageEditHeldUntilColumn(db);
   dropMarketplaceSourceGitSubdirectoryColumn(db);
+  dropThreadParentNotificationsColumn(db);
   db.$client.exec("DROP TRIGGER IF EXISTS threads_lifecycle_owner_insert");
   db.$client.exec("DROP TRIGGER IF EXISTS threads_lifecycle_owner_immutable");
   db.$client.exec("DROP INDEX IF EXISTS threads_lifecycle_owner_idx");
@@ -769,6 +771,7 @@ function rewindEnvironmentProvisioningMigration(db: DbConnection): void {
 
 function dropQueuedMessageAttemptColumns(db: DbConnection): void {
   rewindQueuedMessageStateMigration(db);
+  dropThreadParentNotificationsColumn(db);
   const columns = db.$client
     .prepare<[], TableInfoRow>("PRAGMA table_info(queued_thread_messages)")
     .all();
@@ -847,6 +850,7 @@ function rewindMachineProvidersMigration(db: DbConnection): void {
   rewindThreadPruningWork(db);
   dropQueuedMessageEditHeldUntilColumn(db);
   dropMarketplaceSourceGitSubdirectoryColumn(db);
+  dropThreadParentNotificationsColumn(db);
   db.$client.exec("DROP TABLE IF EXISTS ui_preference_defaults");
   const queuedDispatchOrigin = db.$client
     .prepare<[], TableInfoRow>("PRAGMA table_info(queued_thread_messages)")
@@ -1786,6 +1790,7 @@ describe("migrate", () => {
         confirmThreadArchive: true,
         showDiagnosticEvents: true,
         keepHistoryAfterContextClear: false,
+        summarizeShellCommands: true,
         providerOrder: [],
         defaultProviderId: null,
         providerCompletedTurnDisplay: {},
@@ -1797,6 +1802,7 @@ describe("migrate", () => {
         telemetryEnabled: true,
         managedBranchPrefix: "bb/",
         onboardingCompletedAt: "2026-08-01T00:00:00.000Z",
+        earlyAdopter: false,
       });
       expect(
         db.$client
@@ -3311,6 +3317,7 @@ describe("migrate", () => {
       rewindThreadPruningWork(db);
       dropQueuedMessageEditHeldUntilColumn(db);
       dropMarketplaceSourceGitSubdirectoryColumn(db);
+      dropThreadParentNotificationsColumn(db);
       db.$client.prepare("DROP INDEX projects_deleted_idx").run();
       db.$client.prepare("ALTER TABLE projects DROP COLUMN deleted_at").run();
       db.$client.prepare("ALTER TABLE events ADD producer_event_id text").run();

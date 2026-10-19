@@ -93,7 +93,7 @@ Slot props contracts (versioned, additive-only):
   back/forward then walks panel-internal history (prefer this over hash
   routing).
   Registration:
-  `{ id, title, icon, path, component, fixedTabs?, experimental_sidebarAccessory?, headerContent? }`.
+  `{ id, title, icon, path, component, fixedTabs?, experimental_useBadge?, headerContent? }`.
   The host renders your compact plugin icon + `title` into the shared app
   header (the same title bar as Settings pages) with your optional
   `headerContent` component as the header actions on the right — so do not
@@ -144,10 +144,25 @@ target? })`. Inside the fixed-tab component,
   refresh. Invalid, unavailable, untargeted, or other-plugin references return
   false without changing valid panel state.
 
-  `experimental_sidebarAccessory` is a no-props, presentational component for
-  a live count or short status beside the panel's navigation entry. The SDK
-  accepts it, but no host surface mounts it, because the navigation rail is
-  icon-only. Experimental: see `docs/api_to_audit.md`.
+  `experimental_useBadge` is a React hook that returns the panel's
+  navigation badge, `{ count?, text?, tone?, label }`, or `null` for none.
+  Set at most one of `count` and `text` (at most 8 characters, such as "NEW"
+  or "73%"); `tone` is `neutral` (the default), `warning`, or `critical`, and
+  bb picks the colors. BB calls it once
+  in the plugin's scope for every registered panel, including ones hidden
+  under More, so it can own an RPC query and realtime subscription. Every
+  navigation provider receives the value as the item's `badge`. bb's Rail
+  draws a count (shown as `9+` above 9) or otherwise a dot on the icon and
+  does not draw `text`; its Top list draws the count (`99+`
+  above 99), the text, or a dot at the end of the row; both put a dot on
+  More, in the strongest hidden tone, while the panel is hidden there. `label` is short text such as
+  "3 open tasks" that BB adds to the destination's tooltip and accessible
+  name; the drawn badge is hidden from assistive technology. `count` must be a
+  positive integer, `text` and `label` non-empty; a hook that throws or returns
+  anything else is treated as a crashed slot and shows no badge. SDK 0.6.53
+  replaced the component-based `experimental_sidebarAccessory`; a plugin that
+  still passes it keeps loading, and BB ignores the field and logs a warning
+  naming `experimental_useBadge`. Experimental: see `docs/api_to_audit.md`.
 
 - `threadPanelAction` → an entry in the thread right panel's new-tab
   Actions list (next to "Start side chat" / "Start terminal"), labeled
@@ -239,6 +254,15 @@ onChange }` — the control the New Thread environment picker renders beside
   `{ openSettings }`. New plugins should use
   `app.experimental_sidebarFooter.register({ kind: "action", ... })` so actions
   and disclosures share one surface.
+- `experimental_sidebarNavigation` → `{ isCompactViewport, placement,
+  experimental_Original }` — draws the sidebar navigation. Registration:
+  `{ id, title, description?, placement?, component, headerComponent? }`,
+  where `placement` is `"rail"` or `"list"` (the default). The optional
+  `headerComponent` receives `{ width, controlSize, isCompactViewport }` and
+  renders in the sidebar header row beside the sidebar toggle while that
+  navigation is active. Read items and host actions
+  with `experimental_useSidebarNavigation()`. Exclusive; see
+  frontend-sidebar-navigation.md. Experimental: see `docs/api_to_audit.md`.
 - `experimental_threadList`, `experimental_threadHeaderAction`,
   `experimental_threadAction`, and `experimental_browserToolbarAction` are
   covered in frontend-registration.md.

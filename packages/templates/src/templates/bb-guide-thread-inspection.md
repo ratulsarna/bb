@@ -16,6 +16,7 @@ Listing:
     --environment <id>                     Filter by environment
     --machine <id-or-name>                 Filter by the machine the environment is on (alias --host)
     --parent-thread <id>                   Filter by parent thread
+    --thread <id>                          Only this thread; unknown or deleted IDs are left out (repeatable, up to 200)
     --archived                             Show only archived threads
     --section <id>                         Filter by section
     --unsectioned                          Show only threads outside sections
@@ -73,7 +74,10 @@ Inspecting:
   a provider request; `--json` prints `{ usage: ... }` (`null` when unavailable).
   Claude Code includes an estimated breakdown when available; other providers
   report totals. When the provider reports the session's cumulative cost,
-  `usage.cost` is `{ amount, currency }`.
+  `usage.cost` is `{ amount, currency }`. With the `compactExpiredCache`
+  experiment on, `usage.compactionOfferAt` is when the provider's prompt cache
+  for this context expires (Claude Code and Pi report cache lifetimes); after
+  it, `bb thread tell --compact-first` avoids re-reading the context uncached.
 
   `thread commands` lists the slash commands advertised for the current
   session; ACP agents report these live, so the list is empty until the agent

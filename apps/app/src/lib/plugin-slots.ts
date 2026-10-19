@@ -33,6 +33,7 @@ import {
   type CollectedExperimentalSidebarFooterItem,
   type CollectedManagedSidebarFooterItem,
   type CollectedSidebarFooterItem,
+  type CollectedSidebarNavigationRegistration,
 } from "@get-bb/plugin-sdk/internal/plugin-app-collector";
 
 export interface PluginRegistrationSet {
@@ -47,6 +48,7 @@ export interface PluginRegistrationSet {
   sidebarFooterActions: readonly PluginSidebarFooterActionRegistration[];
   experimentalSidebarFooterItems?: readonly CollectedExperimentalSidebarFooterItem[];
   threadLists?: readonly PluginThreadListRegistration[];
+  experimentalSidebarNavigations?: readonly CollectedSidebarNavigationRegistration[];
   threadHeaderActions?: readonly PluginThreadHeaderActionRegistration[];
   threadActions?: readonly PluginThreadActionRegistration<unknown>[];
   browserToolbarActions?: readonly ExperimentalPluginBrowserToolbarActionRegistration[];
@@ -89,6 +91,8 @@ export type PluginSidebarFooterItemSlot = CollectedSidebarFooterItem &
   PluginSlotBase;
 export interface PluginThreadListSlot
   extends PluginThreadListRegistration, PluginSlotBase {}
+export interface ExperimentalSidebarNavigationSlot
+  extends CollectedSidebarNavigationRegistration, PluginSlotBase {}
 interface PluginThreadHeaderActionSlot
   extends PluginThreadHeaderActionRegistration, PluginSlotBase {}
 export interface PluginThreadActionSlot
@@ -130,6 +134,7 @@ export interface PluginSlotSnapshot {
   pendingInteractions: readonly PluginPendingInteractionSlot[];
   sidebarFooterItems: readonly PluginSidebarFooterItemSlot[];
   threadLists: readonly PluginThreadListSlot[];
+  experimentalSidebarNavigations: readonly ExperimentalSidebarNavigationSlot[];
   threadHeaderActions: readonly PluginThreadHeaderActionSlot[];
   threadActions: readonly PluginThreadActionSlot[];
   browserToolbarActions: readonly PluginBrowserToolbarActionSlot[];
@@ -158,6 +163,7 @@ export const EMPTY_PLUGIN_SLOT_SNAPSHOT: PluginSlotSnapshot = {
   pendingInteractions: [],
   sidebarFooterItems: [],
   threadLists: [],
+  experimentalSidebarNavigations: [],
   threadHeaderActions: [],
   threadActions: [],
   browserToolbarActions: [],
@@ -193,6 +199,7 @@ const SLOT_KINDS: readonly SlotKind[] = [
   "pendingInteractions",
   "sidebarFooterItems",
   "threadLists",
+  "experimentalSidebarNavigations",
   "threadHeaderActions",
   "threadActions",
   "browserToolbarActions",
@@ -252,6 +259,7 @@ function flattenRegistrations(
     pendingInteractions: stamp(set.pendingInteractions),
     sidebarFooterItems: stamp<CollectedSidebarFooterItem>(sidebarFooterItems),
     threadLists: stamp(set.threadLists),
+    experimentalSidebarNavigations: stamp(set.experimentalSidebarNavigations),
     threadHeaderActions: stamp(set.threadHeaderActions),
     threadActions: stamp(set.threadActions),
     browserToolbarActions: stamp(set.browserToolbarActions),
@@ -476,7 +484,37 @@ export function usePluginSlots(): PluginSlotSnapshot {
   return useSyncExternalStore(subscribePluginSlots, getPluginSlotSnapshot);
 }
 
+let builtinPluginIds: ReadonlySet<string> = new Set();
+const builtinPluginIdListeners = new Set<() => void>();
+
+export function setBuiltinPluginIds(ids: Iterable<string>): void {
+  const next = new Set(ids);
+  if (
+    next.size === builtinPluginIds.size &&
+    [...next].every((id) => builtinPluginIds.has(id))
+  ) {
+    return;
+  }
+  builtinPluginIds = next;
+  for (const listener of builtinPluginIdListeners) listener();
+}
+
+function subscribeBuiltinPluginIds(listener: () => void): () => void {
+  builtinPluginIdListeners.add(listener);
+  return () => {
+    builtinPluginIdListeners.delete(listener);
+  };
+}
+
+export function useBuiltinPluginIds(): ReadonlySet<string> {
+  return useSyncExternalStore(
+    subscribeBuiltinPluginIds,
+    () => builtinPluginIds,
+  );
+}
+
 export function resetPluginSlotStoreForTest(): void {
+  setBuiltinPluginIds([]);
   registrationsByPluginId.clear();
   generationByPluginId.clear();
   flattenedByPluginId.clear();

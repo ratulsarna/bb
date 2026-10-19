@@ -172,7 +172,18 @@ interface FakeWebContentsEventMap {
   "media-started-playing": FakeVoidWebContentsListener;
   "did-navigate": FakeDidNavigateListener;
   "did-navigate-in-page": FakeDidNavigateInPageListener;
-  "did-start-navigation": FakeVoidWebContentsListener;
+  "did-start-navigation": (event: {
+    url: string;
+    isMainFrame: boolean;
+  }) => void;
+  "did-redirect-navigation": (event: {
+    url: string;
+    isMainFrame: boolean;
+  }) => void;
+  "page-favicon-updated": (
+    event: FakeWebContentsEvent,
+    favicons: string[],
+  ) => void;
   "page-title-updated": FakePageTitleUpdatedListener;
   "did-fail-load": FakeDidFailLoadListener;
   "context-menu": FakeContextMenuListener;
@@ -200,11 +211,18 @@ type FakePermissionRequestHandler = (
   webContents: unknown,
   permission: string,
   callback: (granted: boolean) => void,
+  details?: {
+    requestingUrl: string;
+    isMainFrame: boolean;
+    mediaTypes?: string[];
+  },
 ) => void;
 
 type FakePermissionCheckHandler = (
   webContents: unknown,
   permission: string,
+  requestingOrigin?: string,
+  details?: { isMainFrame: boolean; mediaType: string },
 ) => boolean;
 
 interface FakeWindowOpenDetails {
@@ -425,6 +443,8 @@ const electronMock = vi.hoisted(() => {
       "did-navigate": [],
       "did-navigate-in-page": [],
       "did-start-navigation": [],
+      "did-redirect-navigation": [],
+      "page-favicon-updated": [],
       "page-title-updated": [],
       "did-fail-load": [],
       "context-menu": [],
@@ -526,8 +546,18 @@ const electronMock = vi.hoisted(() => {
       if (index !== -1) this.listeners[eventName].splice(index, 1);
     }
 
-    emitDidStartNavigation(): void {
-      for (const listener of this.listeners["did-start-navigation"]) listener();
+    emitDidStartNavigation(url = this.url, isMainFrame = true): void {
+      for (const listener of this.listeners["did-start-navigation"])
+        listener({ url, isMainFrame });
+    }
+
+    emitDidRedirectNavigation(url: string, isMainFrame = true): void {
+      for (const listener of this.listeners["did-redirect-navigation"])
+        listener({ url, isMainFrame });
+    }
+
+    emitDidStopLoading(): void {
+      for (const listener of this.listeners["did-stop-loading"]) listener();
     }
 
     reload(): void {
@@ -642,6 +672,12 @@ const electronMock = vi.hoisted(() => {
       this.url = url;
       for (const listener of this.listeners["did-navigate-in-page"]) {
         listener(fakeWebContentsEvent, url, true);
+      }
+    }
+
+    emitPageFaviconUpdated(favicons: string[]): void {
+      for (const listener of this.listeners["page-favicon-updated"]) {
+        listener(fakeWebContentsEvent, favicons);
       }
     }
 
@@ -830,6 +866,8 @@ const electronMock = vi.hoisted(() => {
   const fakeParkingWindows: FakeBaseWindow[] = [];
 
   return {
+    showMessageBox: vi.fn(),
+    askForMediaAccess: vi.fn(),
     fakeCapturedImage,
     fakeSessions,
     fakeViews,
@@ -879,6 +917,8 @@ vi.mock("electron", () => ({
   BrowserWindow: electronMock.FakeBrowserWindow,
   WebContentsView: electronMock.FakeWebContentsView,
   session: electronMock.session,
+  dialog: { showMessageBox: electronMock.showMessageBox },
+  systemPreferences: { askForMediaAccess: electronMock.askForMediaAccess },
   nativeImage: { createFromBuffer: () => electronMock.fakeCapturedImage },
 }));
 
@@ -958,6 +998,8 @@ class FakeHostWindow implements DesktopBrowserHostWindow {
 
 beforeEach(() => {
   vi.useRealTimers();
+  electronMock.showMessageBox.mockReset().mockResolvedValue({ response: 1 });
+  electronMock.askForMediaAccess.mockReset().mockResolvedValue(true);
   electronMock.fakeSessions.length = 0;
   electronMock.fakeViews.length = 0;
   electronMock.fakeWindows.length = 0;
@@ -1678,6 +1720,53 @@ describe("DesktopBrowserCdpAdapter", () => {
     page.detach();
   });
 
+  it.each(["", "https://example.com/original"])(
+    "reports the destination before navigation commits from %s",
+    (initialUrl) => {
+      const { hostWindow, view } = createRendererRecoveryFixture(91);
+      void view.webContents.loadURL(initialUrl);
+      const expectUrl = (url: string) =>
+        expect(hostWindow.webContents.sentPayloads.at(-1)).toMatchObject({
+          url,
+        });
+
+      view.webContents.emitDidStartNavigation("https://example.com/next");
+      expectUrl("https://example.com/next");
+      view.webContents.emitDidStartNavigation("https://frame.example", false);
+      expectUrl("https://example.com/next");
+      view.webContents.emitDidRedirectNavigation(
+        "https://example.com/redirect",
+      );
+      expectUrl("https://example.com/redirect");
+      view.webContents.emitDidRedirectNavigation(
+        "https://frame.example/redirect",
+        false,
+      );
+      expectUrl("https://example.com/redirect");
+      view.webContents.emitDidNavigate("https://example.com/final");
+      expectUrl("https://example.com/final");
+      view.webContents.emitDidStartNavigation("https://example.com/cancelled");
+      expectUrl("https://example.com/cancelled");
+      view.webContents.emitDidStopLoading();
+      expectUrl("https://example.com/final");
+      view.webContents.emitDidStartNavigation("https://unreachable.example");
+      view.webContents.emitDidFailLoad({
+        errorCode: -105,
+        errorDescription: "ERR_NAME_NOT_RESOLVED",
+        validatedURL: "https://unreachable.example",
+        isMainFrame: true,
+      });
+      view.webContents.emitDidStopLoading();
+      expectUrl("https://unreachable.example");
+      view.webContents.emitDidStartNavigation("https://example.com/recovered");
+      view.webContents.emitDidNavigate("https://example.com/recovered");
+      expect(hostWindow.webContents.sentPayloads.at(-1)).toMatchObject({
+        url: "https://example.com/recovered",
+        errorText: null,
+      });
+    },
+  );
+
   it("routes lifecycle callbacks only for registered scoped tabs and forwards manager notifications", async () => {
     const { manager, adapter, scope, view, createTab, activateTab, closeTab } =
       createCdpAdapterFixture();
@@ -2066,7 +2155,9 @@ describe("DesktopBrowserViewManager", () => {
           expiresAt: Date.now() + 60_000,
         });
         client.suspend();
-        expect(broker.getControl(91, "browser:a")).toMatchObject({ control: null });
+        expect(broker.getControl(91, "browser:a")).toMatchObject({
+          control: null,
+        });
         expect(broker.getTarget(91)).toBeNull();
         expect(view.webContents.isDestroyed()).toBe(false);
         await applyServerMove({
@@ -2183,9 +2274,12 @@ describe("DesktopBrowserViewManager", () => {
       manager.setServerOrigin("https://first.example");
       attach("https://example.com/first");
       const first = requireFakeView(0);
-      const popup = first.webContents.emitWindowOpen("https://example.com/login", {
-        disposition: "new-window",
-      });
+      const popup = first.webContents.emitWindowOpen(
+        "https://example.com/login",
+        {
+          disposition: "new-window",
+        },
+      );
       popup.createWindow?.({});
       const popupWindow = electronMock.fakeWindows[0]!;
       manager.setServerOrigin("https://second.example");
@@ -2202,13 +2296,18 @@ describe("DesktopBrowserViewManager", () => {
         channel: "background",
         data: { secret: "first server" },
       });
-      expect(first.webContents.emitWindowOpen("https://example.com/new")).toEqual({
+      expect(
+        first.webContents.emitWindowOpen("https://example.com/new"),
+      ).toEqual({
         action: "deny",
       });
       expect(hostWindow.webContents.sentPayloads).toHaveLength(pushes);
       expect(notify).not.toHaveBeenCalled();
       expect(
-        manager.getAutomationTabs({ hostWebContentsId: 91, threadId: "thread-1" }),
+        manager.getAutomationTabs({
+          hostWebContentsId: 91,
+          threadId: "thread-1",
+        }),
       ).toEqual([{ tabId: "browser:a", webContents: second.webContents }]);
       manager.setServerOrigin("https://first.example");
       attach("https://stale.example");
@@ -2219,7 +2318,10 @@ describe("DesktopBrowserViewManager", () => {
       expect(first.webContents.getURL()).toBe("https://example.com/redirected");
       second.webContents.close();
       expect(
-        manager.getAutomationTabs({ hostWebContentsId: 91, threadId: "thread-1" }),
+        manager.getAutomationTabs({
+          hostWebContentsId: 91,
+          threadId: "thread-1",
+        }),
       ).toEqual([{ tabId: "browser:a", webContents: first.webContents }]);
       manager.setServerOrigin("https://second.example");
       attach("https://example.com/reopened");
@@ -2266,7 +2368,8 @@ describe("DesktopBrowserViewManager", () => {
           resolve({ data: Buffer.from("jpeg").toString("base64") });
       });
       const capture = vi.spyOn(view.webContents, "capturePage");
-      let pendingCapture: ReturnType<typeof captureDesktopBrowserPage> | null = null;
+      let pendingCapture: ReturnType<typeof captureDesktopBrowserPage> | null =
+        null;
       try {
         if (owner === "automation") {
           page.attach();
@@ -2301,10 +2404,15 @@ describe("DesktopBrowserViewManager", () => {
         expect(view.webContents.getBackgroundThrottling()).toBe(true);
         expect(view.webContents.isDestroyed()).toBe(false);
         manager.setServerOrigin("https://first.example");
-        expect(hostWindow.contentView.addedViews).toEqual([...attached, ...attached]);
+        expect(hostWindow.contentView.addedViews).toEqual([
+          ...attached,
+          ...attached,
+        ]);
         expect(parkingWindow.isDestroyed()).toBe(true);
         expect(view.webContents.getBackgroundThrottling()).toBe(false);
-        expect(requireFakeView(0).webContents.getBackgroundThrottling()).toBe(true);
+        expect(requireFakeView(0).webContents.getBackgroundThrottling()).toBe(
+          true,
+        );
         expect(view.webContents.getURL()).toBe("https://example.com/animated");
         page.attach();
         await expect(page.send("Runtime.enable", {})).resolves.toEqual({});
@@ -2799,6 +2907,136 @@ describe("DesktopBrowserViewManager", () => {
         threadId: "thread-1",
       }),
     ).toEqual([]);
+  });
+
+  it("publishes favicons, retains them within an origin, and restores cached icons when returning", () => {
+    const manager = createDesktopBrowserViewManager();
+    const hostWindow = new FakeHostWindow({
+      contentBounds: { width: 700, height: 450 },
+      webContentsId: 91,
+    });
+    attachBrowserTab({
+      manager,
+      hostWindow,
+      tabId: "browser:a",
+      url: "https://example.com",
+    });
+    const view = requireFakeView(0);
+    const favicon = () =>
+      hostWindow.webContents.sentPayloads
+        .slice()
+        .reverse()
+        .find((payload) => "faviconUrl" in payload);
+    view.webContents.emitPageFaviconUpdated([
+      "file:///private/icon.png",
+      "https://example.com/icon.png",
+      "https://example.com/icon-large.png",
+    ]);
+    expect(favicon()).toMatchObject({
+      tabId: "browser:a",
+      faviconUrl: "https://example.com/icon.png",
+      faviconUrls: [
+        "https://example.com/icon.png",
+        "https://example.com/icon-large.png",
+      ],
+    });
+    view.webContents.emitDidNavigate("https://example.com");
+    expect(favicon()).toMatchObject({
+      faviconUrl: "https://example.com/icon.png",
+    });
+    view.webContents.emitDidNavigateInPage("https://example.com/#section");
+    expect(favicon()).toMatchObject({
+      faviconUrl: "https://example.com/icon.png",
+    });
+    view.webContents.emitDidNavigate("https://example.com/another-page");
+    expect(favicon()).toMatchObject({
+      faviconUrl: "https://example.com/icon.png",
+    });
+    view.webContents.emitPageFaviconUpdated([]);
+    expect(favicon()).toMatchObject({
+      faviconUrl: "https://example.com/icon.png",
+    });
+    view.webContents.emitPageFaviconUpdated([
+      "https://example.com/favicon.ico",
+    ]);
+    expect(favicon()).toMatchObject({
+      faviconUrls: [
+        "https://example.com/favicon.ico",
+        "https://example.com/icon.png",
+        "https://example.com/icon-large.png",
+      ],
+    });
+    view.webContents.emitPageFaviconUpdated(["https://example.com/icon.png"]);
+    view.webContents.emitDidNavigate("https://other.example");
+    expect(favicon()).toMatchObject({ faviconUrl: null });
+    view.webContents.emitDidNavigate("https://example.com/return");
+    expect(favicon()).toMatchObject({
+      faviconUrl: "https://example.com/icon.png",
+    });
+    attachBrowserTab({
+      manager,
+      hostWindow,
+      tabId: "browser:reopened",
+      url: "https://example.com/reopened",
+    });
+    requireFakeView(1).webContents.emitDidNavigate(
+      "https://example.com/reopened",
+    );
+    expect(favicon()).toMatchObject({
+      tabId: "browser:reopened",
+      faviconUrl: "https://example.com/icon.png",
+    });
+
+    view.webContents.emitPageFaviconUpdated(["javascript:alert(1)"]);
+    expect(favicon()).toMatchObject({ faviconUrl: null });
+  });
+
+  it("bounds cached favicon origins and isolates them between servers", () => {
+    const manager = createDesktopBrowserViewManager();
+    manager.setServerOrigin("https://server-a.example");
+    const hostWindow = new FakeHostWindow({
+      contentBounds: { width: 700, height: 450 },
+      webContentsId: 91,
+    });
+    attachBrowserTab({
+      manager,
+      hostWindow,
+      tabId: "browser:cache",
+      url: "https://site-0.example",
+    });
+    const view = requireFakeView(0);
+    for (let index = 0; index <= 40; index++) {
+      view.webContents.emitDidNavigate(`https://site-${index}.example`);
+      view.webContents.emitPageFaviconUpdated([
+        `https://site-${index}.example/icon.png`,
+      ]);
+    }
+    const latest = () =>
+      hostWindow.webContents.sentPayloads
+        .slice()
+        .reverse()
+        .find((payload) => "faviconUrl" in payload);
+    view.webContents.emitDidNavigate("https://site-0.example");
+    expect(latest()).toMatchObject({ faviconUrl: null, faviconUrls: [] });
+    view.webContents.emitDidNavigate("https://site-40.example");
+    expect(latest()).toMatchObject({
+      faviconUrl: "https://site-40.example/icon.png",
+    });
+    manager.setServerOrigin("https://server-b.example");
+    attachBrowserTab({
+      manager,
+      hostWindow,
+      tabId: "browser:cache",
+      url: "https://site-40.example",
+    });
+    requireFakeView(1).webContents.emitDidNavigate("https://site-40.example");
+    expect(latest()).toMatchObject({ faviconUrl: null, faviconUrls: [] });
+    manager.setServerOrigin("https://server-a.example");
+    view.webContents.emitDidNavigate("https://site-39.example");
+    expect(latest()).toMatchObject({
+      faviconUrl: "https://site-39.example/icon.png",
+    });
+    manager.destroyAll();
   });
 
   it("notifies subscribers of native creation and hidden navigation until unsubscribed", () => {
@@ -4109,6 +4347,70 @@ describe("DesktopBrowserViewManager", () => {
     expect(reloadingView.visible).toBe(true);
   });
 
+  it.each(["allow", "deny", "navigate", "system-deny", "dialog-error"])(
+    "handles microphone consent: %s",
+    async (outcome) => {
+      const { view } = createRendererRecoveryFixture(74);
+      const browserSession = electronMock.fakeSessions.at(-1)!;
+      const request = browserSession.permissionRequestHandler!;
+      const check = browserSession.permissionCheckHandler!;
+      const url = view.webContents.getURL();
+      const origin = new URL(url).origin;
+      const details = {
+        requestingUrl: url,
+        isMainFrame: true,
+        mediaTypes: ["audio"],
+      };
+      const checkDetails = { isMainFrame: true, mediaType: "audio" };
+      expect(check(view.webContents, "media", origin, checkDetails)).toBe(
+        false,
+      );
+      electronMock.showMessageBox.mockImplementation(async () => {
+        if (outcome === "navigate")
+          await view.webContents.loadURL("https://other.example/");
+        if (outcome === "dialog-error") throw new Error("Dialog unavailable");
+        return { response: outcome === "deny" ? 0 : 1 };
+      });
+      electronMock.askForMediaAccess.mockResolvedValue(
+        outcome !== "system-deny",
+      );
+      const granted = await new Promise<boolean>((resolve) =>
+        request(view.webContents, "media", resolve, details),
+      );
+      const expected =
+        outcome === "allow" ||
+        (outcome === "system-deny" && process.platform !== "darwin");
+      expect(granted).toBe(expected);
+      expect(electronMock.showMessageBox).toHaveBeenCalledWith(
+        expect.objectContaining({ detail: expect.stringContaining(origin) }),
+      );
+      expect(check(view.webContents, "media", origin, checkDetails)).toBe(
+        expected,
+      );
+      expect(
+        check(view.webContents, "media", "https://other.example", checkDetails),
+      ).toBe(false);
+      expect(
+        check(view.webContents, "media", origin, {
+          ...checkDetails,
+          mediaType: "video",
+        }),
+      ).toBe(false);
+      for (const deniedDetails of [
+        { ...details, mediaTypes: ["video"] },
+        { ...details, mediaTypes: ["audio", "video"] },
+        { ...details, mediaTypes: [] },
+        { ...details, isMainFrame: false },
+      ]) {
+        expect(
+          await new Promise<boolean>((resolve) =>
+            request(view.webContents, "media", resolve, deniedDetails),
+          ),
+        ).toBe(false);
+      }
+    },
+  );
+
   it("allows clipboard-sanitized-write but denies clipboard-read and device permissions", () => {
     const manager = createDesktopBrowserViewManager({
       partition: "persist:test",
@@ -4150,9 +4452,14 @@ describe("DesktopBrowserViewManager", () => {
 
     const requestGrants: boolean[] = [];
     for (const permission of permissions) {
-      requestHandler(null, permission, (granted) => {
-        requestGrants.push(granted);
-      });
+      requestHandler(
+        requireFakeView(0).webContents,
+        permission,
+        (granted) => {
+          requestGrants.push(granted);
+        },
+        { requestingUrl: "https://example.com/", isMainFrame: true },
+      );
     }
     expect(requestGrants).toEqual([true, false, false, false, false]);
   });

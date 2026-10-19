@@ -227,6 +227,7 @@ import {
   CLOSE_WINDOW_REQUEST_TIMEOUT_MS,
 } from "./desktop-window-command-ipc.js";
 import {
+  BB_BROWSER_PARTITION,
   createDesktopBrowserViewManager,
   type DesktopBrowserViewManager,
 } from "./desktop-browser-view.js";
@@ -795,6 +796,20 @@ function buildMenuServerItems(connectServers: ConnectServerRef[]) {
 function buildServerMenuArgs(): ServerMenuArgs {
   const connectServers = listMenuConnectServers();
   return {
+    isMac: process.platform === "darwin",
+    showBuiltinServer: serverTargetStore?.getShowBuiltinServer() ?? true,
+    toggleBuiltinServer() {
+      if (serverTargetStore === null) return;
+      void serverTargetStore
+        .setShowBuiltinServer(!serverTargetStore.getShowBuiltinServer())
+        .then(refreshApplicationMenu)
+        .catch((error: unknown) => {
+          desktopLogger.warn(
+            `[desktop] could not save server visibility: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          refreshApplicationMenu();
+        });
+    },
     addServer() {
       void openSetServerUrlDialog(true);
     },
@@ -1191,11 +1206,14 @@ async function authenticateConnectTarget(
   targetHandle: string,
   isCurrent: () => boolean,
 ): Promise<ConnectDesktopSessionResult> {
-  const cookieStore = session.defaultSession.cookies;
+  const cookieStores = [
+    session.defaultSession.cookies,
+    session.fromPartition(BB_BROWSER_PARTITION).cookies,
+  ] as const;
   let cachedFailure: ConnectDesktopSessionResult | null = null;
   if (cachedConnectCredential !== null) {
     const cachedResult = await installConnectDesktopSession({
-      cookieStore,
+      cookieStores,
       mintCookie: createCredentialCookieSource({
         credential: cachedConnectCredential,
       }),
@@ -1227,7 +1245,7 @@ async function authenticateConnectTarget(
   const movedCredential = await readLocalServerMoveCredential(remoteServerUrl);
   if (movedCredential !== null) {
     const movedResult = await installConnectDesktopSession({
-      cookieStore,
+      cookieStores,
       mintCookie: createCredentialCookieSource({
         credential: movedCredential,
       }),
@@ -1243,7 +1261,7 @@ async function authenticateConnectTarget(
   );
   if (accountCookie !== null) {
     const accountResult = await installConnectDesktopSession({
-      cookieStore,
+      cookieStores,
       mintCookie: createAccountCookieSource({
         accountCookie,
         remoteServerUrl,
@@ -1277,7 +1295,7 @@ async function authenticateConnectTarget(
     );
   }
   const localResult = await installConnectDesktopSession({
-    cookieStore,
+    cookieStores,
     mintCookie: createLocalServerCookieSource({
       localServerUrl: currentRuntime.serverUrl,
     }),
@@ -2056,6 +2074,7 @@ async function openSetServerUrlDialog(add = false): Promise<void> {
   await serverTargetStore.setCustomServerUrl(
     result.kind === "set" ? result.url : null,
     {
+      availableConnectServers: listMenuConnectServers(),
       ...(previousUrl === null ? {} : { replacedUrl: previousUrl }),
       ...(result.kind === "set" && !(add && result.name === null)
         ? { name: result.name }

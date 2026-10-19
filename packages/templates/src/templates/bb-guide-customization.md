@@ -107,6 +107,10 @@ General. Machine-related keys (`machineServerUrl`, `defaultMachineAccess`,
   messages above the `Context cleared` boundary in the timeline, outline, and
   message lookups. The next prompt still starts a fresh provider conversation,
   and the context meter still resets.
+- `summarizeShellCommands` (default true; Settings → General → Summarize shell
+  commands): false stops titling shell commands that read, list, or search files
+  with a summary such as `Searched for X`. Each command row then shows its
+  command and expands to the command and its output.
 - `confirmThreadArchive` (default true): set false to archive parent and child
   threads in the app without the confirmation popup; the toast still offers
   Undo. CLI and SDK archive calls are always non-interactive.
@@ -167,7 +171,13 @@ gate a feature are documented with it: `serverMove` in `bb guide machines`,
 `performanceDiagnostics` under Server performance diagnostics below.
 `timelinePush` sends an open thread's timeline updates over the live
 connection as row deltas instead of reloading the latest window after each
-update.
+update. `compactExpiredCache` offers a Compact chip in the composer when an idle
+thread's prompt cache has expired and its context holds at least 100k tokens;
+see `bb guide thread-messaging` for `--compact-first`.
+`bb settings general earlyAdopter on` (Settings → Experiments → Become an early
+adopter) turns on the experiments marked Early adopter, currently
+`timelinePush` and `compactExpiredCache`; an experiment you set yourself keeps
+your value.
 
 Launcher settings
 
@@ -257,8 +267,8 @@ layout with `bb thread-list prefs` (see `bb guide plugins`).
 A vertical rail of destinations sits on the left edge of the sidebar on every
 screen size. Home is at the top and returns to the last thread; the visible
 destinations (Plugins, Skills, and plugin panels) follow; More holds hidden
-destinations and Customize rail; Settings is at the bottom. New thread sits in
-the sidebar header and cannot be hidden. The list beside the rail swaps between
+destinations and Customize navigation; Settings is at the bottom. New thread sits in
+the sidebar header and cannot be hidden from the rail. The list beside the rail swaps between
 the thread list, Plugins, Skills, and Settings, and collapsing the sidebar
 hides that list and leaves the rail. Rail order and visibility are
 `sidebar.pluginPanelOrder` and `sidebar.visiblePluginPanels`. In the macOS
@@ -268,8 +278,29 @@ it. On narrow windows and phones the rail sits inside the drawer: Home,
 Plugins, Skills, and Settings swap the list beside it and leave the drawer
 open, and a plugin page closes it.
 
+The rail and the top list below are the two layouts of the bundled Navigation
+plugin, a built-in you can fork like the thread list.
+`sidebar.navigationProvider` picks what draws the navigation:
+`navigation/rail` (the rail above), `navigation/top-list` (labeled rows above
+the thread list), another navigation plugin as `<plugin-id>/<slot-id>`, or
+`__automatic__` (the default: the first navigation from another plugin, else
+`navigation/rail`). Pick one in Settings → Appearance → Navigation, or:
+
+  bb settings ui set sidebar.navigationProvider navigation/top-list
+  bb settings ui reset sidebar.navigationProvider
+
+The top list puts the visible destinations, New thread among them, and More
+above the thread list, moves Settings into the footer, and adds a Back to app
+row to the Settings, Plugins, and Skills lists. New thread can be reordered
+and hidden like any other row there. Collapsing hides the whole sidebar, and
+the macOS desktop app drops the separate title bar. A navigation plugin
+declares whether it draws a rail or a list, and gets the matching layout; a
+list navigation can also bring its own controls beside the sidebar toggle.
+The same order and visibility keys apply to every provider.
+
 Footer actions: `sidebar.footerOrder` and `sidebar.hiddenFooterItems` are
-string lists of `builtin:mobile`, `builtin:report-bug`, or
+string lists of `builtin:settings` (top list only), `builtin:mobile`,
+`builtin:report-bug`, or
 `plugin:<encoded pluginId>/<encoded registrationId>`. They survive plugin
 reloads and temporarily unavailable plugins; new items are visible by default.
 
@@ -356,3 +387,17 @@ change), then run `bb settings experiment performanceDiagnostics true|false`.
 Collection needs both; it adds overhead and writes CPU profiles every 30 seconds
 to `$BB_DATA_DIR/logs/performance/` (kept 12 hours), which contain local paths.
 Open a `.cpuprofile` in Chrome DevTools.
+
+Desktop Settings → Server → **Show This Mac** (or **Show This Computer** off macOS)
+defaults to checked and is disabled while This Mac/Computer is selected.
+Unchecking hides the built-in server from server choices
+while another server is active and alternatives exist. It stays listed when
+active or when it is the only choice. This setting does not stop the local
+runtime or change the active server.
+
+The desktop stores `showBuiltinServer: false` in `<userData>/server-target.json`;
+missing means shown, and saving the default omits the field. Other top-level
+metadata is preserved. This is a desktop-local preference, with no server
+settings CLI/SDK endpoint. Builds with tolerant readers ignore the field and
+may drop it on save; older strict readers can reject the whole file, so keep a
+backup before rolling back to a build predating the tolerant-reader fix #5286.

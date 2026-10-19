@@ -6,8 +6,9 @@ import { Route, Routes, useNavigate } from "react-router-dom";
 import {
   defaultAppTheme,
   defaultExperiments,
+  earlyAdopterExperiments,
   type AppTheme,
-  type Experiments,
+  type ExperimentUpdates,
   defaultAppSettings,
   type AppSettings,
 } from "@bb/domain";
@@ -127,6 +128,7 @@ function useSettingsStoryState() {
   const [confirmThreadArchive, setConfirmThreadArchive] = useState(true);
   const [keepHistoryAfterContextClear, setKeepHistoryAfterContextClear] =
     useState(false);
+  const [summarizeShellCommands, setSummarizeShellCommands] = useState(true);
   const [showGitChanges, setShowGitChanges] = useState(true);
   const [streamerMode, setStreamerMode] = useState(false);
   const [telemetryEnabled, setTelemetryEnabled] = useState(true);
@@ -138,13 +140,10 @@ function useSettingsStoryState() {
     useState<StoredTargetId>("finder");
   const [fileTargetId, setFileTargetId] =
     useState<StoredTargetId>("default-app");
-  const [experiments, setExperiments] =
-    useState<Experiments>(defaultExperiments);
 
   return {
     appearance,
     directoryTargetId,
-    experiments,
     fileTargetId,
     managedBranchPrefix,
     navigateToThreadAfterCreate,
@@ -157,13 +156,14 @@ function useSettingsStoryState() {
     setConfirmThreadArchive,
     keepHistoryAfterContextClear,
     setKeepHistoryAfterContextClear,
+    summarizeShellCommands,
+    setSummarizeShellCommands,
     streamerMode,
     telemetryEnabled,
     setTelemetryEnabled,
     showDiagnosticEvents,
     setAppearance,
     setDirectoryTargetId,
-    setExperiments,
     setFileTargetId,
     setManagedBranchPrefix,
     setNavigateToThreadAfterCreate,
@@ -210,6 +210,8 @@ function GeneralSettingsStory({
         onKeepHistoryAfterContextClearChange={
           state.setKeepHistoryAfterContextClear
         }
+        summarizeShellCommands={state.summarizeShellCommands}
+        onSummarizeShellCommandsChange={state.setSummarizeShellCommands}
         desktopBrowserAvailable={desktopBrowserAvailable}
         generalSettingsDisabled={false}
         managedBranchPrefix={state.managedBranchPrefix}
@@ -310,15 +312,21 @@ function FilePreferencesStory() {
 }
 
 function ExperimentsStory() {
-  const state = useSettingsStoryState();
+  const [earlyAdopter, setEarlyAdopter] = useState(false);
+  const [overrides, setOverrides] = useState<ExperimentUpdates>({});
 
   return (
     <ExperimentsSettingsSection
       disabled={false}
-      experiments={state.experiments}
+      earlyAdopter={earlyAdopter}
+      onEarlyAdopterChange={setEarlyAdopter}
+      experiments={{
+        ...(earlyAdopter ? earlyAdopterExperiments : defaultExperiments),
+        ...overrides,
+      }}
       performanceDiagnosticsAvailable={true}
       onExperimentChange={(key, enabled) =>
-        state.setExperiments((current) => ({ ...current, [key]: enabled }))
+        setOverrides((current) => ({ ...current, [key]: enabled }))
       }
     />
   );

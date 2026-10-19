@@ -179,6 +179,9 @@ function createUiPreferences(): UiPreferenceEntries {
     "sidebar.visiblePluginPanels": uiPreferenceEntry(
       "sidebar.visiblePluginPanels",
     ),
+    "sidebar.navigationProvider": uiPreferenceEntry(
+      "sidebar.navigationProvider",
+    ),
     "sidebar.threadListProvider": uiPreferenceEntry(
       "sidebar.threadListProvider",
     ),

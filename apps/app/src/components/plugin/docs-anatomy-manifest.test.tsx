@@ -140,8 +140,9 @@ function renderAppSidebar() {
                         onResizeMouseDown={() => {}}
                         isResizing={false}
                         isBodyHidden={false}
-                        renderRail={() => null}
-                        railFooter={null}
+                        navigation={{ kind: "loading", placement: "rail" }}
+                        settingsRoutePath="/settings"
+                        isSettingsActive={false}
                         alternateBody={null}
                       />
                     </SidebarProvider>

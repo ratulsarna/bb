@@ -13,6 +13,8 @@ import {
   classifyStoredProviderThreadClaim,
   wouldRemoveSharedProviderSessionClaim,
   listActiveBackgroundTaskCountsByThreadIds,
+  listThreadEventSuffixBackgroundSettlementRows,
+  type AppendStoredThreadEventArgs,
   type DbQueryConnection,
 } from "@bb/db";
 import {
@@ -33,6 +35,7 @@ import type { LoggedPendingInteractionWorkSessionDeps } from "../../types.js";
 import { ApiError } from "../../errors.js";
 import {
   appendThreadEventInTransaction,
+  appendThreadEventsInTransaction,
   createClientTurnRequestId,
   parseStoredTurnRequestEvent,
 } from "./thread-events.js";
@@ -401,6 +404,56 @@ function resolveEditableTurn(
   conflict("The thread has no editable user message");
 }
 
+function listCarriedBackgroundSettlements(
+  db: DbQueryConnection,
+  args: {
+    cutoffSequence: number;
+    environmentId: string | null;
+    oldMaxSequence: number;
+    threadId: string;
+  },
+): AppendStoredThreadEventArgs[] {
+  return listThreadEventSuffixBackgroundSettlementRows(
+    db,
+    args,
+  ).flatMap<AppendStoredThreadEventArgs>((row) => {
+    const event = parseStoredEvent(row);
+    const carried = {
+      environmentId: args.environmentId,
+      scope: threadScope(),
+      threadId: args.threadId,
+    };
+    switch (event.type) {
+      case "item/backgroundTask/completed":
+        return [
+          {
+            ...carried,
+            providerThreadId: event.providerThreadId,
+            type: event.type,
+            data: {
+              providerThreadId: event.providerThreadId,
+              item: event.item,
+            },
+          },
+        ];
+      case "item/delegation/completed":
+        return [
+          {
+            ...carried,
+            providerThreadId: event.providerThreadId,
+            type: event.type,
+            data: {
+              providerThreadId: event.providerThreadId,
+              item: event.item,
+            },
+          },
+        ];
+      default:
+        return [];
+    }
+  });
+}
+
 function rewindPrepareCommandFromStart(
   start: Extract<HostDaemonCommand, { type: "thread.start" }>,
   args: {
@@ -537,7 +590,7 @@ async function editAdmittedThreadMessage(
     stagedProviderThreadId = prepared.providerThreadId;
   }
 
-  const requestSequence = target.oldMaxSequence + 2;
+  let requestSequence = target.oldMaxSequence + 2;
   const discardStagedRewind =
     stagedProviderThreadId === null || rewindLeaseId === null
       ? undefined
@@ -596,6 +649,13 @@ async function editAdmittedThreadMessage(
         ) {
           conflict("The thread changed while the edit was being prepared");
         }
+        const carriedSettlements = listCarriedBackgroundSettlements(tx, {
+          cutoffSequence: target.requestSequence,
+          environmentId: editableThread.environmentId,
+          oldMaxSequence: target.oldMaxSequence,
+          threadId: editableThread.id,
+        });
+        requestSequence = target.oldMaxSequence + 2 + carriedSettlements.length;
         appendThreadEventInTransaction(tx, {
           threadId: editableThread.id,
           environmentId: editableThread.environmentId,
@@ -627,6 +687,7 @@ async function editAdmittedThreadMessage(
           oldMaxSequence: target.oldMaxSequence,
           threadId: editableThread.id,
         });
+        appendThreadEventsInTransaction(tx, carriedSettlements);
       },
       environment: args.environment,
       historyReplacement: {

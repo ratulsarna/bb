@@ -34,6 +34,7 @@ import {
   threadTimelineModelFallbackSchema,
   threadTimelinePendingTodosSchema,
   threadEventTypeValues,
+  threadParentNotificationsSchema,
   threadVisibilitySchema,
   threadWithRuntimeSchema,
 } from "@bb/domain";
@@ -111,6 +112,11 @@ export const createThreadRequestSchema = z
     executionInputSources: createExecutionInputSourcesSchema.optional(),
     environment: createThreadEnvironmentArgsSchema,
     parentThreadId: z.string().min(1).optional(),
+    /**
+     * Which turn outcomes wake the parent: `auto` (all, the default), `stuck`
+     * (failed, interrupted, or blocked on an approval or question), or `off`.
+     */
+    parentNotifications: threadParentNotificationsSchema.optional(),
     sectionId: z.string().min(1).nullable().optional(),
     pinned: z.boolean().optional(),
     sourceThreadId: z.string().min(1).optional(),
@@ -255,6 +261,14 @@ const sendMessageRequestFieldsSchema = z.object({
    * sweep re-attempts it then. Absent ⇒ attempt the dispatch now.
    */
   sendAt: z.number().int().nonnegative().optional(),
+  /**
+   * Compact the thread's context with the provider's manual compaction, then
+   * deliver this message once compaction finishes; the response reports
+   * `delivery: "queued"`. Needs an idle or errored thread whose provider
+   * supports manual compaction, and cannot be combined with `sendAt` or
+   * `mode: "steer"`. Absent ⇒ send without compacting.
+   */
+  compactFirst: z.literal(true).optional(),
 });
 
 export const sendMessageRequestSchema = sendMessageRequestFieldsSchema;
@@ -290,7 +304,12 @@ export type SendMessageResponse = z.infer<typeof sendMessageResponseSchema>;
 // `sendAt` is deliberately dropped: an edit rewrites a message that has
 // already been dispatched, so there is nothing left to schedule.
 export const editMessageRequestSchema = sendMessageRequestFieldsSchema
-  .omit({ mode: true, sendAt: true, pluginSubmission: true })
+  .omit({
+    mode: true,
+    sendAt: true,
+    pluginSubmission: true,
+    compactFirst: true,
+  })
   .extend({
     operationId: z.string().min(1),
     expectedRequestSequence: z.number().int().nonnegative().optional(),
@@ -731,10 +750,12 @@ export const updateThreadRequestSchema = z
       sessionOptionValueSchema.nullable(),
     ),
     visibility: threadVisibilitySchema,
+    parentNotifications: threadParentNotificationsSchema,
   })
   .partial()
   .refine(
     (value) =>
+      value.parentNotifications !== undefined ||
       value.title !== undefined ||
       value.sectionId !== undefined ||
       value.parentThreadId !== undefined ||
@@ -863,6 +884,16 @@ export type ThreadArchiveAllResponse = z.infer<
   typeof threadArchiveAllResponseSchema
 >;
 
+export const THREAD_LIST_MAX_IDS = 200;
+
+/**
+ * Reads the `threadIds` list filter. The empty string is the empty set, so a
+ * caller with no IDs gets no threads instead of every thread.
+ */
+export function parseThreadListThreadIds(value: string): string[] {
+  return value === "" ? [] : value.split(",");
+}
+
 export const threadListQuerySchema = z.object({
   projectId: z.string().min(1).optional(),
   environmentId: z.string().min(1).optional(),
@@ -876,6 +907,20 @@ export const threadListQuerySchema = z.object({
   originKind: threadOriginKindSchema.optional(),
   originPluginId: z.string().min(1).optional(),
   includeHidden: z.enum(["true", "false"]).optional(),
+  threadIds: z
+    .string()
+    .refine(
+      (value) => {
+        const ids = parseThreadListThreadIds(value);
+        return (
+          ids.length <= THREAD_LIST_MAX_IDS && ids.every((id) => id.length > 0)
+        );
+      },
+      {
+        message: `threadIds must be at most ${THREAD_LIST_MAX_IDS} comma-separated thread IDs`,
+      },
+    )
+    .optional(),
   limit: z.string().regex(/^\d+$/).optional(),
   offset: z.string().regex(/^\d+$/).optional(),
 });

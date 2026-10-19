@@ -36,6 +36,7 @@ import {
   makeSidebarThread,
 } from "../model/fixtures.js";
 import { sidebarShowProviderIconsAtom } from "../preferences/atoms.js";
+import { SidebarProjectsContext } from "../model/use-sidebar-data.js";
 import type { ThreadRowOptions } from "./ThreadRow.js";
 import {
   preferenceValueAtom,
@@ -51,7 +52,11 @@ const { SidebarDraftPresenceSync } =
   await import("../list/sidebarDraftPresence.js");
 const { ThreadRowNavigationProvider } =
   await import("./threadRowNavigation.js");
-const { resetSidebarTitleDoubleClickForTest, ThreadRow } =
+const {
+  resetSidebarTitleDoubleClickForTest,
+  SidebarProvidersContext,
+  ThreadRow,
+} =
   await import("./ThreadRow.js");
 
 const DEFAULT_OPTIONS: ThreadRowOptions = {
@@ -81,6 +86,8 @@ function activity(
 
 interface HarnessProps {
   thread: PluginSidebarThread;
+  projects?: PluginSidebarProject[];
+  providers?: PluginProvidersState["providers"];
   isCompactViewport?: boolean;
   crossProjectId?: string | null;
   isActive?: boolean;
@@ -92,6 +99,8 @@ interface HarnessProps {
 
 function ThreadRowHarness({
   thread,
+  projects = [],
+  providers = [],
   isCompactViewport,
   crossProjectId = null,
   isActive = false,
@@ -109,7 +118,9 @@ function ThreadRowHarness({
     />
   );
   const content = (
-    <TooltipProvider>
+    <SidebarProjectsContext.Provider value={projects}>
+      <SidebarProvidersContext.Provider value={providers}>
+      <TooltipProvider>
       <SidebarDraftPresenceSync />
       <ThreadRowNavigationProvider>
         <SidebarRenameProvider>
@@ -137,7 +148,9 @@ function ThreadRowHarness({
           </CustomizeRowActionsContext.Provider>
         </SidebarRenameProvider>
       </ThreadRowNavigationProvider>
-    </TooltipProvider>
+      </TooltipProvider>
+      </SidebarProvidersContext.Provider>
+    </SidebarProjectsContext.Provider>
   );
   return isCompactViewport === undefined ? (
     content
@@ -178,7 +191,7 @@ function renderThreadRow({
 } {
   const slot = renderSlot(
     { component: ThreadRowHarness },
-    { thread, ...harness },
+    { thread, projects, providers, ...harness },
     {
       sidebarThreads: { threads: [thread], projects },
       providers: { providers },
@@ -203,7 +216,12 @@ function renderThreadRow({
   return Object.assign(slot, {
     rerenderThreadRow(nextThread: PluginSidebarThread) {
       slot.lifecycle.rerender(
-        <ThreadRowHarness thread={nextThread} {...harness} />,
+        <ThreadRowHarness
+          thread={nextThread}
+          projects={projects}
+          providers={providers}
+          {...harness}
+        />,
       );
     },
   });
