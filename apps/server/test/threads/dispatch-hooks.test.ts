@@ -1654,6 +1654,7 @@ describe("strict dispatch admission", () => {
         taskStatus: "running",
         description: "Working",
         skipTranscript: false,
+        foreground: false,
       };
       seedStoredEvent(harness.deps, {
         threadId: occupied.id,
@@ -2090,6 +2091,7 @@ it.each(["turn", "background", "goal"] as const)(
           taskStatus: "running",
           description: "Working",
           skipTranscript: false,
+          foreground: false,
         };
         seedStoredEvent(harness.deps, {
           threadId: occupied.id,
