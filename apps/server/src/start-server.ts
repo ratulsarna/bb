@@ -348,7 +348,6 @@ export async function runServer(serverConfig: ServerConfig): Promise<void> {
   );
   disconnectImportedDaemonSessions(
     {
-      aiServices,
       config: runtimeConfig,
       db,
       hub,
@@ -356,8 +355,9 @@ export async function runServer(serverConfig: ServerConfig): Promise<void> {
       logger,
       machineAuth,
       pendingInteractions,
-      pluginHostArtifacts,
       providerRegistry,
+      pluginHostArtifacts,
+      aiServices,
       skillTreeRegistry,
       telemetry,
       terminalSessions,

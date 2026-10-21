@@ -418,15 +418,17 @@ ancestors. Their HTTP GET routes accept the same flag as a string boolean.
 Default reads still return 404; writes and other routes remain unavailable.
 This read option also permits retained threads from deleted projects.
 
+`bb.experimental_hooks.experimental_strictAdmissionVersion` is `1` on servers
+that implement this section and absent on upstream bb, which silently ignores
+the enforcement and occupancy options. A plugin that depends on them throws at
+activation when the marker is missing.
+
 Core reserves cleared admissions inside the hook evaluation lock and releases
 that lock before provider command preparation or daemon RPC. Reservations have
 no expiry. Dispatch commits canonical occupancy before releasing the reservation;
 preparation and claim failures release it and wake the existing queue. Queue
 claims and recorded lifecycle/activity support restart recovery. Plugins own
 membership and counting rules; core defines no task IDs or numerical limits.
-
-Plugins relying on strict enforcement must require `engines.bbPluginSdk: ">=0.6.55"`.
-Older SDKs do not interpret the registration or occupancy options.
 
 **Audit before stabilizing.** Exercise mixed ordinary/strict policies, concurrent
 cold/warm starts, provider preparation failures, manual operations, restart claim

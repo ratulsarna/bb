@@ -1430,6 +1430,7 @@ function createFakePluginHostInternal(
       // watches changed, so it told core to re-ask.
       requestedDrains += 1;
     },
+    experimental_strictAdmissionVersion: 1,
   };
 
   const experimental_environments: PluginEnvironments = {

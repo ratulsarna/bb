@@ -782,7 +782,8 @@ export interface PluginHooks {
        * registrations retain their Send now override and operation exemptions.
        * Count with sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true })
        * to include admissions awaiting command preparation and tracked work.
-       * Require engines.bbPluginSdk >=0.6.55 when depending on enforcement.
+       * Upstream bb ignores this option; check
+       * `experimental_strictAdmissionVersion` before depending on enforcement.
        */
       experimental_enforcement?: "strict";
     },
@@ -815,6 +816,14 @@ export interface PluginHooks {
    * handler holding the evaluation lock could not complete. Fire and forget.
    */
   recheck(hook: PluginHookName): Promise<void>;
+
+  /**
+   * The strict admission contract this server implements: `1` covers
+   * `experimental_enforcement: "strict"`, dispatch occupancy counts, and
+   * deleted-thread reads. Absent on upstream bb, so a plugin that depends on
+   * enforcement throws at activation when it is missing.
+   */
+  readonly experimental_strictAdmissionVersion: 1;
 }
 
 // ---------------------------------------------------------------------------

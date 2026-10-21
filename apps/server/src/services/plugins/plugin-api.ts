@@ -1169,6 +1169,7 @@ export function createPluginApi(options: {
       // row it failed, like every other background drain.
       requestQueueDrain();
     },
+    experimental_strictAdmissionVersion: 1,
   };
 
   const providers: PluginProviders = {

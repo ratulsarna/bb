@@ -1034,7 +1034,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
           'Register on("message.dispatch", handler, { experimental_enforcement: "strict" }) to enforce admission for Send now, manual compaction, edited resends, and parent system notifications; compact/edit waits return 409 before provider effects',
           "Count sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true }) to include atomic admissions, stopping threads, unfinished background agents, commands, workflows, and active native goals between turns; archived/deleted runtimes count until work stops; defaults remain starting/active live threads",
           "Read retained deleted ancestry through threads.get and threads.getPluginMetadata with experimental_includeDeleted: true; default reads and mutations retain their deleted-thread restrictions",
-          "Require engines.bbPluginSdk >=0.6.55 for strict enforcement; release notifications wake the existing queue, and plugin condition changes use recheck",
+          "Check bb.experimental_hooks.experimental_strictAdmissionVersion === 1 at activation before depending on strict enforcement, since upstream bb ignores the option; release notifications wake the existing queue, and plugin condition changes use recheck",
           "See the thread, project, machine, and prompt before the turn runs",
           "Hold messages until a condition clears, such as a concurrency limit",
           "Leave people a Send now override",
