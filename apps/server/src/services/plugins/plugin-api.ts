@@ -1,3 +1,5 @@
+import { rpcInvalidationTags } from "@get-bb/plugin-sdk/internal/rpc-tags";
+import type { ContractTagDeclarations } from "@bb/domain";
 import {
   environmentCompositionSchema,
   validateServerAccessProviderDeclaration,
@@ -191,6 +193,7 @@ export interface PluginWebSocketRouteRecord {
 }
 
 export interface PluginRpcHandler {
+  declarations: ContractTagDeclarations<unknown, unknown>;
   publication: ReturnType<typeof publishRpcMethod>;
   inputSchema: StandardSchemaV1;
   outputSchema: StandardSchemaV1;
@@ -395,6 +398,9 @@ function wrapSdkForPlugin(
       spawn(args: ThreadSpawnArgs) {
         return sdk.threads.spawn(withPluginThreadAttribution(args, pluginId));
       },
+      send(args) {
+        return sdk.threads.send({ ...args, originPluginId: pluginId });
+      },
     },
   };
 }
@@ -493,6 +499,7 @@ export function createPluginApi(options: {
    * Revoked when the handle is invalidated.
    */
   rpcCaller: PluginRpcCallerCredential;
+  invalidateRpc: (tags: readonly string[] | null) => void;
   publishSignal: (channel: string, payload: unknown) => void;
   settingsChanged: () => void;
   reportNeedsConfiguration: (message: string) => void;
@@ -559,6 +566,7 @@ export function createPluginApi(options: {
     getLoopbackBaseUrl,
     rpcCaller,
     publishSignal,
+    invalidateRpc: optionsInvalidate,
     settingsChanged,
     reportNeedsConfiguration,
     isAgentToolNameTaken,
@@ -836,6 +844,14 @@ export function createPluginApi(options: {
   };
 
   const rpc: PluginRpc = {
+    experimental_invalidate(tags) {
+      assertLive();
+      optionsInvalidate(rpcInvalidationTags.parse(tags));
+    },
+    experimental_invalidateAll() {
+      assertLive();
+      optionsInvalidate(null);
+    },
     register(contract, handlers, options) {
       assertLive();
       for (const [name, record] of normalizeRpcRegistration(

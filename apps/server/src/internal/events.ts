@@ -48,6 +48,11 @@ import {
 import { queueChildThreadTurnNotificationBestEffort } from "../services/threads/child-thread-notifications.js";
 import { isParentNotifiableChildThread } from "../services/threads/thread-parent.js";
 import {
+  continueAfterEnvironmentDirectoryUpdate,
+  findEnvironmentDirectoryContinuation,
+  type EnvironmentDirectoryContinuation,
+} from "../services/threads/environment-directory-continuation.js";
+import {
   runQueuedMessageDispatch,
   type QueuedMessageDispatchWake,
 } from "../services/threads/queued-message-dispatch.js";
@@ -232,7 +237,7 @@ interface ResolveActivePruneCandidatesArgs {
 
 interface AddParentTurnNotificationFollowUpArgs {
   failedParentNotificationThreadIds: Set<string>;
-  followUps: EventEffectFollowUp[];
+  followUps: EventEffectFollowUp[] | ParentTurnNotificationFollowUp[];
   thread: NonNullable<ReturnType<typeof getThread>>;
   turnStatus: ThreadEventTurnStatus;
   interruption?: ChildThreadOutcome["interruption"];
@@ -258,7 +263,15 @@ interface QueuedMessageDispatchFollowUp {
   >;
 }
 
+interface EnvironmentDirectoryContinuationFollowUp {
+  kind: "environment-directory-continuation";
+  continuation: EnvironmentDirectoryContinuation;
+  parentNotification: ParentTurnNotificationFollowUp | null;
+  threadId: string;
+}
+
 type EventEffectFollowUp =
+  | EnvironmentDirectoryContinuationFollowUp
   | ParentTurnNotificationFollowUp
   | QueuedMessageDispatchFollowUp;
 
@@ -319,6 +332,7 @@ function resolveProviderIdentifiers(event: HostDaemonEventEnvelope["event"]): {
     case "thread/tokenUsage/updated":
     case "turn/plan/updated":
     case "turn/diff/updated":
+    case "turn/mainRun/updated":
     case "provider/error":
     case "provider/unhandled":
       return { providerThreadId: event.providerThreadId };
@@ -461,6 +475,16 @@ async function applyEventEffects(
         continue;
       }
 
+      if (event.type === "turn/mainRun/updated") {
+        if (event.state === "idle") {
+          followUps.push({
+            kind: "queued-message-dispatch",
+            wake: { kind: "thread-ready", threadId: entry.threadId },
+          });
+        }
+        continue;
+      }
+
       if (event.type === "turn/completed") {
         const turnId = requireThreadEventScopeTurnId({
           type: event.type,
@@ -479,6 +503,18 @@ async function applyEventEffects(
           ...event,
           threadId: entry.threadId,
         });
+        const continuation =
+          event.status === "completed" &&
+          turnCompleted.nextStatus === "idle" &&
+          turnCompleted.isRootTurnCompletion &&
+          !wasTurnManuallyStopped(deps, { threadId: entry.threadId, turnId })
+            ? findEnvironmentDirectoryContinuation(deps, {
+                threadId: entry.threadId,
+                turnId,
+              })
+            : null;
+        const deferredParentNotifications: ParentTurnNotificationFollowUp[] =
+          [];
         if (
           turnCompleted.thread &&
           turnCompleted.isRootTurnCompletion &&
@@ -507,7 +543,7 @@ async function applyEventEffects(
           if (!alreadyHandledByCommandFailure && !manuallyStopped) {
             addParentTurnNotificationFollowUp({
               failedParentNotificationThreadIds,
-              followUps,
+              followUps: continuation ? deferredParentNotifications : followUps,
               thread: turnCompleted.thread,
               turnStatus: event.status,
               ...(interruption ? { interruption } : {}),
@@ -518,10 +554,19 @@ async function applyEventEffects(
           event.status === "completed" &&
           turnCompleted.nextStatus === "idle"
         ) {
-          followUps.push({
-            kind: "queued-message-dispatch",
-            wake: { kind: "thread-ready", threadId: entry.threadId },
-          });
+          followUps.push(
+            continuation
+              ? {
+                  kind: "environment-directory-continuation",
+                  continuation,
+                  parentNotification: deferredParentNotifications[0] ?? null,
+                  threadId: entry.threadId,
+                }
+              : {
+                  kind: "queued-message-dispatch",
+                  wake: { kind: "thread-ready", threadId: entry.threadId },
+                },
+          );
         }
         continue;
       }
@@ -611,6 +656,27 @@ async function executeEventFollowUpBestEffort(
       case "queued-message-dispatch":
         await runQueuedMessageDispatch(deps, followUp.wake);
         return;
+      case "environment-directory-continuation": {
+        await runQueuedMessageDispatch(deps, {
+          kind: "thread-ready",
+          threadId: followUp.threadId,
+        });
+        let continued = false;
+        try {
+          continued = await continueAfterEnvironmentDirectoryUpdate(deps, {
+            ...followUp.continuation,
+            threadId: followUp.threadId,
+          });
+        } finally {
+          if (!continued && followUp.parentNotification) {
+            await executeEventFollowUpBestEffort(
+              deps,
+              followUp.parentNotification,
+            );
+          }
+        }
+        return;
+      }
     }
   } catch (error) {
     if (isCommandTimeoutError(error)) {

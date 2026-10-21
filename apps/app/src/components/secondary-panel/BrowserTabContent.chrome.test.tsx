@@ -143,28 +143,35 @@ describe("BrowserTabContent persistent navigation", () => {
     expect(harness.goBack).toHaveBeenCalledWith("browser:test");
   });
 
-  it("selects the whole address on the first click and places the caret on later clicks", () => {
-    const harness = createBrowserChromeHarness();
-    renderBrowserChrome(harness, "https://example.com/docs");
-    const address = screen.getByRole<HTMLInputElement>("textbox", {
-      name: /Address and search bar/,
-    });
-    const clickAt = (caret: number) => {
-      fireEvent.mouseDown(address);
-      act(() => address.focus());
-      address.setSelectionRange(caret, caret);
-      fireEvent.mouseUp(address);
-    };
+  it.each([
+    [8, 8],
+    [0, 6],
+    [6, 12],
+  ])(
+    "selects the whole address on the first click with native selection %i–%i and places the caret on later clicks",
+    (start, end) => {
+      const harness = createBrowserChromeHarness();
+      renderBrowserChrome(harness, "https://example.com/docs");
+      const address = screen.getByRole<HTMLInputElement>("textbox", {
+        name: /Address and search bar/,
+      });
+      const clickAt = (start: number, end: number) => {
+        fireEvent.mouseDown(address);
+        act(() => address.focus());
+        address.setSelectionRange(start, end);
+        fireEvent.mouseUp(address);
+      };
 
-    clickAt(8);
-    expect([address.selectionStart, address.selectionEnd]).toEqual([
-      0,
-      "https://example.com/docs".length,
-    ]);
+      clickAt(start, end);
+      expect([address.selectionStart, address.selectionEnd]).toEqual([
+        0,
+        "https://example.com/docs".length,
+      ]);
 
-    clickAt(8);
-    expect([address.selectionStart, address.selectionEnd]).toEqual([8, 8]);
-  });
+      clickAt(8, 8);
+      expect([address.selectionStart, address.selectionEnd]).toEqual([8, 8]);
+    },
+  );
 
   it.each(["", "https://example.com/docs"])(
     "moves focus from the address bar to the page after submitting from %s",
@@ -192,6 +199,28 @@ describe("BrowserTabContent persistent navigation", () => {
       );
     },
   );
+
+  it("cancels address edits with Escape without navigating", async () => {
+    const harness = createBrowserChromeHarness();
+    const navigate = vi.spyOn(harness.api, "navigate");
+    renderBrowserChrome(harness, "https://example.com/docs");
+    const address = screen.getByRole<HTMLInputElement>("textbox", {
+      name: /Address and search bar/,
+    });
+    act(() => address.focus());
+    fireEvent.change(address, { target: { value: "unfinished address" } });
+    fireEvent.keyDown(address, { key: "Escape" });
+
+    expect(address.value).toBe("https://example.com/docs");
+    await waitFor(() =>
+      expect([address.selectionStart, address.selectionEnd]).toEqual([
+        0,
+        address.value.length,
+      ]),
+    );
+    expect(document.activeElement).toBe(address);
+    expect(navigate).not.toHaveBeenCalled();
+  });
 
   it.each([
     { platform: "MacIntel", modifiers: { metaKey: true }, opensNewTab: true },

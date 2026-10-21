@@ -48,6 +48,7 @@ export const ENVIRONMENT_CHANGE_KINDS = [
   "work-status-changed",
   "git-refs-changed",
   "thread-storage-changed",
+  "diff-viewed-changed",
 ] as const;
 export type EnvironmentChangeKind = (typeof ENVIRONMENT_CHANGE_KINDS)[number];
 
@@ -64,7 +65,6 @@ export const SYSTEM_CHANGE_KINDS = [
   "plugin-install-jobs-changed",
   "plugin-update-jobs-changed",
   "provider-registrations-changed",
-  "ui-preferences-changed",
   "environment-availability-changed",
   "server-move-changed",
   "app-update-changed",
@@ -90,6 +90,7 @@ export type ThreadTimelineSubscriptionTarget = z.infer<
 >;
 
 export const realtimeSubscriptionTargetSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("plugin"), pluginId: z.string().min(1) }).strict(),
   z
     .object({
       kind: z.literal("thread-detail"),
@@ -121,6 +122,12 @@ export const realtimeSubscriptionTargetSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      kind: z.literal("environment-pull-request"),
+      environmentId: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("environment-list"),
     })
     .strict(),
@@ -145,24 +152,57 @@ export type RealtimeSubscriptionTarget = z.infer<
   typeof realtimeSubscriptionTargetSchema
 >;
 
-const subscribeMessageSchema = z.object({
-  type: z.literal("subscribe"),
-  target: realtimeSubscriptionTargetSchema,
-});
-
-const unsubscribeMessageSchema = z.object({
-  type: z.literal("unsubscribe"),
-  target: realtimeSubscriptionTargetSchema,
-});
+function isUnknownSubscriptionTarget(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    typeof value.kind === "string" &&
+    !realtimeSubscriptionTargetSchema.options.some(
+      (option) => option.shape.kind.value === value.kind,
+    )
+  );
+}
+const knownSubscriptionTargetsSchema = z.preprocess(
+  (value) =>
+    Array.isArray(value)
+      ? value.filter((target) => !isUnknownSubscriptionTarget(target))
+      : value,
+  z.array(realtimeSubscriptionTargetSchema),
+);
+const knownSubscriptionTargetSchema = z.preprocess(
+  (value) => (isUnknownSubscriptionTarget(value) ? null : value),
+  realtimeSubscriptionTargetSchema.nullable().optional(),
+);
+const subscriptionFields = {
+  target: knownSubscriptionTargetSchema,
+  targets: knownSubscriptionTargetsSchema.optional(),
+};
+const hasSubscriptionTargets = (value: {
+  target?: RealtimeSubscriptionTarget | null;
+  targets?: RealtimeSubscriptionTarget[];
+}) => (value.target !== undefined) !== (value.targets !== undefined);
+const subscribeMessageSchema = z
+  .object({ type: z.literal("subscribe"), ...subscriptionFields })
+  .refine(hasSubscriptionTargets);
+const unsubscribeMessageSchema = z
+  .object({ type: z.literal("unsubscribe"), ...subscriptionFields })
+  .refine(hasSubscriptionTargets);
 
 export const pingMessageSchema = z.object({
   type: z.literal("ping"),
+});
+
+const visibilityMessageSchema = z.object({
+  type: z.literal("visibility"),
+  visible: z.boolean(),
 });
 
 export const clientMessageSchema = z.discriminatedUnion("type", [
   subscribeMessageSchema,
   unsubscribeMessageSchema,
   pingMessageSchema,
+  visibilityMessageSchema,
 ]);
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 
@@ -197,12 +237,16 @@ export function realtimeSubscriptionTargetKey(
       return "project-list";
     case "environment-detail":
       return `environment-detail:${target.environmentId}`;
+    case "environment-pull-request":
+      return `environment-pull-request:${target.environmentId}`;
     case "environment-list":
       return "environment-list";
     case "host-detail":
       return `host-detail:${target.hostId}`;
     case "host-list":
       return "host-list";
+    case "plugin":
+      return `plugin:${target.pluginId}`;
     case "system":
       return "system";
     default:
@@ -285,12 +329,32 @@ export const systemChangedMessageSchema = z
   })
   .strict();
 
+export const tagsChangedMessageSchema = z
+  .object({
+    type: z.literal("changed"),
+    entity: z.literal("tags"),
+    tags: z.array(z.string().min(1)).min(1),
+  })
+  .strict();
+export type TagsChangedMessage = z.infer<typeof tagsChangedMessageSchema>;
+
+export const pluginChangedMessageSchema = z
+  .object({
+    type: z.literal("changed"),
+    entity: z.literal("plugin"),
+    pluginId: z.string().min(1),
+    tags: z.array(z.string().min(1)).min(1).nullable(),
+  })
+  .strict();
+
 export const changedMessageSchema = z.discriminatedUnion("entity", [
   threadChangedMessageSchema,
   projectChangedMessageSchema,
   environmentChangedMessageSchema,
   hostChangedMessageSchema,
   systemChangedMessageSchema,
+  tagsChangedMessageSchema,
+  pluginChangedMessageSchema,
 ]);
 export type ChangedMessage = z.infer<typeof changedMessageSchema>;
 
@@ -364,4 +428,6 @@ export const changedMessageLenientSchema = z.discriminatedUnion("entity", [
   environmentChangedMessageLenientSchema,
   hostChangedMessageLenientSchema,
   systemChangedMessageLenientSchema,
+  tagsChangedMessageSchema.strip(),
+  pluginChangedMessageSchema.strip(),
 ]);

@@ -48,6 +48,7 @@ import {
 import { workspaceResolutionFailureSchema } from "./workspace.js";
 import { HOST_ARTIFACT_MAX_BYTES } from "./protocol.js";
 import {
+  commandListResultSchema as providerCommandListResultSchema,
   providerHealthResultSchema,
   providerInstallationStatusSchema,
   providerUsageResultSchema,
@@ -909,7 +910,17 @@ const providerListModelsCommandSchema = z.object({
   providerId: z.string().min(1),
   bridgeLaunch: hostDaemonBridgeLaunchSchema,
   cwd: z.string().min(1).optional(),
+  contributedEnv: z.array(hostDaemonContributedEnvEntrySchema),
 });
+
+const providerListCommandsCommandSchema = z
+  .object({
+    type: z.literal("provider.list_commands"),
+    providerId: z.string().min(1),
+    bridgeLaunch: hostDaemonBridgeLaunchSchema,
+    cwd: z.string().min(1).nullable(),
+  })
+  .strict();
 
 const providerHealthCommandSchema = z
   .object({
@@ -997,6 +1008,7 @@ const workspaceDiffFilesCommandSchema = hostDaemonWorkspaceTargetSchema.extend({
   type: z.literal("workspace.diffFiles"),
   target: workspaceDiffTargetSchema,
   maxFiles: z.number().int().positive(),
+  ignoreWhitespace: z.boolean(),
 });
 
 const workspaceDiffPatchCommandSchema = hostDaemonWorkspaceTargetSchema.extend({
@@ -1004,6 +1016,7 @@ const workspaceDiffPatchCommandSchema = hostDaemonWorkspaceTargetSchema.extend({
   target: workspaceDiffTargetSchema,
   paths: z.array(z.string()),
   maxBytesPerFile: z.number().int().positive(),
+  ignoreWhitespace: z.boolean(),
 });
 
 const workspacePullRequestCommandSchema =
@@ -1945,6 +1958,15 @@ export const hostDaemonCommandRegistry = {
     type: "provider.list_models",
     schema: providerListModelsCommandSchema,
     resultSchema: providerListModelsResultSchema,
+    transport: "onlineRpc",
+    retryable: true,
+    flushEventsBeforeResult: false,
+    envLane: null,
+  }),
+  "provider.list_commands": defineHostDaemonCommandDescriptor({
+    type: "provider.list_commands",
+    schema: providerListCommandsCommandSchema,
+    resultSchema: providerCommandListResultSchema,
     transport: "onlineRpc",
     retryable: true,
     flushEventsBeforeResult: false,

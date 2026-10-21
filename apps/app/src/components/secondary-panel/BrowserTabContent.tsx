@@ -45,6 +45,7 @@ import {
   BrowserFindBar,
   type BrowserFindMatches,
 } from "./BrowserFindBar";
+import { BrowserAddressInput } from "./BrowserAddressInput";
 import { BrowserNewTabScreen } from "./BrowserNewTabScreen";
 import {
   registerBrowserView,
@@ -165,6 +166,10 @@ function browserViewBoundsFromElement(
   });
 }
 
+function isPanelLayoutTransition(propertyName: string): boolean {
+  return propertyName === "flex-grow" || propertyName === "flex-basis";
+}
+
 function browserViewBoundsEqual(args: BrowserViewBoundsEqualArgs): boolean {
   return (
     args.a.x === args.b.x &&
@@ -209,7 +214,6 @@ function BrowserChrome({
   const isLoading = state?.isLoading ?? false;
   const security = getBrowserUrlSecurity(currentUrl);
   const addressValue = isEditing ? addressDraft : currentUrl;
-  const selectAddressOnMouseUpRef = useRef(false);
   return (
     <div
       role="region"
@@ -273,38 +277,19 @@ function BrowserChrome({
                 aria-hidden
               />
             )}
-            <input
+            <BrowserAddressInput
               ref={addressInputRef}
-              type="text"
               value={addressValue}
               onChange={(event) => onAddressChange(event.target.value)}
-              onMouseDown={(event) => {
-                selectAddressOnMouseUpRef.current =
-                  document.activeElement !== event.currentTarget;
-              }}
-              onMouseUp={(event) => {
-                if (!selectAddressOnMouseUpRef.current) return;
-                selectAddressOnMouseUpRef.current = false;
-                const input = event.currentTarget;
-                if (input.selectionStart !== input.selectionEnd) return;
-                event.preventDefault();
-                input.select();
-              }}
-              onFocus={(event) => {
-                event.currentTarget.select();
-                onAddressFocus();
-              }}
+              onFocus={onAddressFocus}
               onBlur={onAddressBlur}
               onKeyDown={onAddressKeyDown}
-              placeholder="Enter a URL"
               aria-label={
                 locationShortcut
                   ? `Address and search bar (${locationShortcut.label})`
                   : "Address and search bar"
               }
               aria-keyshortcuts={locationShortcut?.ariaKeyshortcuts}
-              autoComplete="off"
-              spellCheck={false}
               className={cn(
                 "min-w-0 flex-1 bg-transparent font-mono text-foreground outline-none placeholder:font-sans placeholder:text-muted-foreground",
                 COARSE_POINTER_TEXT_SM_CLASS,
@@ -665,11 +650,27 @@ export function BrowserTabContent({
       return;
     }
 
+    const syncAfterPanelLayoutTransition = (event: TransitionEvent) => {
+      if (isPanelLayoutTransition(event.propertyName)) {
+        syncBoundsIfChanged();
+      }
+    };
+
     window.addEventListener(
       BROWSER_VIEW_BOUNDS_SYNC_EVENT,
       syncBoundsIfChanged,
     );
     window.addEventListener("resize", syncBoundsIfChanged);
+    document.addEventListener(
+      "transitionend",
+      syncAfterPanelLayoutTransition,
+      true,
+    );
+    document.addEventListener(
+      "transitioncancel",
+      syncAfterPanelLayoutTransition,
+      true,
+    );
 
     return () => {
       window.removeEventListener(
@@ -677,6 +678,16 @@ export function BrowserTabContent({
         syncBoundsIfChanged,
       );
       window.removeEventListener("resize", syncBoundsIfChanged);
+      document.removeEventListener(
+        "transitionend",
+        syncAfterPanelLayoutTransition,
+        true,
+      );
+      document.removeEventListener(
+        "transitioncancel",
+        syncAfterPanelLayoutTransition,
+        true,
+      );
     };
   }, [desktopBrowser, syncBoundsIfChanged]);
 
@@ -789,10 +800,20 @@ export function BrowserTabContent({
 
   const handleAddressKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
+      if (event.nativeEvent.isComposing) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setAddressDraft(currentUrl);
+        const input = event.currentTarget;
+        window.requestAnimationFrame(() => {
+          if (document.activeElement === input) input.select();
+        });
+        return;
+      }
       if (
         onOpenInNewTab === null ||
         event.key !== "Enter" ||
-        event.nativeEvent.isComposing ||
         event.shiftKey ||
         event.ctrlKey
       ) {

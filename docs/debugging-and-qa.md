@@ -6,12 +6,17 @@
 - `pnpm start:worktree` builds production artifacts and serves the optimized app bundle from the checkout-specific dev server URL, while keeping the same dev data directory and deterministic server/host-daemon ports. It has no Vite dev server or hot reload.
 - `pnpm start:worktree-remote` is the trusted-network variant of `pnpm start:worktree`; it binds that server to all IPv4 interfaces.
 - `pnpm desktop` packages the Electron app and launches it against the installed data directory, ports and Electron user-data directory, the same targets a released build uses. It shares the single-instance lock with an installed bb: quit that first, or the launch focuses it instead of starting your build.
-- `pnpm desktop:worktree` packages and launches it against this checkout's data directory and deterministic ports, the same instance `pnpm start:worktree` uses, with Electron's user-data directory at `$BB_DATA_DIR/desktop` (override with `BB_DESKTOP_USER_DATA_DIR`). Like `pnpm start:worktree`, it skips first-run setup unless `BB_SKIP_ONBOARDING=0`. It refuses to start when the server or host-daemon port is busy, so a stale server cannot answer for your build. Set `BB_DESKTOP_OPEN_DEVTOOLS=1` to open DevTools. Both desktop commands always repackage first; machines without a Developer ID identity produce unsigned artifacts.
+- `pnpm desktop:worktree` packages and launches it against this checkout's data directory and deterministic ports, the same instance `pnpm start:worktree` uses, with Electron's user-data directory at `$BB_DATA_DIR/desktop` (override with `BB_DESKTOP_USER_DATA_DIR`). Like `pnpm start:worktree`, it skips first-run setup unless `BB_SKIP_ONBOARDING=0`. It refuses to start when the server or host-daemon port is busy, so a stale server cannot answer for your build. It shows the dev Dock icon while running (`BB_DESKTOP_DEV_ICON=1`). Set `BB_DESKTOP_OPEN_DEVTOOLS=1` to open DevTools. Both desktop commands always repackage first; machines without a Developer ID identity produce unsigned artifacts.
 - The packaged app defaults to server/frontend `:38886`, host daemon `:38887`, data dir `~/.bb/`, and logs under `~/.bb/logs/`.
-- `bb-app` (including `pnpm start`), `bb-server`, and `bb-host-daemon` capture service stdout and stderr in `logs/server-stdio.log` and `logs/host-daemon-stdio.log` under the selected data directory. These append across restarts and are separate from rotating application logs. Use `tail -F` on these files for console output and early startup errors; service output is not forwarded to the launcher's terminal.
+- `bb-app` (including `pnpm start`), `bb-server`, and `bb-host-daemon` capture service stdout and stderr in `logs/server-stdio.log` and `logs/host-daemon-stdio.log` under the selected data directory. These append across restarts; a file over 10 MB is renamed to `<name>-stdio.1.log` (replacing the previous one) when its service starts. They hold early startup errors, crashes, and other output that bypasses the logger. Application log lines go only to the rotating `<component>.N.log` files, which keep the five newest per component; the logger skips its pretty console copy when stdout is a plain file, so `pnpm dev` terminals still show it. Service output is not forwarded to the launcher's terminal.
 - Entity IDs in URLs (`proj_*`, `thr_*`) are primary keys. Query them directly against the active data dir: `sqlite3 <data>/bb.db "SELECT * FROM threads WHERE id = 'thr_xxx';"`.
 - API routes are under `/api/v1/`, for example `GET /api/v1/threads/:id`. Use `curl` against the server API to isolate frontend issues from server behavior.
 - Use the CLI to inspect state: `pnpm bb thread show <id>`, `pnpm bb project list`, `pnpm bb status`. From source, use `pnpm bb:dev`.
+
+The desktop main process also writes rotating `logs/desktop.log` immediately,
+including updater, Connect, and startup errors. View → Local Logs is available
+on every desktop platform and when attached to an existing server; it follows
+local desktop, server, and daemon files in the selected data directory.
 
 ## Desktop Browser Tab Recovery
 
@@ -25,12 +30,36 @@ in the desktop app attaches the existing view when that window still owns it,
 including after its connection generation changes. While the desktop or host is
 reconnecting, the panel retries for about a minute, then offers Try again.
 
-Switching servers retains each server's native pages in the desktop process.
-Inactive pages and their popups are hidden, media is paused, and automation
-leases are revoked. Returning to the same server origin reattaches its pages
-with their history and unsaved state. Native tab lookup, page events, and broker
-snapshots stay scoped to the active server. Closing the window or quitting the
-desktop app still releases its pages across all servers.
+The desktop keeps at most four hidden user browser pages resident across
+windows and servers, and evicts the renderer of any page hidden or unused for
+five minutes. A sweep runs every 30 seconds while hidden user pages exist; the
+least recently hidden or used pages are evicted first. Visible pages, agent-created
+tabs, downloads (including paused ones), control leases, attached debuggers,
+in-flight evaluations and captures, and pages with open popups are never
+evicted. An evicted (cold) tab keeps its identity in native tab lists and broker
+snapshots. Showing it, navigating it, evaluating, capturing, or leasing it
+restores its navigation history in the same browser session; in-page
+JavaScript state is lost. Hiding, moving, stopping, focusing, searching, or
+closing a cold tab does not restore it. CDP targets cover only resident pages,
+so a cold tab leaves the target list until it is restored.
+
+Archiving a thread evicts its hidden pages in each desktop window at once,
+including agent-created tabs and pages with downloads; a page on screen is
+evicted once it is hidden. Control leases, attached debuggers, open popups, and
+in-flight evaluations or captures still keep a page until they end. Evicted
+tabs keep their saved tabs and restore like any cold tab. Unarchiving stops the
+immediate eviction and leaves the thread's pages to the idle rules above.
+Archive state reaches the window as realtime thread changes, so each time the
+window's realtime connection opens, including after a reconnect or a server
+switch, it re-reads the archive state of every thread with pages in that window.
+An archive or unarchive made while the window was disconnected applies then.
+
+Switching servers hides each server's native pages and popups, pauses media,
+and revokes automation leases. Returning to the same server origin reattaches
+resident pages with their unsaved state; cold pages restore from history when
+shown. Native tab lookup, page events, and broker snapshots stay scoped to the
+active server. Closing the window or quitting the desktop app still releases
+its pages across all servers.
 
 After a window closes or the app relaunches, the panel reopens the saved URL in
 the current window on the same host once the host confirms the old window is
@@ -207,10 +236,14 @@ fsync waits. Page faults do not identify whether the fault was on the SQLite
 mmap, the server heap, or another mapping, and these counters do not measure
 swap-in bytes.
 
-`diagnostics.wal.sizeBytes` is the WAL's physical file size, sampled only when
-emitting a slow log with diagnostics enabled. Missing or inaccessible WAL files
-and in-memory databases report null. WAL size can include space reused by
-earlier generations; it does not measure uncheckpointed backlog or identify
+`diagnostics.wal.sizeBytes` is the most recent asynchronous sample of the WAL's
+physical file size. A slow log with diagnostics enabled requests a refresh at
+most once per second per connection, with at most one refresh in flight.
+`diagnostics.wal.sampledAt` is the sample's UTC completion time; the log uses
+the previous sample, which may be older after an idle period. Both fields are
+null before the first sample and for in-memory databases. Missing or
+inaccessible WAL files report a null size with a sample timestamp. WAL size
+can include space reused by earlier generations; it does not measure uncheckpointed backlog or identify
 checkpoint progress. Resource sampling is also disabled with the live gate.
 
 ## Pending Question Drafts
@@ -801,6 +834,15 @@ PID, and UTC window). Profiles are kept for up to 12 hours and 1 GB total,
 oldest first, so copy the ones you need. They use private permissions and
 contain local paths and function names; inspect before sharing.
 
+A worker connects to the main-thread inspector and processes completed
+profiles, serializes JSON, and writes files. Captures overlap at rotation to
+preserve coverage without restarting V8's sampler. Native V8 sampling and
+profile completion still have some main-thread cost. Retention scans existing
+files once at startup, then tracks this recorder's writes incrementally; use
+one server per data directory. Rotation does not queue more captures while a
+previous capture is being saved. Shutdown awaits the active save and writes
+the final capture.
+
 ### Turn traces
 
 While both gates are on, every message sent through the send API also writes
@@ -858,15 +900,36 @@ applied chunk.
    `stallCauseCandidate`, when a measured synchronous operation is long enough
    (within one 20 ms sample) to explain the maximum delay, and `unattributed`
    otherwise. A candidate is not a confirmed cause: both fall somewhere in the
-   five-second window. Profiler work is measured as `cpu-profile:start`,
-   `cpu-profile:finish`, and `cpu-profile:serialize`.
-2. Load the `.cpuprofile` covering that time and PID in Chrome DevTools'
+   five-second window. Profile processing runs in a worker and no longer emits
+   the historical `cpu-profile:*` synchronous-work labels.
+2. With performance diagnostics enabled, look for `Event loop stall attribution`
+   records for the same PID and UTC window. They are emitted at the next CPU
+   profile rotation (normally within 30 seconds), or on diagnostics shutdown,
+   even if the profile file is discarded for exceeding its size limit. A
+   separate 20 ms timer records individual gaps of at least 100 ms; the
+   five-second histogram's observation time is not the stall's end time.
+   `stacks` ranks the top five sampled leaf stacks in each gap, with up to 12
+   caller frames, including GC, plugin functions, native writes, and database
+   callers. Frame coordinates are one-based; cached Node source maps are used
+   in the profile worker when available, otherwise coordinates refer to the
+   generated code. Profile scanning and stack formatting run in that worker;
+   the main thread only collects and transfers bounded timing windows.
+   `sampledMs` is elapsed sampling coverage, not CPU time; native frames can
+   include waiting. Each sample contributes at most 10 ms so a long sampling
+   gap cannot be blamed on one frame. `unobservedMs` reports missing coverage,
+   including profile boundaries. The window includes up to one timer interval
+   of ordinary work; ranked stacks are evidence, not proof of a single cause.
+   Up to 128 windows are retained per rotation, with overflow reported as
+   `droppedWindows`; gaps of 60 seconds or more are treated as suspension.
+   These records require the existing profiling gates. Without profiling, the
+   immediate stall record can only report explicitly measured candidates.
+3. Load the `.cpuprofile` covering that time and PID in Chrome DevTools'
    JavaScript profiler, select the window, and read the bottom-up view.
    Match function names against the exact source revision of the build.
-3. Compare stacks with `mainThreadCpuMs`, GC totals, and SQL `cpuDurationMs`.
+4. Compare stacks with `mainThreadCpuMs`, GC totals, and SQL `cpuDurationMs`.
    A slow SQL operation with little CPU indicates waiting but does not identify
    the lock owner or prove disk I/O.
-4. Repeat with a small control workload. Expected long polls log slow requests
+5. Repeat with a small control workload. Expected long polls log slow requests
    without blocking the loop; require corroborating loop delay, stage timings,
    or sampled execution before calling them stalls.
 

@@ -12,7 +12,7 @@ import {
   hasRootStoredTurnStarted,
   classifyStoredProviderThreadClaim,
   wouldRemoveSharedProviderSessionClaim,
-  listActiveBackgroundTaskCountsByThreadIds,
+  listOpenBackgroundTaskItemRowsForThread,
   listThreadEventSuffixBackgroundSettlementRows,
   type AppendStoredThreadEventArgs,
   type DbQueryConnection,
@@ -56,8 +56,15 @@ import {
   resolveMessageSenderThreadId,
   sendThreadMessage,
 } from "./thread-send.js";
-import { requestThreadStopForCurrentState } from "./thread-lifecycle.js";
+import {
+  requestThreadStopForCurrentState,
+  stopThreadForCurrentState,
+} from "./thread-lifecycle.js";
 import { getLeadingAgentOnlyInput } from "./deferred-first-turn-context.js";
+import {
+  resolveThreadMessageEditRefusal,
+  type ThreadMessageEditPolicyDeps,
+} from "./thread-message-edit-policy.js";
 
 type ThreadRewindPrepareCommand = Extract<
   HostDaemonCommand,
@@ -337,22 +344,13 @@ function resolveEditableTurnCandidate(
 
 function resolveEditableTurn(
   db: DbQueryConnection,
+  policyDeps: ThreadMessageEditPolicyDeps,
   thread: Thread,
   requestSequence?: number,
 ): EditableTurn {
-  if (thread.archivedAt !== null || thread.deletedAt !== null) {
-    conflict("The thread is not writable");
-  }
-  const backgroundActivity = listActiveBackgroundTaskCountsByThreadIds(db, {
-    threadIds: [thread.id],
-  })[0];
-  if (
-    backgroundActivity &&
-    (backgroundActivity.activeBackgroundAgentCount > 0 ||
-      backgroundActivity.activeBackgroundCommandCount > 0 ||
-      backgroundActivity.activeWorkflowCount > 0)
-  ) {
-    conflict("Wait for background work to finish before editing the message");
+  const refusal = resolveThreadMessageEditRefusal(policyDeps, thread);
+  if (refusal !== null) {
+    conflict(refusal);
   }
 
   if (requestSequence !== undefined) {
@@ -482,9 +480,6 @@ export async function editThreadMessage(
     thread: Thread;
   },
 ): Promise<EditMessageResponse> {
-  if (!deps.providerRegistry.supportsSessionRewind(args.thread.providerId)) {
-    conflict(`Editing messages is not supported for ${args.thread.providerId}`);
-  }
   const fingerprint = requestFingerprint(args.payload);
   const committed = findCommittedOperation(deps.db, {
     operationId: args.payload.operationId,
@@ -536,15 +531,32 @@ async function editAdmittedThreadMessage(
 
   const initialTarget = resolveEditableTurn(
     deps.db,
+    deps,
     initialThread,
     args.payload.expectedRequestSequence,
   );
-  const editableThread = await stopThreadBeforeMessageEdit(deps, {
+  let editableThread = await stopThreadBeforeMessageEdit(deps, {
     environment: args.environment,
     threadId: initialThread.id,
   });
+  if (
+    listOpenBackgroundTaskItemRowsForThread(deps.db, {
+      threadId: initialThread.id,
+    }).length > 0
+  ) {
+    await ensureHostSessionReadyForWork(deps, {
+      hostId: args.environment.hostId,
+    });
+    await stopThreadForCurrentState(deps, editableThread, args.environment, {
+      requireStopped: true,
+    });
+    const stoppedThread = getThread(deps.db, initialThread.id);
+    if (!stoppedThread) conflict("Thread not found");
+    editableThread = stoppedThread;
+  }
   const target = resolveEditableTurn(
     deps.db,
+    deps,
     editableThread,
     initialTarget.requestSequence,
   );
@@ -640,6 +652,7 @@ async function editAdmittedThreadMessage(
         }
         const currentTarget = resolveEditableTurn(
           tx,
+          deps,
           currentThread,
           target.requestSequence,
         );

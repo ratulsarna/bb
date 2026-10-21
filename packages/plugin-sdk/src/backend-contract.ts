@@ -895,6 +895,10 @@ export interface PluginHttp {
 }
 
 export interface PluginRpc {
+  /** Refresh reads whose contract tags overlap this nonempty list. */
+  experimental_invalidate(tags: readonly string[]): void;
+  /** Refresh every read of this plugin, including untagged reads. */
+  experimental_invalidateAll(): void;
   /**
    * Register a Standard Schema-driven rpc contract and its inferred handlers,
    * served at POST
@@ -1769,9 +1773,13 @@ export interface PluginProviders {
   ): void;
 }
 
+/**
+ * `threadId` and `projectId` are `null` when bb resolves the environment for a
+ * provider process that serves no thread, such as model catalog listing.
+ */
 export interface ExperimentalPluginProviderEnvContext {
-  threadId: string;
-  projectId: string;
+  threadId: string | null;
+  projectId: string | null;
   hostId: string;
 }
 
@@ -2087,7 +2095,9 @@ export interface PluginStatusApi {
 export type PluginBbSdk = Omit<BbSdk, "threads"> & {
   threads: Omit<
     BbSdk["threads"],
-    "getPluginMetadata" | "updatePluginMetadata" | "experimental_listPluginMetadata"
+    | "getPluginMetadata"
+    | "updatePluginMetadata"
+    | "experimental_listPluginMetadata"
   > & {
     getPluginMetadata(
       args: Omit<ThreadPluginMetadataArgs, "pluginId"> & { pluginId?: string },

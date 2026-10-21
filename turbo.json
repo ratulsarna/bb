@@ -13,6 +13,12 @@
       ],
       "outputs": []
     },
+    "@bb/desktop#smoke:browser-address": {
+      "cache": false,
+      "dependsOn": ["topo"],
+      "passThroughEnv": ["DISPLAY"],
+      "outputs": []
+    },
     "@bb/desktop#smoke:browser-cdp": {
       "cache": false,
       "dependsOn": ["topo"],
@@ -451,6 +457,22 @@
         "@bb/templates#generate:plugin-scaffold"
       ]
     },
+    "@bb/process-utils#topo": {
+      "dependsOn": ["^topo", "@bb/process-utils#generate:profile-worker"]
+    },
+    "@bb/process-utils#generate:profile-worker": {
+      "dependsOn": [],
+      "inputs": [
+        "src/profile-worker.ts",
+        "src/stall-attribution.ts",
+        "src/stall-windows.ts",
+        "src/event-loop-delay.ts",
+        "scripts/generate-profile-worker.mjs",
+        "$TURBO_ROOT$/package.json",
+        "$TURBO_ROOT$/pnpm-lock.yaml"
+      ],
+      "outputs": ["src/generated/profile-worker.ts"]
+    },
     "@bb/plugin-build#topo": {
       "dependsOn": ["^topo", "@bb/plugin-build#generate"]
     },
@@ -639,6 +661,8 @@
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/packages/plugin-sdk/package.json",
         "$TURBO_ROOT$/packages/plugin-sdk/src/**",
+        "$TURBO_ROOT$/packages/provider-bridge-acp/package.json",
+        "$TURBO_ROOT$/packages/provider-bridge-acp/src/**",
         "$TURBO_ROOT$/plugins/provider-acp/package.json",
         "$TURBO_ROOT$/plugins/provider-acp/src/**",
         "$TURBO_ROOT$/plugins/provider-acp/tsconfig.json",
@@ -703,7 +727,9 @@
       ],
       "inputs": [
         "$TURBO_DEFAULT$",
-        "$TURBO_ROOT$/plugins/*/skills/**",
+        "$TURBO_ROOT$/plugins/*/**",
+        "!$TURBO_ROOT$/plugins/*/node_modules/**",
+        "!$TURBO_ROOT$/plugins/*/dist/**",
         "$TURBO_ROOT$/tests/scripted-echo-provider/host.ts",
         "$TURBO_ROOT$/tests/scripted-echo-provider/src/**",
         "$TURBO_ROOT$/examples/plugins/echo-provider/*.ts",
@@ -1296,24 +1322,13 @@
       ]
     },
     "bb-plugin-provider-acp#typecheck": {
-      "dependsOn": ["@get-bb/plugin-sdk#build:types", "topo"]
-    },
-    "bb-plugin-provider-acp#test": {
-      "env": ["VITEST_MAX_WORKERS"],
-      "dependsOn": [
-        "//#ensure-native-modules",
-        "@get-bb/plugin-sdk#build",
-        "topo"
-      ]
-    },
-    "bb-plugin-bb--provider-acp-next#typecheck": {
       "dependsOn": ["@get-bb/plugin-sdk#build:types", "topo"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/packages/plugin-registry/flavors/**"
       ]
     },
-    "bb-plugin-bb--provider-acp-next#test": {
+    "bb-plugin-provider-acp#test": {
       "env": ["VITEST_MAX_WORKERS"],
       "dependsOn": [
         "//#ensure-native-modules",

@@ -489,6 +489,11 @@ export function createApp(
   const pendingServerMove = serverMoveOptions.pending;
 
   app.use("*", async (context, next) => {
+    const signal = context.req.raw.signal;
+    await next();
+    if (signal.aborted) await context.res.body?.cancel(signal.reason);
+  });
+  app.use("*", async (context, next) => {
     const problem = requestHostProblem(context, deps);
     if (problem !== null) {
       throw new ApiError(problem.status, "forbidden_host", problem.error);
@@ -956,8 +961,8 @@ export function createApp(
       return {
         onOpen: (_event, socket) => onClientSocketOpen(deps.hub, socket),
         onMessage: (event, socket) =>
-          onClientSocketMessage(deps, socket, event.data),
-        onClose: (_event, socket) => onClientSocketClose(deps, socket),
+          onClientSocketMessage(deps.hub, socket, event.data),
+        onClose: (_event, socket) => onClientSocketClose(deps.hub, socket),
       };
     }),
   );

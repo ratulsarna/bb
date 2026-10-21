@@ -10,6 +10,7 @@ import type {
 } from "@bb/domain";
 import {
   execPortableFile,
+  runVcsProcess,
   spawnManagedProcess,
   pathExists,
   sanitizeInheritedChildProcessEnv,
@@ -85,7 +86,7 @@ export interface GitCommandResult {
   exitCode: number;
 }
 
-export type GitNullRecordFormat = "single" | "name-status" | "numstat";
+export type GitNullRecordFormat = "single" | "name-status" | "numstat" | "raw";
 
 export interface GitNullRecordLimitResult extends GitCommandResult {
   recordCount: number;
@@ -377,6 +378,32 @@ export async function runGitWithNullRecordLimit(
     throw createGitCommandCancelledError(args, options.signal.reason);
   }
 
+  try {
+    return await runVcsProcess(
+      "git",
+      args,
+      () =>
+        runGitWithNullRecordLimitAdmitted(
+          args,
+          options,
+          recordFormat,
+          maxRecords,
+        ),
+      { signal: options.signal },
+    );
+  } catch (error) {
+    if (options.signal?.aborted)
+      throw createGitCommandCancelledError(args, error);
+    throw error;
+  }
+}
+
+function runGitWithNullRecordLimitAdmitted(
+  args: string[],
+  options: RunGitOptions,
+  recordFormat: GitNullRecordFormat,
+  maxRecords: number,
+): Promise<GitNullRecordLimitResult> {
   return new Promise((resolve, reject) => {
     const managed = spawnManagedProcess({
       command: "git",
@@ -444,6 +471,9 @@ export async function runGitWithNullRecordLimit(
         if (currentRecord.length === 1) {
           if (recordFormat === "name-status") {
             const statusLetter = token[0];
+            expectedTokens = statusLetter === 82 || statusLetter === 67 ? 3 : 2;
+          } else if (recordFormat === "raw") {
+            const statusLetter = token[token.lastIndexOf(32) + 1];
             expectedTokens = statusLetter === 82 || statusLetter === 67 ? 3 : 2;
           } else if (recordFormat === "numstat") {
             const firstTab = token.indexOf(9);
@@ -594,10 +624,16 @@ export async function runShellPipeline(
             )
           ).stdout.trim()
         : "/bin/sh";
-    const result = await execPortableFile(
-      shell,
-      ["-c", script, "sh", ...positionalArgs],
-      processOptions,
+    const result = await runVcsProcess(
+      "git",
+      [],
+      () =>
+        execPortableFile(
+          shell,
+          ["-c", script, "sh", ...positionalArgs],
+          processOptions,
+        ),
+      { signal: options.signal, slots: 2 },
     );
     return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
   } catch (error) {
@@ -1008,6 +1044,46 @@ export function parseNameStatusSourceEntries(
   return entries;
 }
 
+export interface RawDiffEntry extends NameStatusSourceEntry {
+  oldMode: string;
+  newMode: string;
+  oldBlob: string;
+  newBlob: string;
+}
+
+export function parseRawDiffEntriesZ(output: string): RawDiffEntry[] {
+  const tokens = output.split("\0");
+  const entries: RawDiffEntry[] = [];
+  let index = 0;
+  while (index < tokens.length) {
+    const header = tokens[index];
+    if (!header?.startsWith(":")) {
+      index += 1;
+      continue;
+    }
+    const [oldMode, newMode, oldBlob, newBlob, status] = header
+      .slice(1)
+      .split(" ");
+    const statusLetter = status?.[0] ?? "";
+    const isRenameOrCopy = statusLetter === "R" || statusLetter === "C";
+    const previousPath = isRenameOrCopy ? (tokens[index + 1] ?? null) : null;
+    const path = tokens[index + (isRenameOrCopy ? 2 : 1)];
+    if (path && oldMode && newMode && oldBlob && newBlob) {
+      entries.push({
+        path,
+        previousPath,
+        status: statusLetter,
+        oldMode,
+        newMode,
+        oldBlob,
+        newBlob,
+      });
+    }
+    index += isRenameOrCopy ? 3 : 2;
+  }
+  return entries;
+}
+
 export function parseNameStatusEntries(output: string): NameStatusEntry[] {
   return parseNameStatusSourceEntries(output).map(({ path, status }) => ({
     path,
@@ -1308,6 +1384,7 @@ async function fetchRemoteBranchesNonInteractively(
 ): Promise<FetchRemoteBranchesResult> {
   try {
     await execPortableFile("git", ["fetch", "--all", "--prune", "--quiet"], {
+      priority: "background",
       cwd,
       timeout: options.timeoutMs,
       maxBuffer: DEFAULT_BUFFER_BYTES,
@@ -1481,15 +1558,18 @@ export async function readGitBlob(
   }
 
   try {
-    const result = await execFileAsync("git", ["cat-file", "blob", target], {
-      cwd,
-      encoding: "buffer",
-      env: resolveGitProcessEnv({
-        env: undefined,
-        shellPath: options.shellPath,
+    const blobArgs = ["cat-file", "blob", target];
+    const result = await runVcsProcess("git", blobArgs, () =>
+      execFileAsync("git", blobArgs, {
+        cwd,
+        encoding: "buffer",
+        env: resolveGitProcessEnv({
+          env: undefined,
+          shellPath: options.shellPath,
+        }),
+        maxBuffer: maxBytes,
       }),
-      maxBuffer: maxBytes,
-    });
+    );
     const contents = Buffer.from(result.stdout);
     return { contents, sizeBytes: size };
   } catch (error) {

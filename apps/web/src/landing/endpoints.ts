@@ -3,6 +3,7 @@ import {
   DOWNLOAD_FALLBACK_URL,
   DOWNLOAD_RELEASE_ASSET_BASE_URL,
   CAMPAIGN_PARAM_NAMES,
+  CLICK_ID_PARAM_NAMES,
 } from "./site";
 import type { CtaPlacement, DesktopPlatform } from "./site";
 
@@ -70,11 +71,40 @@ export async function handleDownload(
       }),
     );
   }
+  if (requestUrl.searchParams.get("instructions") === "1") {
+    const params = new URLSearchParams();
+    for (const name of [...CAMPAIGN_PARAM_NAMES, "placement"]) {
+      const value = requestUrl.searchParams.get(name);
+      if (value) {
+        params.set(name, value);
+      }
+    }
+    if (request.headers.get("Sec-GPC") === "1") {
+      for (const name of CLICK_ID_PARAM_NAMES) {
+        params.delete(name);
+      }
+    }
+    const search = params.toString();
+    return redirectResponse(
+      `/install/${platform}${search ? `?${search}` : ""}`,
+    );
+  }
+  return handleInstallerDownload(platform, request);
+}
+
+export async function handleInstallerDownload(
+  platform: DesktopPlatform,
+  request: Request,
+): Promise<Response> {
   const asset = await resolveInstallerAsset(platform);
   if (!asset) {
     return redirectResponse(DOWNLOAD_FALLBACK_URL);
   }
-  return streamInstaller(asset, range, request.headers.get("if-range"));
+  return streamInstaller(
+    asset,
+    request.headers.get("range"),
+    request.headers.get("if-range"),
+  );
 }
 
 type InstallerAsset = {
@@ -331,10 +361,28 @@ type BuildDownloadEventPropertiesArgs = {
 function buildDownloadEventProperties(
   args: BuildDownloadEventPropertiesArgs,
 ): DownloadEventProperties {
-  const referrer = args.request.headers.get("referer");
+  const globalPrivacyControl = args.request.headers.get("Sec-GPC") === "1";
+  const requestUrl = new URL(args.requestUrl);
+  let referrer = args.request.headers.get("referer");
+  if (globalPrivacyControl) {
+    for (const name of CLICK_ID_PARAM_NAMES) {
+      requestUrl.searchParams.delete(name);
+    }
+    if (referrer) {
+      try {
+        const referrerUrl = new URL(referrer);
+        for (const name of CLICK_ID_PARAM_NAMES) {
+          referrerUrl.searchParams.delete(name);
+        }
+        referrer = referrerUrl.href;
+      } catch {
+        referrer = null;
+      }
+    }
+  }
   const referrerSearchParams = readReferrerSearchParams(referrer);
   const properties: DownloadEventProperties = {
-    $current_url: truncateProperty(args.requestUrl.href),
+    $current_url: truncateProperty(requestUrl.href),
     download_target: args.platform,
     placement: parseDownloadPlacement(args.requestUrl.searchParams),
     tracking_source: TRACKING_SOURCE,
@@ -347,7 +395,7 @@ function buildDownloadEventProperties(
   addUtmProperties({
     properties,
     referrerSearchParams,
-    requestSearchParams: args.requestUrl.searchParams,
+    requestSearchParams: requestUrl.searchParams,
   });
 
   return properties;

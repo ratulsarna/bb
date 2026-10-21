@@ -17,6 +17,7 @@ import {
   ConversationMessageOverflowToggle,
   useOverflowMeasurement,
 } from "./conversation-message-overflow";
+import { createInertScrollPositionKeeper } from "@/test/scroll-position-keeper";
 
 afterEach(() => {
   cleanup();
@@ -27,6 +28,7 @@ afterEach(() => {
 function OverflowProbe({ name }: { name: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const measurement = useOverflowMeasurement({
+    axis: "vertical",
     elementRef: ref,
     enabled: true,
     measurementKey: name,
@@ -98,8 +100,8 @@ describe("useOverflowMeasurement", () => {
     expect(observe).toHaveBeenCalledTimes(2);
     expect(scrollHeight).toHaveBeenCalledTimes(2);
     expect(clientHeight).toHaveBeenCalledTimes(2);
-    expect(scrollWidth).toHaveBeenCalledOnce();
-    expect(clientWidth).toHaveBeenCalledOnce();
+    expect(scrollWidth).toHaveBeenCalledTimes(2);
+    expect(clientWidth).toHaveBeenCalledTimes(2);
     expect(first.dataset.measurement).toBe("overflowing");
     expect(second.dataset.measurement).toBe("fits");
   });
@@ -127,7 +129,7 @@ describe("ConversationMessageOverflowToggle", () => {
       scrollToBottom: vi.fn(),
       scrollElementIntoView: vi.fn(),
       scrollElementIntoViewClampedToMaxScroll: vi.fn(),
-      captureScrollAnchor: vi.fn(),
+      positionKeeper: createInertScrollPositionKeeper(),
       holdContentPosition,
     };
     render(

@@ -429,6 +429,15 @@ const ONLINE_RPC_RESPONSE_RESULT_FIXTURES: OnlineRpcResponseResultFixtures = {
     ],
     selectedOnlyModels: [],
   },
+  "provider.list_commands": {
+    commands: [
+      {
+        name: "simplify",
+        description: "Simplify the changed code",
+        inputHint: "[<target>]",
+      },
+    ],
+  },
   "provider.health": {
     supported: true,
     health: {
@@ -617,6 +626,7 @@ const WORKSPACE_DIFF_FILES_AVAILABLE_RESULT: JsonObject = {
       deletions: 1,
       binary: false,
       origin: "tracked",
+      revision: "100644:aaaa:100644:bbbb",
     },
   ],
   shortstat: "1 file changed, 3 insertions(+), 1 deletion(-)",
@@ -1256,7 +1266,7 @@ describe("host-daemon command schemas", () => {
   });
 
   it("uses the current host-daemon protocol version", () => {
-    expect(HOST_DAEMON_PROTOCOL_VERSION).toBe(241);
+    expect(HOST_DAEMON_PROTOCOL_VERSION).toBe(246);
     expect(HOST_ARTIFACT_MAX_BYTES).toBe(256 * 1024 * 1024);
   });
 
@@ -1826,6 +1836,7 @@ describe("host-daemon command schemas", () => {
       },
       {
         type: "provider.list_models",
+        contributedEnv: [],
         providerId: "codex",
         bridgeLaunch: BRIDGE_LAUNCH,
       },
@@ -2211,6 +2222,7 @@ describe("host-daemon command schemas", () => {
   it("round-trips a provider's declared launch spec on provider.list_models, thread.start, and turn.submit", () => {
     const providerListModelsCommand = {
       type: "provider.list_models",
+      contributedEnv: [],
       bridgeLaunch: ACP_BRIDGE_LAUNCH,
       providerId: "acp-local",
       cwd: "/tmp/workspace",
@@ -2338,6 +2350,7 @@ describe("host-daemon command schemas", () => {
 
     const providerListModelsCommand = {
       type: "provider.list_models",
+      contributedEnv: [],
       providerId: "echo-agent",
       bridgeLaunch,
       cwd: "/tmp/workspace",
@@ -3111,6 +3124,7 @@ describe("host-daemon session schemas", () => {
       hostDaemonSessionOpenResponseSchema.parse({
         sessionId: "session_123",
         machineEnvironment: { revision: 0, entries: [] },
+        idleProviderSessionTimeoutMinutes: 30,
         heartbeatIntervalMs: 5_000,
         leaseTimeoutMs: 30_000,
         connectShares: {
@@ -3136,6 +3150,7 @@ describe("host-daemon session schemas", () => {
       hostDaemonSessionOpenResponseSchema.parse({
         sessionId: "session_default_shares",
         machineEnvironment: { revision: 0, entries: [] },
+        idleProviderSessionTimeoutMinutes: 30,
         heartbeatIntervalMs: 5_000,
         leaseTimeoutMs: 30_000,
       }).connectShares,

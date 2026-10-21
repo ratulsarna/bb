@@ -24,6 +24,7 @@ import type {
   SidebarBootstrapResponse,
   TerminalSession,
 } from "@bb/server-contract";
+import { ComposerStarterRows } from "@/components/promptbox/ComposerStarterRows";
 import {
   NewThreadComposer,
   type NewThreadComposerState,
@@ -50,7 +51,10 @@ import {
   type ProjectMachineSetupDialogTarget,
 } from "@/components/dialogs/ProjectMachineSetupDialog";
 import { HEADER_ICON_BUTTON_CLASS } from "@/components/layout/AppPageHeader";
-import { RIGHT_PANEL_TOGGLE_ICON_NAME } from "@/components/secondary-panel/panelToggleControlState";
+import {
+  RIGHT_PANEL_TOGGLE_ICON_NAME,
+  RIGHT_PANEL_TOGGLE_SHORTCUT_HINT_CLASS,
+} from "@/components/secondary-panel/panelToggleControlState";
 import { AppCommandShortcutHint } from "@/components/commands/AppCommandShortcutHint";
 import type {
   SecondaryPanelPaneRenderContext,
@@ -139,6 +143,7 @@ import {
   buildTerminalSyncedSecondaryFileTabs,
   syncTerminalTabsInFixedPanelState,
 } from "@/components/secondary-panel/terminalPanelTabs";
+import { usePendingTerminalIds } from "@/components/thread/terminal/pending-terminals";
 import {
   getActiveFixedSecondaryTab,
   useSetThreadSecondaryPanelSelection,
@@ -246,7 +251,7 @@ export function RootComposeRightPanelToggle({
       type="button"
       variant="ghost"
       size="icon"
-      className={`${HEADER_ICON_BUTTON_CLASS} relative`}
+      className={cn(HEADER_ICON_BUTTON_CLASS, "relative")}
       aria-label={
         shortcut ? `${rightPanelLabel} (${shortcut.label})` : rightPanelLabel
       }
@@ -260,7 +265,7 @@ export function RootComposeRightPanelToggle({
       <Icon name={rightPanelIconName} />
       <AppCommandShortcutHint
         shortcut={shortcut}
-        className="absolute right-full mr-1"
+        className={RIGHT_PANEL_TOGGLE_SHORTCUT_HINT_CLASS}
       />
     </Button>
   );
@@ -872,15 +877,17 @@ function RootComposeSurface({
     openPluginPanel,
     projectId: isProjectless ? null : projectId,
   });
+  const pendingTerminalIds = usePendingTerminalIds();
   const syncedOrderedSecondaryFileTabs = useMemo(
     () =>
       loadedTerminalSessions === undefined
         ? orderedSecondaryFileTabs
         : buildTerminalSyncedSecondaryFileTabs({
             orderedTabs: orderedSecondaryFileTabs,
+            pendingTerminalIds,
             terminalSessions: loadedTerminalSessions,
           }),
-    [loadedTerminalSessions, orderedSecondaryFileTabs],
+    [loadedTerminalSessions, orderedSecondaryFileTabs, pendingTerminalIds],
   );
   useEffect(() => {
     if (!terminalsListLoaded) {
@@ -888,11 +895,17 @@ function RootComposeSurface({
     }
     updateFixedPanelTabsState((state) =>
       syncTerminalTabsInFixedPanelState({
+        pendingTerminalIds,
         state,
         terminalSessions,
       }),
     );
-  }, [terminalSessions, terminalsListLoaded, updateFixedPanelTabsState]);
+  }, [
+    pendingTerminalIds,
+    terminalSessions,
+    terminalsListLoaded,
+    updateFixedPanelTabsState,
+  ]);
   const canCreateRootTerminal = canCreateRootComposeTerminal({
     connectedHostIds,
     environmentHostId: rootPanelEnvironment?.hostId,
@@ -1174,8 +1187,10 @@ function RootComposeSurface({
         onActivateTab={activateTab}
         onAutoFocusNewTabHandled={handleNewTabAutoFocusHandled}
         onAutoFocusTerminalHandled={terminals.handleAutoFocusHandled}
+        onCloseTerminal={terminals.close}
         onOpenBrowser={openBrowser}
         onOpenPanelLink={handleOpenPanelLink}
+        onRetryTerminalStart={terminals.retryStart}
         onSelectFileSearchResult={handleSelectFileSearchResult}
         onSelectionAddToChat={handleRootPanelSelectionAddToChat}
         onStartTerminal={terminals.start}
@@ -1216,7 +1231,9 @@ function RootComposeSurface({
       rootProjectHostId,
       shouldAutoFocusNewTab,
       terminals.autoFocusTerminalId,
+      terminals.close,
       terminals.handleAutoFocusHandled,
+      terminals.retryStart,
       terminals.start,
     ],
   );
@@ -1503,6 +1520,16 @@ function RootComposeSurface({
     },
     onRequestMachineSetup: handleRequestMachineSetup,
   });
+  const starterRows = (
+    <ComposerStarterRows
+      promptDraft={promptDraft}
+      focus={pluginComposerHost.focus}
+      isProjectless={isProjectless}
+      isSubmitting={isSubmitting}
+      sidebarNavigation={sidebarNavigation}
+      className={isCompactViewport ? "pb-2" : "mt-3"}
+    />
+  );
 
   return (
     <PluginDetailPanelContext.Provider value={pluginDetails}>
@@ -1527,13 +1554,16 @@ function RootComposeSurface({
                   }
                   isCompactHomeLayout={isCompactViewport}
                   compactScrollContent={
-                    <RootComposeMobileRecents
-                      highlightedThreadId={lastCreatedThreadId}
-                      projectNamesById={mobileRecentProjectNamesById}
-                      providersById={mobileRecentProvidersById}
-                      showCreatingRow={isSubmitting}
-                      threads={mobileRecentThreads}
-                    />
+                    <>
+                      <RootComposeMobileRecents
+                        highlightedThreadId={lastCreatedThreadId}
+                        projectNamesById={mobileRecentProjectNamesById}
+                        providersById={mobileRecentProvidersById}
+                        showCreatingRow={isSubmitting}
+                        threads={mobileRecentThreads}
+                      />
+                      {starterRows}
+                    </>
                   }
                   isSecondaryPanelOpen={isSecondaryPanelOpen}
                   onToggleSecondaryPanel={handleToggleSecondaryPanel}
@@ -1563,6 +1593,7 @@ function RootComposeSurface({
                   }}
                 >
                   {promptBox}
+                  {isCompactViewport ? null : starterRows}
                 </RootComposeSecondaryContent>
               </PluginThreadPanelNavigationProvider>
             </AppNavigationHostProvider>

@@ -114,6 +114,13 @@ General. Machine-related keys (`machineServerUrl`, `defaultMachineAccess`,
 - `confirmThreadArchive` (default true): set false to archive parent and child
   threads in the app without the confirmation popup; the toast still offers
   Undo. CLI and SDK archive calls are always non-interactive.
+- `terminalCopyOnSelect` (default true; Settings → General → Terminals → Copy
+  on select) copies completed terminal selections exactly and shows "Selection
+  copied". Text elsewhere in the app is unchanged. Set it with
+  `bb settings general terminalCopyOnSelect <true|false|on|off>` or SDK
+  `system.updateGeneralSettings`. Explicit Copy/Paste work when off. Supported
+  Linux browsers use native primary selection for middle-click paste,
+  independently of this preference, never the regular clipboard as a fallback.
 - `streamerMode` (default false) hides every `customModels` entry from
   `~/.bb/config.json` in all model lists (pickers, `bb provider models`, and
   the SDK) during a screen share. The entries stay in the config file; a
@@ -133,6 +140,7 @@ General. Machine-related keys (`machineServerUrl`, `defaultMachineAccess`,
 - `providerOrder` (default `[]`) is a JSON array of provider ids, and
   `defaultProviderId` (default `null`) names the default provider; `null`
   clears it.
+- `idleProviderSessionTimeoutMinutes` (default `30`; Settings → Providers → Configuration → Release idle agent sessions) sets how long an agent can sit idle after its last turn before every machine stops its provider process. Allowed values are `0` (ASAP), `5`, `10`, `30`, and `60`, for example `bb settings general idleProviderSessionTimeoutMinutes 5`. Machines check every five minutes, so release can take up to five minutes beyond the timeout. Changes apply live and on reconnect. Only restorable sessions without active or pending work are eligible; threads keep their history and resume on the next message. `bb thread stop` still releases a runtime manually. This is not a limit on loaded processes or memory. Read the value with `bb settings show`; SDK callers use `system.config()` and `system.updateGeneralSettings({ ...config.generalSettings, idleProviderSessionTimeoutMinutes: 5 })`.
 - `telemetryEnabled`: see Telemetry below.
 
 `bb settings replay-onboarding` clears `onboardingCompletedAt`, so the
