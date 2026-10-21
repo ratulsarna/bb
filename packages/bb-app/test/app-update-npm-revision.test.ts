@@ -116,7 +116,7 @@ describe("installNpmRevision", () => {
       expect.arrayContaining([
         "/bundled/npm-cli.js",
         "install",
-        "bb-app@1.1.0",
+        "bb-app@https://github.com/ratulsarna/bb/releases/download/fork-v1.1.0/bb-app-1.1.0.tgz",
       ]),
     );
     expect(install?.args.some((arg) => arg.startsWith("--allow-scripts"))).toBe(

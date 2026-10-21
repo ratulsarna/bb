@@ -22,7 +22,8 @@ Always update in this order:
 1. Sync the fork and deployment branch with upstream.
 2. Build, test, back up, and deploy the VPS package.
 3. Let machine daemons update from the VPS.
-4. Update the upstream Mac desktop app.
+4. Publish the verified tarball as the team's release.
+5. Update the upstream Mac desktop app.
 
 The desktop app and the host daemon are separate. Updating `/Applications/bb.app`
 does not replace the custom VPS server. Keeping the VPS first avoids running a
@@ -173,7 +174,27 @@ launchctl kickstart -k "gui/$(id -u)/dev.bb.host-daemon.srv1191956"
 
 Confirm the VPS reports that Mac as `connected` with no rejected protocol.
 
-## 4. Update the Mac desktop app
+## 4. Publish the release for the team
+
+Only after the VPS checks above pass, push `codex/deployment` and publish the
+exact tarball the VPS is running:
+
+```bash
+cd ~/Developer/Projects/bb
+git push origin codex/deployment
+scripts/publish-fork-release.sh "$HOME/bb-artifacts/<build>"
+```
+
+The script checks the tarball's sha256, refuses a commit that is not on
+`origin/codex/deployment` or a version that is not newer than the published
+one, and creates the `fork-v<version>` GitHub release with three assets: the
+tarball, `sha256.txt`, and `latest`. It ends with `::: PUBLISHED`.
+
+Fork servers poll the `latest` asset of the latest release to find updates, and
+`bb updates app apply` installs the tarball from its versioned release URL.
+Never delete or re-upload a published release; ship a newer version instead.
+
+## 5. Update the Mac desktop app
 
 After the VPS and Mac daemon are healthy, allow the normal upstream desktop
 update. The saved custom server target remains the VPS.
@@ -183,6 +204,33 @@ If the desktop app opens the built-in server instead, select the custom server:
 ```text
 https://srv1191956.tail7af381.ts.net
 ```
+
+## Installing the fork (teammates)
+
+The fork ships as GitHub releases on `ratulsarna/bb`, not on npm. It is
+upstream bb plus strict dispatch admission, which the pipeline plugin needs.
+Use Node 24:
+
+```bash
+npm install -g https://github.com/ratulsarna/bb/releases/download/fork-v<version>/bb-app-<version>.tgz
+bb-app start
+```
+
+The latest release's notes carry the exact command. After that, the in-app update and
+`bb updates app apply` follow the fork's releases, never upstream npm.
+
+- Uninstall any upstream `bb-app` from the same npm prefix first; both install
+  the same `bb`, `bb-app`, `bb-server`, and `bb-host-daemon` executables.
+- If this data directory (`~/.bb` by default) ever ran upstream bb and applied
+  an in-app update, delete its `app-versions/` and `bb-app-update.json` before
+  the first start. Otherwise the launcher prefers the newer cached upstream
+  build over the fork.
+- Enroll other machines from this server as usual. They download the package
+  from the server itself, and their daemons update from it.
+- On macOS, keep the upstream desktop app and add this server under
+  **Server → Add Server…**. Desktop updates keep coming from upstream and leave
+  the fork server alone.
+- The getbb.app account, bb Connect, and bb cloud AI work unchanged.
 
 ## Rollback
 

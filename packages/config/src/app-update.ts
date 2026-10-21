@@ -169,6 +169,13 @@ export function isNightlyAppVersion(version: string): boolean {
   return /-nightly\.\d+\.\d+$/u.test(version);
 }
 
+const APP_RELEASES_URL = "https://github.com/ratulsarna/bb/releases";
+export const APP_RELEASE_DIST_TAGS_URL = `${APP_RELEASES_URL}/latest/download`;
+
+export function formatAppInstallSpec(version: string): string {
+  return `bb-app@${APP_RELEASES_URL}/download/fork-v${version}/bb-app-${version}.tgz`;
+}
+
 export const appUpdateTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("npm"), version: z.string().min(1) }),
   z.object({ commit: gitCommitSchema, kind: z.literal("source") }),

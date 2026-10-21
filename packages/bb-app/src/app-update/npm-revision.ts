@@ -5,6 +5,7 @@ import { delimiter, dirname, join } from "node:path";
 import semver from "semver";
 import { z } from "zod";
 import {
+  formatAppInstallSpec,
   formatAppUpdateVersionsDir,
   type NpmAppRevision,
 } from "@bb/config/app-update";
@@ -165,7 +166,7 @@ export async function installNpmRevision(
         "--no-audit",
         "--no-fund",
         "--omit=dev",
-        `bb-app@${args.version}`,
+        formatAppInstallSpec(args.version),
       ],
       command: npmCommand.command,
       cwd: stagingDir,

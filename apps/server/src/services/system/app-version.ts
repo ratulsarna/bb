@@ -1,11 +1,14 @@
 import type { AppInstallKind } from "@bb/config/app-install";
 import semver from "semver";
 import { z } from "zod";
-import { isNightlyAppVersion } from "@bb/config/app-update";
+import {
+  APP_RELEASE_DIST_TAGS_URL,
+  formatAppInstallSpec,
+  isNightlyAppVersion,
+} from "@bb/config/app-update";
 import type { SystemVersionResponse } from "@bb/server-contract";
 import type { ServerLogger, ServerRuntimeConfig } from "../../types.js";
 
-const NPM_REGISTRY_PACKAGE_URL = "https://registry.npmjs.org/bb-app";
 const NPM_LATEST_TIMEOUT_MS = 5_000;
 const NPM_LATEST_CACHE_TTL_MS = 60 * 60 * 1000;
 
@@ -66,7 +69,7 @@ export function createAppVersionService(
   let inflight: Promise<NpmLatestRelease | null> | null = null;
 
   async function fetchNpmDistTag(tag: NpmDistTag): Promise<string | null> {
-    const npmDistTagUrl = `${NPM_REGISTRY_PACKAGE_URL}/${tag}`;
+    const npmDistTagUrl = `${APP_RELEASE_DIST_TAGS_URL}/${tag}`;
     const controller = new AbortController();
     const timeoutHandle = setTimeout(
       () => controller.abort(),
@@ -170,7 +173,7 @@ export function createAppVersionService(
         source: "npm",
         updateAvailable: false,
         isDevelopment: config.isDevelopment,
-        upgradeCommand: `npx bb-app@${distTag}`,
+        upgradeCommand: `npx ${formatAppInstallSpec(config.appVersion)}`,
       };
 
       if (config.isDevelopment || installKind === "source") {
@@ -187,7 +190,7 @@ export function createAppVersionService(
       const releaseResponse: SystemVersionResponse = {
         ...baseResponse,
         latestVersion,
-        upgradeCommand: `npx bb-app@${release.distTag}`,
+        upgradeCommand: `npx ${formatAppInstallSpec(latestVersion)}`,
       };
 
       const parsedCurrent = semver.parse(config.appVersion);
