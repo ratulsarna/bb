@@ -56,4 +56,5 @@ Install: \`npm install -g https://github.com/$REPO/releases/download/$TAG/bb-app
 gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease=false --latest
 
 echo "::: PUBLISHED $TAG"
-curl -fsSL "https://github.com/$REPO/releases/latest/download/latest"
+curl -fsSL --retry 10 --retry-all-errors --retry-delay 6 \
+  "https://github.com/$REPO/releases/latest/download/latest"
