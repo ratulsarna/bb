@@ -536,8 +536,12 @@ export function useStopThread() {
         transaction: context,
       });
     },
-    onSettled: (_data, _error, threadId) => {
-      settleStopThreadTransaction({ queryClient, threadId });
+    onSettled: (_data, _error, threadId, context) => {
+      settleStopThreadTransaction({
+        queryClient,
+        threadId,
+        transaction: context,
+      });
     },
   });
 }

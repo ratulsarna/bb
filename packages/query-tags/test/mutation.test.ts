@@ -48,8 +48,8 @@ it("reports only writes awaiting acknowledgement in each hook", async () => {
     }
   };
   const hooks = renderHook(() => ({
-    first: useTaggedMutation<Input, string>(client, invalidate, call),
-    second: useTaggedMutation<Input, string>(client, invalidate, call),
+    first: useTaggedMutation<Input, string>({ client, invalidate, call }),
+    second: useTaggedMutation<Input, string>({ client, invalidate, call }),
   }));
   let a!: Promise<string>;
   let b!: Promise<string | Error>;
@@ -140,12 +140,12 @@ it.each(["core", "plugin"] as const)(
       return createElement("output", null, query.data);
     }
     function Control() {
-      const mutation = useTaggedMutation<void, void>(
+      const mutation = useTaggedMutation<void, void>({
         client,
-        async () => {},
-        () => write,
-        predict,
-      );
+        invalidate: async () => {},
+        call: () => write,
+        optimistic: predict,
+      });
       return createElement(
         "button",
         {

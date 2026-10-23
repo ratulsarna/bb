@@ -1,4 +1,9 @@
 import {
+  uiPreferencesRoute,
+  updateUiPreferenceRoute,
+  resetUiPreferenceRoute,
+} from "./client-route-descriptors.js";
+import {
   machineEnvironmentSetSchema,
   machineEnvironmentDeleteSchema,
   type MachineEnvironmentSet,
@@ -22,6 +27,9 @@ import {
   type TestAiServiceResponse,
 } from "./api/system.js";
 import {
+  desktopBrowserBrokerProofRequestSchema,
+  type DesktopBrowserBrokerProofRequest,
+  type DesktopBrowserBrokerProof,
   desktopBrowserHostRequestSchema,
   desktopBrowserScopeSchema,
   desktopBrowserCreateRequestSchema,
@@ -132,7 +140,6 @@ import type {
   EnvironmentDiffViewedResponse,
   EnvironmentDiffResponse,
   EnvironmentPathsQuery,
-  EnvironmentPullRequestResponse,
   EnvironmentStatusQuery,
   EnvironmentStatusResponse,
   HostDirectoryListing,
@@ -142,6 +149,7 @@ import type {
   HostReconnectResponse,
   HostListQuery,
   HostDeleteQuery,
+  EnvironmentCleanupQuery,
   HostActionResponse,
   HostCloneDefaultPathQuery,
   HostCloneDefaultPathResponse,
@@ -308,13 +316,6 @@ import type {
   UpdateThreadTabsRequest,
 } from "./api/thread-tabs.js";
 import { updateThreadTabsRequestSchema } from "./api/thread-tabs.js";
-import type {
-  PathUiPreferenceKey,
-  UiPreferenceResponse,
-  UiPreferencesResponse,
-  UpdateUiPreferenceRequest,
-} from "./api/ui-preferences.js";
-import { updateUiPreferenceRequestSchema } from "./api/ui-preferences.js";
 import {
   closeTerminalRequestSchema,
   copyProjectAttachmentsRequestSchema,
@@ -352,6 +353,7 @@ import {
   hostDirectoryQuerySchema,
   hostListQuerySchema,
   hostDeleteQuerySchema,
+  environmentCleanupQuerySchema,
   hostCloneDefaultPathQuerySchema,
   hostFileListRequestSchema,
   hostFileReadRequestSchema,
@@ -444,12 +446,6 @@ type PathThreadMessage = { param: { id: string; seq: string } };
 type PathThreadInteractionId = {
   param: { id: string; interactionId: string };
 };
-
-export const UI_PREFERENCES_TAG = "ui-preferences";
-
-export function environmentPullRequestTag(environmentId: string): string {
-  return `environment-pull-request:${environmentId}`;
-}
 
 export const publicApiRoutes = {
   promptHistory: {
@@ -777,6 +773,14 @@ export const publicApiRoutes = {
   },
 
   desktopBrowsers: {
+    brokerProof: defineRoute({
+      path: "/desktop-browsers/broker-proof",
+      method: "post",
+      request: jsonRequest<{}, DesktopBrowserBrokerProofRequest>(
+        desktopBrowserBrokerProofRequestSchema,
+      ),
+      response: jsonResponse<DesktopBrowserBrokerProof>(),
+    }),
     listInstances: defineRoute({
       path: "/desktop-browsers/instances",
       method: "post",
@@ -1148,7 +1152,9 @@ export const publicApiRoutes = {
     cleanup: defineRoute({
       path: "/environments/:id/cleanup",
       method: "post",
-      request: noRequest<PathId>(),
+      request: optionalQueryRequest<PathId, EnvironmentCleanupQuery>(
+        environmentCleanupQuerySchema,
+      ),
       response: jsonResponse<{ ok: true }>(),
     }),
     list: defineRoute({
@@ -1193,13 +1199,6 @@ export const publicApiRoutes = {
         environmentStatusQuerySchema,
       ),
       response: jsonResponse<EnvironmentStatusResponse>(),
-    }),
-    pullRequest: defineRoute({
-      path: "/environments/:id/pull-request",
-      method: "get",
-      request: noRequest<PathId>(),
-      response: jsonResponse<EnvironmentPullRequestResponse>(),
-      tags: ({ params }) => [environmentPullRequestTag(params.id)],
     }),
     diff: defineRoute({
       path: "/environments/:id/diff",
@@ -2020,36 +2019,9 @@ export const publicApiRoutes = {
       ),
       response: jsonResponse<AppTheme>(),
     }),
-    uiPreferences: defineRoute({
-      path: "/preferences/ui",
-      method: "get",
-      request: noRequest(),
-      response: jsonResponse<UiPreferencesResponse>(),
-      tags: () => [UI_PREFERENCES_TAG],
-    }),
-    updateUiPreference: defineRoute({
-      path: "/preferences/ui/:key",
-      method: "put",
-      request: jsonRequest<PathUiPreferenceKey, UpdateUiPreferenceRequest>(
-        updateUiPreferenceRequestSchema,
-      ),
-      response: [
-        jsonResponse<UiPreferenceResponse>(),
-        jsonResponse<ApiError>({ status: 404 }),
-        jsonResponse<ApiError>({ status: 409 }),
-      ],
-      invalidates: () => [UI_PREFERENCES_TAG],
-    }),
-    resetUiPreference: defineRoute({
-      path: "/preferences/ui/:key",
-      method: "delete",
-      request: noRequest<PathUiPreferenceKey>(),
-      response: [
-        jsonResponse<UiPreferenceResponse>(),
-        jsonResponse<ApiError>({ status: 404 }),
-      ],
-      invalidates: () => [UI_PREFERENCES_TAG],
-    }),
+    uiPreferences: uiPreferencesRoute,
+    updateUiPreference: updateUiPreferenceRoute,
+    resetUiPreference: resetUiPreferenceRoute,
     themes: defineRoute({
       path: "/settings/themes",
       method: "get",

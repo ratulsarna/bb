@@ -1,3 +1,7 @@
+import type {
+  PullRequest,
+  PullRequestMergeMethod,
+} from "bb-plugin-bb--github-pr-status/contract";
 import { CONTEXT_CARD_TOGGLE_CLASS } from "@bb/shared-ui/chrome-style-tokens";
 import {
   machineRemovalDescriptions,
@@ -21,10 +25,8 @@ import type {
   EnvironmentStatus,
   PendingInteraction,
   GitBranchRefClassification,
-  ThreadPullRequest,
   ThreadRuntimeDisplayStatus,
 } from "@bb/domain";
-import type { PullRequestMergeMethod } from "@bb/server-contract";
 import {
   BranchPicker,
   getMergeBaseBranchCandidateGroups,
@@ -139,7 +141,7 @@ export interface ThreadPromptChildThreadsSection {
 }
 
 export interface ThreadPromptPullRequestSection {
-  pullRequest: ThreadPullRequest;
+  pullRequest: PullRequest;
   actions?: {
     isPending?: boolean;
     onMarkReady?: () => void;
@@ -376,7 +378,7 @@ function ParentThreadInlineSegment({
 }
 
 function shouldShowPullRequestAttentionLabel(
-  pullRequest: ThreadPullRequest,
+  pullRequest: PullRequest,
 ): boolean {
   if (pullRequest.attention === "checks_failed") return false;
   return (
@@ -843,7 +845,7 @@ function PullRequestBannerLink({
   showLabel,
   showStateLabel,
 }: {
-  pullRequest: ThreadPullRequest;
+  pullRequest: PullRequest;
   hideLabelInCompact: boolean;
   showLabel: boolean;
   showStateLabel: boolean;

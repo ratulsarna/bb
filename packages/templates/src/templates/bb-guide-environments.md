@@ -121,12 +121,17 @@ Making your repo work with bb:
                                           requested; lifecycle becomes destroyed only after
                                           provider removal completes
   bb environment cleanup <id>             Remove an unused provider-managed environment now
+    --recover                             After inspection, acknowledge interrupted hooks and
+                                          retry failed cleanup (Linux same-user process guard)
   bb environment show <id>                Show environment details (path, branch, status, lifecycle, retirement deadline and teardown attempts)
 
   bb environment status <id>              Show workspace status. Each file list holds at most
                                           200 entries (tracked changes first); fileCount is
                                           the total number of changed files
     --merge-base-branch <branch>          Include merge-base status
+      If squash-merge detection hits its limits (1,000 commits, 1 second),
+      mergeBase.squashMergeCheckComplete is false and counts may include
+      already squash-merged commits.
 
   bb environment branches <id>            List local and remote branches
     --query <query>                       Filter branch names
@@ -201,20 +206,37 @@ Making your repo work with bb:
   the grace window cancels the teardown. Move your own shells out of the
   worktree first if you want to keep them. Deleting the last thread, or an
   explicit environment or project deletion, skips the grace (including a
-  never-retire policy). Failed teardown retries automatically;
+  never-retire policy). Failed teardown retries after 1, 2, 4, and 8 minutes, then stops after
+  five failed attempts with a "Needs recovery" message;
   `bb environment show <id>` reports the lifecycle phase, deadline, teardown
   attempt, and failure message.
 
   `bb environment cleanup <id> [--json]` overrides retention and retry backoff
   to remove an unused provider-managed environment early. It is not a routine
   end-of-task step. It rejects live threads and unmanaged environments,
-  succeeds if already removed, and completes asynchronously.
+  succeeds if already removed, and completes asynchronously. It cannot bypass
+  "Needs recovery"; `bb environment list` includes the failure message.
 
-  bb environment pull-request show <id>   Inspect a pull request
-  bb environment pull-request ready <id>  Mark a pull request ready
-  bb environment pull-request draft <id>  Convert a pull request to draft
-  bb environment pull-request merge <id>  Merge a pull request
-    --method <method>                     merge, squash, or rebase
+  `bb environment cleanup <id> --recover [--json]` is an explicit acknowledgement
+  after inspecting a failed environment. It marks interrupted hooks finished,
+  resets the retry budget, and retries removal. It also handles interrupted
+  setup without a recorded hook operation. A teardown hook that never started
+  still runs. A daemon reboot alone never proves a detached hook has stopped.
+
+  Recovery currently requires Linux. It refuses while a setup/hook is still
+  active, while any process owned by the daemon UID has its cwd or a mapped
+  file path under the workspace, or while any such process cannot be inspected.
+  The guard compares paths, including deleted paths, rather than shared inode
+  identity. It does not kill processes. Processes owned by other users require
+  separate inspection before recovery. Stop or move your own workspace users
+  first. Unsupported platforms and unavailable daemons refuse recovery.
+  Existing cleanup callers can use the additive `recover` option on
+  `sdk.environments.experimental_cleanup({ environmentId, recover: true })`.
+  Inspect `bb environment show <id>` after recovery to confirm removal.
+
+  Pull requests moved to the bundled GitHub PR Status plugin:
+  `bb pull-request show|ready|draft|merge <environment-id>`. See its
+  github-pr-status skill.
 
 Every inspection command accepts an arbitrary environment ID and supports
 `--json`. Non-git status/diff responses are reported explicitly. `diff-file`

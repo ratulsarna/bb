@@ -1,3 +1,4 @@
+import type { ComposerSubmitExtras } from "@get-bb/plugin-sdk/internal/composer-handle";
 import type {
   PendingInteraction,
   PermissionMode,
@@ -14,7 +15,7 @@ import type {
 import type { ReactNode } from "react";
 import { vi } from "vitest";
 import type { PromptDraftAttachment } from "@bb/client-core";
-import type { TypeaheadConfig } from "@/components/promptbox/PromptBoxInternal";
+import type { TypeaheadConfig } from "@/components/promptbox/ComposerBox";
 import type { PluginComposerHost } from "@/components/plugin/plugin-composer-host";
 
 export const promptAreaMocks = {
@@ -27,6 +28,12 @@ export const promptAreaMocks = {
   deleteQueuedMessageMutateAsync: vi.fn(),
   navigate: vi.fn(),
   pluginComposerHost: null as PluginComposerHost | null,
+  composerSubmit: null as
+    | ((extras?: ComposerSubmitExtras) => void | Promise<void>)
+    | null,
+  composerModifierSubmit: null as
+    | ((extras?: ComposerSubmitExtras) => void | Promise<void>)
+    | null,
   promptDraft: {
     addAttachment: vi.fn(),
     attachments: [] as PromptDraftAttachment[],
@@ -115,8 +122,10 @@ vi.mock("@/components/promptbox/FollowUpPromptBox", async () => {
         message: string;
         onChangeMessage: (message: string, mentions: []) => void;
         onEscape?: () => void;
-        onModifierSubmit: () => void;
-        onSubmit: () => void;
+        onModifierSubmit: (
+          extras?: ComposerSubmitExtras,
+        ) => void | Promise<void>;
+        onSubmit: (extras?: ComposerSubmitExtras) => void | Promise<void>;
         submitLabel?: string;
         submitIcon?: string;
         submitTitle?: string;
@@ -209,9 +218,7 @@ vi.mock("@/components/promptbox/FollowUpPromptBox", async () => {
           {execution.providerRouting.environmentId}
         </div>
         <div data-testid="command-suggestions">
-          {typeahead.command?.suggestions
-            .map((command) => command.name)
-            .join(",")}
+          {`${typeahead.command.source.providerId}:${typeahead.command.source.commandScope}`}
         </div>
         <div data-testid="selected-model">{execution.model.active?.model}</div>
         <div data-testid="selected-reasoning">{execution.reasoning.value}</div>
@@ -290,6 +297,9 @@ vi.mock("@/components/promptbox/FollowUpPromptBox", async () => {
               type="button"
               onClick={() => {
                 promptAreaMocks.pluginComposerHost = pluginComposerHost;
+                promptAreaMocks.composerSubmit = composer?.onSubmit ?? null;
+                promptAreaMocks.composerModifierSubmit =
+                  composer?.onModifierSubmit ?? null;
               }}
             >
               Capture plugin host
@@ -305,11 +315,11 @@ vi.mock("@/components/promptbox/FollowUpPromptBox", async () => {
                 composer.onChangeMessage(event.currentTarget.value, [])
               }
             />
-            <button type="button" onClick={composer.onSubmit}>
+            <button type="button" onClick={() => composer.onSubmit()}>
               Submit composer
             </button>
             {composer.canModifierSubmit ? (
-              <button type="button" onClick={composer.onModifierSubmit}>
+              <button type="button" onClick={() => composer.onModifierSubmit()}>
                 Modifier submit
               </button>
             ) : null}
@@ -563,32 +573,9 @@ vi.mock("@/components/ui/app-toast", () => ({
   appToast: { error: promptAreaMocks.toastError },
 }));
 
-vi.mock("@/hooks/useCommandSuggestions", () => ({
-  useCommandSuggestions: ({
-    providerId,
-    commandScope,
-  }: {
-    providerId: string;
-    commandScope: string;
-  }) => ({
-    hasMore: false,
-    isError: false,
-    isLoading: false,
-    isLoadingMore: false,
-    loadMore: vi.fn(),
-    suggestions: [{ name: `${providerId}:${commandScope}` }],
-    triggers: [],
-  }),
-}));
-
-vi.mock("@/hooks/usePromptMentions", () => ({
-  usePromptMentions: () => ({
-    isError: false,
-    isLoading: false,
-    setQuery: vi.fn(),
-    suggestions: [],
-  }),
-}));
+vi.mock("@/hooks/usePromptMentions", async () =>
+  (await import("@/test/fixtures/composer-search")).fakePromptMentionsModule(),
+);
 
 vi.mock("@/hooks/useThreadCreationOptions", async () => {
   const { useState } = await import("react");
@@ -740,6 +727,9 @@ vi.mock("@/hooks/queries/thread-queries", () => ({
   orderPendingInteractions: (
     interactions: readonly PendingInteraction[] | undefined,
   ) => interactions ?? [],
+}));
+
+vi.mock("@/hooks/queries/thread-panel-queries", () => ({
   useThreadPromptHistory: (threadId: string, options: unknown) => {
     promptAreaMocks.useThreadPromptHistory(threadId, options);
     return { data: [] };

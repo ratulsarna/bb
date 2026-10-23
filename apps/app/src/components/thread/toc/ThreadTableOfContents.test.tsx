@@ -24,12 +24,12 @@ vi.mock("@/components/ui/bottom-anchored-scroll-body.js", () => ({
   useBottomAnchoredScroll: vi.fn(),
 }));
 
-vi.mock("@/hooks/queries/thread-queries", () => ({
+vi.mock("@/hooks/queries/thread-panel-queries", () => ({
   useThreadConversationOutline: vi.fn(),
 }));
 
 import { useBottomAnchoredScroll } from "@/components/ui/bottom-anchored-scroll-body.js";
-import { useThreadConversationOutline } from "@/hooks/queries/thread-queries";
+import { useThreadConversationOutline } from "@/hooks/queries/thread-panel-queries";
 import {
   sidebarNavigationQueryKey,
   threadListQueryKey,

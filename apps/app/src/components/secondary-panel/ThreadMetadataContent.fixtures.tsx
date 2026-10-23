@@ -1,7 +1,7 @@
+import type { PullRequest } from "bb-plugin-bb--github-pr-status/contract";
 import type { ReactNode } from "react";
 import type {
   ThreadListEntry,
-  ThreadPullRequest,
   WorkspaceMergeBase,
   WorkspaceWorkingTree,
 } from "@bb/domain";
@@ -45,8 +45,8 @@ export const parentThreads: ThreadListEntry[] = [
 ];
 
 export function makePullRequest(
-  overrides: Partial<ThreadPullRequest> = {},
-): ThreadPullRequest {
+  overrides: Partial<PullRequest> = {},
+): PullRequest {
   return {
     number: 128,
     title: "Show the branch's GitHub pull request in the Info tab",
@@ -138,6 +138,7 @@ export const STORY_COMMITTED_MERGE_BASE: WorkspaceMergeBase = {
   baseRef: "main",
   aheadCount: 2,
   behindCount: 0,
+  squashMergeCheckComplete: true,
   hasCommittedUnmergedChanges: true,
   commits: [],
   insertions: 110,

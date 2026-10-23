@@ -1,4 +1,4 @@
-import type { ThreadPullRequest } from "@bb/domain";
+import type { PullRequest } from "bb-plugin-bb--github-pr-status/contract";
 import { describe, expect, it } from "vitest";
 import {
   getPullRequestGithubCheckStatus,
@@ -8,9 +8,7 @@ import {
   isPullRequestAutoMergeOn,
 } from "./pull-request-display";
 
-function pullRequest(
-  overrides: Partial<ThreadPullRequest> = {},
-): ThreadPullRequest {
+function pullRequest(overrides: Partial<PullRequest> = {}): PullRequest {
   return {
     number: 42,
     title: "Change",

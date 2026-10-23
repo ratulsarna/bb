@@ -1,4 +1,7 @@
-import type { PullRequestState, ThreadPullRequest } from "@bb/domain";
+import type {
+  PullRequest,
+  PullRequestState,
+} from "bb-plugin-bb--github-pr-status/contract";
 import type { IconName } from "@bb/shared-ui/icon";
 
 interface PullRequestDisplay {
@@ -87,7 +90,7 @@ function checksResult(label: string, icon: IconName): PullRequestNextStep {
   return { label, tone: "waiting", icon, running: false };
 }
 
-function blockedStep(pullRequest: ThreadPullRequest): PullRequestNextStep {
+function blockedStep(pullRequest: PullRequest): PullRequestNextStep {
   switch (pullRequest.mergeability.mergeStateStatus) {
     case "BEHIND":
       return action(`Behind ${pullRequest.baseRefName}`);
@@ -98,7 +101,7 @@ function blockedStep(pullRequest: ThreadPullRequest): PullRequestNextStep {
   }
 }
 
-function checksStep(pullRequest: ThreadPullRequest): PullRequestNextStep {
+function checksStep(pullRequest: PullRequest): PullRequestNextStep {
   switch (pullRequest.checks.state) {
     case "passing":
       return checksResult("Checks passing", "CircleCheck");
@@ -114,7 +117,7 @@ function checksStep(pullRequest: ThreadPullRequest): PullRequestNextStep {
 }
 
 export function getPullRequestNextStep(
-  pullRequest: ThreadPullRequest,
+  pullRequest: PullRequest,
 ): PullRequestNextStep | null {
   switch (pullRequest.attention) {
     case "merged":
@@ -151,9 +154,7 @@ export function getPullRequestNextStep(
   }
 }
 
-export function describePullRequestStatus(
-  pullRequest: ThreadPullRequest,
-): string {
+export function describePullRequestStatus(pullRequest: PullRequest): string {
   const nextStep = getPullRequestNextStep(pullRequest);
   return [
     PULL_REQUEST_STATE_DISPLAY[pullRequest.state].label,
@@ -164,14 +165,12 @@ export function describePullRequestStatus(
     .join(", ");
 }
 
-export function isPullRequestAutoMergeOn(
-  pullRequest: ThreadPullRequest,
-): boolean {
+export function isPullRequestAutoMergeOn(pullRequest: PullRequest): boolean {
   return pullRequest.state === "open" && pullRequest.autoMerge;
 }
 
 export function getPullRequestGithubCheckStatus(
-  pullRequest: ThreadPullRequest,
+  pullRequest: PullRequest,
 ): GithubCheckStatus | null {
   if (pullRequest.state !== "open" && pullRequest.state !== "draft") {
     return null;
@@ -190,7 +189,7 @@ export function getPullRequestGithubCheckStatus(
 }
 
 export function getPullRequestStateDisplay(
-  pullRequest: ThreadPullRequest,
+  pullRequest: PullRequest,
 ): PullRequestStateDisplay {
   return PULL_REQUEST_STATE_DISPLAY[pullRequest.state];
 }

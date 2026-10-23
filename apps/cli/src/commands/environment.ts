@@ -102,11 +102,6 @@ interface EnvironmentUpdateCommandOptions {
   name?: string;
 }
 
-interface EnvironmentPullRequestCommandOptions {
-  json?: boolean;
-  method?: "merge" | "squash" | "rebase";
-}
-
 interface BuildEnvironmentUpdateArgsInput {
   id: string;
   opts: EnvironmentUpdateCommandOptions;
@@ -376,15 +371,24 @@ export function registerEnvironmentCommands(
   environment
     .command("cleanup <id>")
     .description("Clean up an unused provider-managed environment")
+    .option(
+      "--recover",
+      "After inspection, acknowledge interrupted hooks and retry failed cleanup (Linux, same-user cwd/maps guard; inspect other users separately)",
+    )
     .option("--json", "Print machine-readable JSON output")
     .action(
-      action(async (id: string, opts: { json?: boolean }) => {
-        const result = await createCliBbSdk(
-          getUrl(),
-        ).environments.experimental_cleanup({ environmentId: id });
-        if (!outputJson(opts, result))
-          console.log("Environment cleanup requested.");
-      }),
+      action(
+        async (id: string, opts: { json?: boolean; recover?: boolean }) => {
+          const result = await createCliBbSdk(
+            getUrl(),
+          ).environments.experimental_cleanup({
+            environmentId: id,
+            recover: opts.recover,
+          });
+          if (!outputJson(opts, result))
+            console.log("Environment cleanup requested.");
+        },
+      ),
     );
 
   environment
@@ -489,7 +493,7 @@ export function registerEnvironmentCommands(
         if (outputJson(opts, rows)) return;
         for (const env of rows) {
           console.log(
-            `${env.id}  ${env.status}  ${env.environmentProviderId ?? "-"}  ${env.path ?? "-"}`,
+            `${env.id}  ${env.status}  ${env.environmentProviderId ?? "-"}  ${env.path ?? "-"}${env.lifecycle.teardown?.message ? `  ${env.lifecycle.teardown.message}` : ""}`,
           );
         }
       }),
@@ -598,6 +602,11 @@ export function registerEnvironmentCommands(
         }
         if (status.mergeBase) {
           console.log(`Merge base: ${status.mergeBase.mergeBaseBranch}`);
+          if (!status.mergeBase.squashMergeCheckComplete) {
+            console.log(
+              "Squash-merge check incomplete; counts may include already-merged commits.",
+            );
+          }
           console.log(`Ahead: ${status.mergeBase.aheadCount}`);
           console.log(`Behind: ${status.mergeBase.behindCount}`);
         }
@@ -1006,106 +1015,6 @@ export function registerEnvironmentCommands(
         console.log(
           `Archived ${result.archivedThreadIds.length} thread(s) in environment ${id}`,
         );
-      }),
-    );
-
-  const pullRequest = environment
-    .command("pull-request")
-    .description("Inspect and manage an environment's pull request");
-
-  pullRequest
-    .command("show <id>")
-    .description("Show an environment's pull request")
-    .option("--json", "Print machine-readable JSON output")
-    .action(
-      action(async (id: string, opts: EnvironmentPullRequestCommandOptions) => {
-        const result = await createCliBbSdk(getUrl()).environments.pullRequest({
-          environmentId: id,
-        });
-        if (outputJson(opts, result)) return;
-        if (result.outcome === "unavailable") {
-          console.log(`Pull request lookup unavailable: ${result.message}`);
-          return;
-        }
-        if (result.outcome === "absent") {
-          console.log("No pull request found");
-          return;
-        }
-        const pr = result.pullRequest;
-        console.log(`Pull request: #${pr.number} ${pr.state} - ${pr.title}`);
-        console.log(`URL: ${pr.url}`);
-        console.log(`Branch: ${pr.headRefName} -> ${pr.baseRefName}`);
-        console.log(`Attention: ${pr.attention}`);
-        console.log(`Auto-merge: ${pr.autoMerge ? "on" : "off"}`);
-        console.log(
-          `Merge queue: ${pr.inMergeQueue === null ? "unknown" : pr.inMergeQueue ? "queued" : "not queued"}`,
-        );
-        console.log(
-          `Checks: ${pr.checks.state} (${pr.checks.passedCount} passed, ` +
-            `${pr.checks.failedCount} failed, ${pr.checks.pendingCount} pending, ` +
-            `${pr.checks.totalCount} total)`,
-        );
-        console.log(
-          `Review: ${pr.review.state} (${pr.review.reviewRequestCount} requested)`,
-        );
-        console.log(`Merge: ${pr.mergeability.state}`);
-      }),
-    );
-
-  pullRequest
-    .command("ready <id>")
-    .description("Mark a pull request ready for review")
-    .option("--json", "Print machine-readable JSON output")
-    .action(
-      action(async (id: string, opts: EnvironmentPullRequestCommandOptions) => {
-        const result = await createCliBbSdk(
-          getUrl(),
-        ).environments.markPullRequestReady({ environmentId: id });
-        if (outputJson(opts, result)) return;
-        console.log(result.message);
-      }),
-    );
-
-  pullRequest
-    .command("draft <id>")
-    .description("Convert a pull request to draft")
-    .option("--json", "Print machine-readable JSON output")
-    .action(
-      action(async (id: string, opts: EnvironmentPullRequestCommandOptions) => {
-        const result = await createCliBbSdk(
-          getUrl(),
-        ).environments.markPullRequestDraft({ environmentId: id });
-        if (outputJson(opts, result)) return;
-        console.log(result.message);
-      }),
-    );
-
-  pullRequest
-    .command("merge <id>")
-    .description("Merge a pull request")
-    .option(
-      "--method <method>",
-      "Merge method: merge, squash, or rebase",
-      "merge",
-    )
-    .option("--json", "Print machine-readable JSON output")
-    .action(
-      action(async (id: string, opts: EnvironmentPullRequestCommandOptions) => {
-        if (
-          opts.method !== "merge" &&
-          opts.method !== "squash" &&
-          opts.method !== "rebase"
-        ) {
-          throw new Error("--method must be merge, squash, or rebase.");
-        }
-        const result = await createCliBbSdk(
-          getUrl(),
-        ).environments.mergePullRequest({
-          environmentId: id,
-          method: opts.method,
-        });
-        if (outputJson(opts, result)) return;
-        console.log(result.message);
       }),
     );
 }

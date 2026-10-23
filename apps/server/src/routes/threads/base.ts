@@ -12,7 +12,7 @@ import {
   listThreadMentionRowsByIds,
   listThreadsWithPendingInteractionState,
   markThreadDeleted,
-  listLifecycleThreadTree,
+  listThreadDeletionTree,
   listPluginThreadMetadata,
   listThreadAncestors,
   listThreadDescendants,
@@ -538,7 +538,7 @@ export function registerThreadBaseRoutes(app: Hono, deps: AppDeps): void {
       deps,
       thread,
     });
-    const dependents = listLifecycleThreadTree(deps.db, thread.id);
+    const dependents = listThreadDeletionTree(deps.db, thread.id);
     markThreadDeleted(deps.db, deps.hub, { threadId: thread.id });
     for (const dependent of dependents) {
       const deleted = getThread(deps.db, dependent.id);

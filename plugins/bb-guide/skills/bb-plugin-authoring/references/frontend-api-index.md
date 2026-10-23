@@ -23,6 +23,10 @@ Read the installed SDK declarations for the exact current signatures.
 - `experimental_useCheckoutState`
 - `experimental_SourceCode`
 - `experimental_Diff`
+- `experimental_InfoSection`
+- `experimental_DetailRow`
+- `experimental_InfoList`
+- `experimental_InfoListRow`
 - `useRpc`
 - `experimental_useRpcQuery`
 - `experimental_useRpcKeyedQuery`
@@ -39,6 +43,23 @@ Read the installed SDK declarations for the exact current signatures.
 - `experimental_useFixedTabTarget`
 - `useComposer`
 - `useComposers`
+- `experimental_useComposerRenderer`
+- `experimental_useThreadTitleDisplayText`
+- `experimental_useComposerContributions`
+- `experimental_useComposerMentionSearch`
+- `experimental_useComposerCommandSearch`
+- `experimental_ComposerRoot`
+- `experimental_VoiceInputButton`
+- `experimental_VoiceRecordingBar`
+- `experimental_FailedVoiceRecordings`
+- `experimental_ShortcutHint`
+- `experimental_ImageLightbox`
+- `experimental_PromptMentionIcon`
+- `experimental_describePromptMention`
+- `experimental_promptMentionClipboardAttributes`
+- `experimental_readPromptMentionClipboard`
+- `experimental_PluginIcon`
+- `experimental_ThreadTitleText`
 - `useComposerView`
 - `experimental_useSidebarThreads`
 - `experimental_useSidebarThreadActions`
@@ -48,7 +69,8 @@ Read the installed SDK declarations for the exact current signatures.
 - `experimental_ThreadActionsMenu`
 - `experimental_ThreadActionsContextMenu`
 - `experimental_THREAD_ACTION_GROUPS`
-- `experimental_useSidebarThreadPullRequest`
+- `experimental_THREAD_INFO_ROW_GROUPS`
+- `experimental_THREAD_INFO_SECTION_GROUPS`
 - `experimental_useSidebarThreadSplit`
 - `experimental_useSidebarNavigation` — the sidebar navigation items in the
   user's saved order, the active item, Home state, and host actions to
@@ -89,7 +111,6 @@ Read the installed SDK declarations for the exact current signatures.
 - `PluginSettingsSectionProps`
 - `ExperimentalAppOverlayProps`
 - `PluginNavPanelProps`
-- `PluginThreadPanelProps`
 - `PluginNewThreadPanelProps`
 - `PluginPendingInteractionView`
 - `PluginPendingInteractionProps`
@@ -110,6 +131,11 @@ Read the installed SDK declarations for the exact current signatures.
 - `ExperimentalSidebarFooterDisclosureProps`
 - `PluginThreadListProps`
 - `PluginThreadHeaderActionProps`
+- `ExperimentalThreadInfoProps`
+- `ExperimentalInfoSectionProps`
+- `ExperimentalDetailRowProps`
+- `ExperimentalInfoListProps`
+- `ExperimentalInfoListRowProps`
 - `ExperimentalPluginBrowserToolbarActionProps`
 - `ExperimentalPluginBrowserPage`
 - `ExperimentalPluginBrowserPageEvaluateOptions`
@@ -134,16 +160,12 @@ Read the installed SDK declarations for the exact current signatures.
 - `ExperimentalAppOverlayRegistration`
 - `ExperimentalFixedTabTargetContract`
 - `ExperimentalPluginFixedTabReference`
-- `PluginFixedTabRegistration`
-- `PluginFixedTabDeclaration`
 - `PluginNavPanelRegistration`
 - `ExperimentalPageTitle`
 - `ExperimentalPageBreadcrumb`
 - `ExperimentalBadge`
 - `ExperimentalBadgeTone`
 - `PluginPanelActionOpenOptions`
-- `PluginThreadPanelActionContext`
-- `PluginThreadPanelActionRegistration`
 - `PluginNewThreadPanelActionContext`
 - `PluginNewThreadPanelActionRegistration`
 - `PluginPendingInteractionRegistration`
@@ -159,8 +181,6 @@ Read the installed SDK declarations for the exact current signatures.
 - `PluginSidebarThreadIndicator`
 - `PluginSidebarThreadActivity`
 - `PluginSidebarThread`
-- `PluginSidebarPullRequest`
-- `PluginSidebarThreadPullRequestState`
 - `PluginSidebarProject`
 - `PluginSidebarSection`
 - `PluginSidebarThreadsState`
@@ -181,6 +201,8 @@ Read the installed SDK declarations for the exact current signatures.
 - `PluginBoundThreadsArea`
 - `PluginBrowserBbSdk`
 - `PluginThreadHeaderActionRegistration`
+- `ExperimentalThreadInfoRowRegistration`
+- `ExperimentalThreadInfoSectionRegistration`
 - `PluginThreadActionTarget`
 - `PluginThreadActionChoice`
 - `PluginThreadActionChoices`
@@ -257,12 +279,68 @@ Read the installed SDK declarations for the exact current signatures.
 - `ComposerSendMenuItem`
 - `ComposerSubmitOptions`
 - `ComposerSelection`
+- `ExperimentalComposerProps`
+- `ExperimentalComposerRegistration`
+- `ExperimentalComposerSubmission`
+- `ExperimentalComposerAction`
+- `ExperimentalComposerSubmitOptions`
+- `ExperimentalComposerSelection`
+- `ExperimentalComposerCommandTrigger`
+- `ExperimentalComposerSearchQuery`
+- `ExperimentalComposerThreadRelation`
+- `ExperimentalComposerMentionSuggestion`
+- `ExperimentalComposerMentionSuggestionGroup`
+- `ExperimentalComposerMentionSearch`
+- `ExperimentalComposerCommandSuggestion`
+- `ExperimentalComposerCommandSuggestionGroup`
+- `ExperimentalComposerCommandSearch`
+- `ExperimentalComposerPendingUpload`
+- `ExperimentalComposerAttachments`
+- `ExperimentalComposerHistory`
+- `ExperimentalVoiceDelivery`
+- `ExperimentalFailedVoiceRecording`
+- `ExperimentalComposerVoice`
+- `ExperimentalComposerPromptAction`
+- `ExperimentalComposerInput`
+- `ExperimentalComposerThreadLinks`
+- `ExperimentalComposerClipboard`
+- `ExperimentalComposerView`
+- `ExperimentalComposerContribution`
+- `ExperimentalComposerPlusMenuContribution`
+- `ExperimentalComposerSendMenuContribution`
+- `ExperimentalComposerPopupContribution`
+- `ExperimentalComposerDecorationSource`
+- `ExperimentalComposerEditorState`
+- `ExperimentalComposerEditor`
+- `ExperimentalComposerEditorVoice`
+- `ExperimentalComposerRootProps`
+- `ExperimentalComposerThreadLinkTarget`
+- `ExperimentalComposerThreadLink`
+- `ExperimentalDroppedThreadMention`
+- `ExperimentalShortcutPresentation`
+- `ExperimentalMessageClipboardPayload`
+- `ExperimentalComposerRendererApi`
+- `ExperimentalComposerContributions`
+- `ExperimentalComposerPopupProps`
+- `ExperimentalComposerMenuSelection`
+- `ExperimentalComposerMenuEntryProps`
+- `ExperimentalVoiceInputButtonProps`
+- `ExperimentalVoiceRecordingBarProps`
+- `ExperimentalFailedVoiceRecordingsProps`
+- `ExperimentalShortcutHintProps`
+- `ExperimentalImageLightboxProps`
+- `ExperimentalPromptMentionIconProps`
+- `ExperimentalPromptMentionPresentation`
+- `ExperimentalPromptMentionClipboardPill`
+- `ExperimentalPluginIconProps`
+- `ExperimentalThreadTitleTextProps`
 - `ComposerRichTextSpec`
 - `ComposerDraft`
 - `ComposerDraftSnapshot`
 - `ComposerDraftReplacement`
 - `ComposerAttachment`
 - `ComposerMention`
+- `ExperimentalComposerMentionTarget`
 - `ComposerInsertPart`
 - `ComposerInsertOptions`
 - `PluginComposerTextEffect`
@@ -287,6 +365,13 @@ Read the installed SDK declarations for the exact current signatures.
 - `ExperimentalAppPanelSurface`
 - `ExperimentalFixedTabTargetState`
 - `ExperimentalOpenFixedTabOptions`
+- `ExperimentalTabRegistration`
+- `ExperimentalTabContext`
+- `ExperimentalTabReference`
+- `ExperimentalTabOpenOptions`
+- `ExperimentalTabTargetReference`
+- `ExperimentalThreadActionTabProps`
+- `ExperimentalThreadTabActionContext`
 - `ExperimentalAppPanel`
 - `BbContext`
 - `BbNavigate`
@@ -315,3 +400,11 @@ Read the installed SDK declarations for the exact current signatures.
 
 The keyed method and row types are inferred from the `contract` option.
 Read-state and error behavior is documented in [Frontend hooks and UI](frontend-hooks-and-ui.md).
+
+## Context-scoped tabs
+
+For `app.slots.experimental_tab`, `ExperimentalTabRegistration`,
+`ExperimentalTabReference`, `ExperimentalTabContext`, and
+`experimental_useAppPanel().experimental_openTab`, see
+[Thread side-panel tabs in the Plugin Guide](https://getbb.app/plugin-guide#surface-thread-panel).
+Source upgrades are in [Tab API migration](frontend-registration.md#tab-api-migration).

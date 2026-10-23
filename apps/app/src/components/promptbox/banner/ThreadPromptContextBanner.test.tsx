@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
+import type { PullRequest } from "bb-plugin-bb--github-pr-status/contract";
 import { cleanup, render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
-import type { ThreadPullRequest } from "@bb/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isThreadDisplayStatusBannerActive,
@@ -21,7 +21,7 @@ const changedFile = {
   deletions: 0,
 };
 
-const pullRequestFixture: ThreadPullRequest = {
+const pullRequestFixture: PullRequest = {
   number: 128,
   title: "Show pull request status in the prompt context banner",
   state: "open",

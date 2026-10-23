@@ -76,6 +76,11 @@ export const BUILTIN_PLUGINS = [
     defaultEnabled: true,
   },
   {
+    name: "connect-next",
+    pluginId: "bb--connect-next",
+    defaultEnabled: false,
+  },
+  {
     name: "environment-project-checkout",
     pluginId: "environment-project-checkout",
     defaultEnabled: true,
@@ -161,6 +166,11 @@ export const BUILTIN_PLUGINS = [
     defaultEnabled: true,
   },
   {
+    name: "github-pr-status",
+    pluginId: "bb--github-pr-status",
+    defaultEnabled: true,
+  },
+  {
     name: "secrets",
     pluginId: "secrets",
     defaultEnabled: true,
@@ -214,6 +224,11 @@ export const BUILTIN_PLUGINS = [
     name: "workflows",
     pluginId: "workflows",
     defaultEnabled: false,
+  },
+  {
+    name: "composer",
+    pluginId: "bb--composer",
+    defaultEnabled: true,
   },
 ].map((plugin): BundledPluginDefinition => ({
   ...plugin,

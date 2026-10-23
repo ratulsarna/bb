@@ -1,4 +1,6 @@
 import {
+  desktopBrowserBrokerChallengeSchema,
+  desktopBrowserBrokerProofSchema,
   desktopBrowserCommandSchemas,
   desktopBrowserResultSchemas,
 } from "./desktop-browser.js";
@@ -22,7 +24,6 @@ import {
   rawDiffFileStatSchema,
   workspaceDiffTargetSchema,
   workspaceStatusSchema,
-  gitHostPullRequestSchema,
   clientTurnRequestIdSchema,
   gitBranchNameSchema,
   jsonObjectSchema,
@@ -58,7 +59,15 @@ import {
 
 export {
   HOST_ARTIFACT_MAX_BYTES,
+  HOST_DAEMON_COMPATIBLE_PROTOCOL_VERSIONS,
+  HOST_DAEMON_CONNECT_NEXT_PROTOCOL_VERSION,
+  HOST_DAEMON_DESKTOP_BROKER_PROOF_PROTOCOL_VERSION,
+  HOST_DAEMON_ENVIRONMENT_CLEANUP_INSPECTION_PROTOCOL_VERSION,
   HOST_DAEMON_PROTOCOL_VERSION,
+  hostDaemonSupportsConnectNext,
+  hostDaemonSupportsDesktopBrokerProof,
+  hostDaemonSupportsEnvironmentCleanupInspection,
+  isCompatibleHostDaemonProtocolVersion,
 } from "./protocol.js";
 export {
   workspaceResolutionFailureCodeSchema,
@@ -1019,44 +1028,6 @@ const workspaceDiffPatchCommandSchema = hostDaemonWorkspaceTargetSchema.extend({
   ignoreWhitespace: z.boolean(),
 });
 
-const workspacePullRequestCommandSchema =
-  hostDaemonWorkspaceTargetSchema.extend({
-    type: z.literal("workspace.pull_request"),
-  });
-
-const pullRequestMergeMethodSchema = z.enum(["merge", "squash", "rebase"]);
-
-const workspacePullRequestReadyCommandSchema = hostDaemonWorkspaceTargetSchema
-  .extend({
-    type: z.literal("workspace.pull_request_action"),
-    operation: z.literal("ready"),
-  })
-  .strict();
-
-const workspacePullRequestDraftCommandSchema = hostDaemonWorkspaceTargetSchema
-  .extend({
-    type: z.literal("workspace.pull_request_action"),
-    operation: z.literal("draft"),
-  })
-  .strict();
-
-const workspacePullRequestMergeCommandSchema = hostDaemonWorkspaceTargetSchema
-  .extend({
-    type: z.literal("workspace.pull_request_action"),
-    operation: z.literal("merge"),
-    method: pullRequestMergeMethodSchema,
-  })
-  .strict();
-
-const workspacePullRequestActionCommandSchema = z.discriminatedUnion(
-  "operation",
-  [
-    workspacePullRequestReadyCommandSchema,
-    workspacePullRequestDraftCommandSchema,
-    workspacePullRequestMergeCommandSchema,
-  ],
-);
-
 const workspaceCommitCommandSchema = hostDaemonWorkspaceTargetSchema
   .extend({
     type: z.literal("workspace.commit"),
@@ -1099,11 +1070,18 @@ const fileWriteResultSchema = z.discriminatedUnion("outcome", [
     .strict(),
 ]);
 
+const hostWorkspaceStatusSchema = workspaceStatusSchema.extend({
+  mergeBase: workspaceStatusSchema.shape.mergeBase
+    .unwrap()
+    .extend({ squashMergeCheckComplete: z.boolean().default(true) })
+    .nullable(),
+});
+
 const workspaceStatusResultSchema = z.discriminatedUnion("outcome", [
   z
     .object({
       outcome: z.literal("available"),
-      workspaceStatus: workspaceStatusSchema,
+      workspaceStatus: hostWorkspaceStatusSchema,
     })
     .strict(),
   z
@@ -1166,22 +1144,6 @@ const workspaceDiffPatchResultSchema = z.discriminatedUnion("outcome", [
     .object({
       outcome: z.literal("unavailable"),
       failure: workspaceResolutionFailureSchema,
-    })
-    .strict(),
-]);
-
-const workspacePullRequestResultSchema = z.discriminatedUnion("outcome", [
-  z
-    .object({
-      outcome: z.literal("available"),
-      pullRequest: gitHostPullRequestSchema,
-    })
-    .strict(),
-  z.object({ outcome: z.literal("absent") }).strict(),
-  z
-    .object({
-      outcome: z.literal("unavailable"),
-      message: z.string().min(1),
     })
     .strict(),
 ]);
@@ -1334,7 +1296,6 @@ const workspaceCommitResultSchema = z.object({
   commitSha: z.string().min(1),
   commitSubject: z.string().min(1),
 });
-const workspacePullRequestActionResultSchema = z.object({}).strict();
 
 export { providerUsageWindowSchema };
 
@@ -1435,6 +1396,20 @@ function defineHostDaemonCommandDescriptor<
 }
 
 export const hostDaemonCommandRegistry = {
+  "desktop.broker.prove": defineHostDaemonCommandDescriptor({
+    type: "desktop.broker.prove",
+    schema: z
+      .object({
+        type: z.literal("desktop.broker.prove"),
+        challenge: desktopBrowserBrokerChallengeSchema,
+      })
+      .strict(),
+    resultSchema: desktopBrowserBrokerProofSchema,
+    transport: "onlineRpc",
+    retryable: false,
+    flushEventsBeforeResult: false,
+    envLane: null,
+  }),
   "desktop.browser.list_instances": defineHostDaemonCommandDescriptor({
     type: "desktop.browser.list_instances",
     schema: desktopBrowserCommandSchemas["desktop.browser.list_instances"],
@@ -1682,15 +1657,6 @@ export const hostDaemonCommandRegistry = {
     flushEventsBeforeResult: false,
     envLane: "write",
   }),
-  "workspace.pull_request_action": defineHostDaemonCommandDescriptor({
-    type: "workspace.pull_request_action",
-    schema: workspacePullRequestActionCommandSchema,
-    resultSchema: workspacePullRequestActionResultSchema,
-    transport: "settled",
-    retryable: false,
-    flushEventsBeforeResult: false,
-    envLane: "write",
-  }),
   "host.list_files": defineHostDaemonCommandDescriptor({
     type: "host.list_files",
     schema: hostListFilesCommandSchema,
@@ -1787,6 +1753,28 @@ export const hostDaemonCommandRegistry = {
     resultSchema: emptyCommandResultSchema,
     transport: "onlineRpc",
     retryable: false,
+    flushEventsBeforeResult: false,
+    envLane: null,
+  }),
+  "environment.inspect_cleanup": defineHostDaemonCommandDescriptor({
+    type: "environment.inspect_cleanup",
+    schema: z
+      .object({
+        type: z.literal("environment.inspect_cleanup"),
+        environmentId: z.string().min(1),
+        path: z.string().min(1),
+      })
+      .strict(),
+    resultSchema: z
+      .object({
+        supported: z.boolean(),
+        active: z.boolean(),
+        pids: z.array(z.number().int().positive()),
+        unreadablePids: z.array(z.number().int().positive()),
+      })
+      .strict(),
+    transport: "onlineRpc",
+    retryable: true,
     flushEventsBeforeResult: false,
     envLane: null,
   }),
@@ -2052,15 +2040,6 @@ export const hostDaemonCommandRegistry = {
     retryable: true,
     flushEventsBeforeResult: false,
     envLane: "read",
-  }),
-  "workspace.pull_request": defineHostDaemonCommandDescriptor({
-    type: "workspace.pull_request",
-    schema: workspacePullRequestCommandSchema,
-    resultSchema: workspacePullRequestResultSchema,
-    transport: "onlineRpc",
-    retryable: true,
-    flushEventsBeforeResult: false,
-    envLane: null,
   }),
   "server_move.inspect": defineHostDaemonCommandDescriptor({
     type: "server_move.inspect",

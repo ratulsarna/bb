@@ -21,7 +21,7 @@ import {
 import {
   useThreadHostFilePreview,
   useThreadStorageFilePreview,
-} from "@/hooks/queries/thread-queries";
+} from "@/hooks/queries/thread-panel-queries";
 import { useHostFilePreview } from "@/hooks/queries/host-file-preview-query";
 import {
   buildEnvironmentFileContentUrl,

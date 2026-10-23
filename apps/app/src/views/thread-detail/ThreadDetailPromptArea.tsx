@@ -1,3 +1,7 @@
+import type {
+  PullRequest,
+  PullRequestMergeMethod,
+} from "bb-plugin-bb--github-pr-status/contract";
 import { createCoreComposerActions } from "@/lib/plugin-composer-handle";
 import { useQueuedMessagesExpanded } from "@/components/promptbox/banner/queued-messages-expanded";
 import type { MachineRemovalStatus } from "@/lib/machine-removal-display";
@@ -14,7 +18,7 @@ import {
 import { createPortal } from "react-dom";
 import { useImmediateRouteNavigate } from "@/components/ui/app-route-anchor";
 import type { IconName } from "@bb/shared-ui/icon";
-import type { PromptMentionLinkResolver } from "@/components/promptbox/editor/prompt-mention-link";
+import type { PromptMentionLinkResolver } from "@bb/client-core";
 import {
   getFollowUpPromptPlaceholder,
   getCompactFollowUpPromptPlaceholder,
@@ -27,7 +31,6 @@ import type {
   PendingInteraction,
   PromptInput,
   ThreadQueuedMessage,
-  ThreadPullRequest,
   ThreadTimelineActivePromptMode,
   ThreadTimelineGoal,
   ThreadTimelineModelFallback,
@@ -37,15 +40,12 @@ import type {
 import type {
   ProviderCommand,
   ThreadTimelineSessionOption,
-  PullRequestMergeMethod,
   SendMessageRequest,
   ThreadTimelineResponse,
   TimelineWorkflowWorkRow,
 } from "@bb/server-contract";
-import type {
-  ExperimentalComposerSelection,
-  ExperimentalComposerSubmitOptions,
-} from "@get-bb/plugin-sdk";
+import type { ExperimentalComposerSelection } from "@get-bb/plugin-sdk";
+import type { ComposerSubmitExtras } from "@get-bb/plugin-sdk/internal/composer-handle";
 import {
   readExecutionSelection,
   resolveComposerSelectionDeadline,
@@ -125,15 +125,15 @@ import {
   useRestoreThreadEnvironment,
   useUnarchiveThread,
 } from "@/hooks/mutations/thread-state-mutations";
+import { orderPendingInteractions } from "@/hooks/queries/thread-queries";
 import {
-  orderPendingInteractions,
   useThreadQueuedMessages,
   useThreadPromptHistory,
-} from "@/hooks/queries/thread-queries";
+} from "@/hooks/queries/thread-panel-queries";
 import { useThreadDefaultExecutionOptions } from "@/hooks/queries/thread-default-execution-options-query";
 import {
   getMutationErrorMessage,
-  showMutationErrorToast,
+  reportMutationError,
 } from "@/lib/mutation-errors";
 import { promptHistoryEntriesToDrafts } from "@/lib/prompt-history";
 import { usePromptHistoryEnabled } from "@/hooks/usePromptHistoryEnabled";
@@ -172,7 +172,7 @@ import {
 } from "@bb/client-core";
 
 const ignorePromptBannerFileClick = () => {};
-const ignoreToastedCreateThreadError = () => {};
+const ignoreReportedSubmitError = () => {};
 
 export interface ThreadDetailSentMessageEdit {
   draft: PromptDraftState;
@@ -233,7 +233,7 @@ interface ThreadDetailPromptAreaProps {
   activeBackgroundCommands: TimelineWorkflowWorkRow[];
   parentThreadSection: ThreadPromptParentThreadSection | null;
   childThreadsSection: ThreadPromptChildThreadsSection | null;
-  pullRequest: ThreadPullRequest | null;
+  pullRequest: PullRequest | null;
   sendMessage: SendMessageMutationLike;
   sentMessageEdit?: ThreadDetailSentMessageEdit;
   steerActiveThreadOnEnter: boolean;
@@ -1035,19 +1035,6 @@ export function ThreadDetailPromptArea({
   const compactPromptPlaceholder = getCompactFollowUpPromptPlaceholder(
     isStopRequested ? "stopping" : runtimeDisplayStatus,
   );
-  const submitProgrammaticallyRef = useRef<
-    (
-      options: ExperimentalComposerSubmitOptions,
-      pluginSubmission: SendMessageRequest["pluginSubmission"],
-    ) => Promise<void>
-  >(async () => {});
-  const submitProgrammaticallyThroughRef = useCallback(
-    (
-      options: ExperimentalComposerSubmitOptions,
-      pluginSubmission: SendMessageRequest["pluginSubmission"],
-    ) => submitProgrammaticallyRef.current(options, pluginSubmission),
-    [],
-  );
   const providerIds = useMemo(
     () => providerOptions.map((option) => option.value),
     [providerOptions],
@@ -1177,7 +1164,7 @@ export function ThreadDetailPromptArea({
       subscribeSelection,
       setDraft: promptDraft.setDraft,
       focus: focusBottomPluginComposer,
-      submit: submitProgrammaticallyThroughRef,
+      sendsOnEnter: true,
       setSelection,
     }),
     [
@@ -1189,7 +1176,6 @@ export function ThreadDetailPromptArea({
       promptDraft.subscribe,
       setSelection,
       subscribeSelection,
-      submitProgrammaticallyThroughRef,
       thread.id,
     ],
   );
@@ -1293,79 +1279,10 @@ export function ThreadDetailPromptArea({
     ],
   );
 
-  const handleSend = useCallback(async () => {
-    const submittedDraft = currentPromptDraft;
-    const submittedInput = currentPromptDraftInput;
-    if (isHandoffSelection) {
-      await createHandoffThread(submittedDraft).catch(
-        ignoreToastedCreateThreadError,
-      );
-      return;
-    }
-    const isQueuingMessage = shouldQueueFollowUpMessage(runtimeDisplayStatus);
-    if (
-      submittedInput.length === 0 ||
-      (!isQueuingMessage && isDefaultExecutionOptionsLoading)
-    ) {
-      return;
-    }
-
-    promptDraft.clearIfCurrentMatches(submittedDraft);
-    setBottomAttachmentError(null);
-
-    try {
-      if (isQueuingMessage) {
-        const request = buildCreateQueuedFollowUpRequest({
-          threadId: thread.id,
-          input: submittedInput,
-          execution: followUpExecutionSelection,
-        });
-        if (request) {
-          await createQueuedMessage.mutateAsync(request);
-        }
-      } else {
-        const request = buildAutoFollowUpRequest({
-          compactFirst,
-          threadId: thread.id,
-          input: submittedInput,
-          execution: followUpExecutionSelection,
-        });
-        if (request) {
-          await sendMessage.mutateAsync(request);
-          setFullHistoryThreadId(null);
-        }
-      }
-    } catch (nextError) {
-      promptDraft.restoreIfEmpty(submittedDraft);
-      showMutationErrorToast({
-        error: nextError,
-        fallbackMessage: isQueuingMessage
-          ? "Failed to queue message"
-          : "Failed to send message",
-        lifecycleOperation: isQueuingMessage ? "queue_message" : "send_message",
-      });
-    }
-  }, [
-    compactFirst,
-    createHandoffThread,
-    createQueuedMessage,
-    currentPromptDraft,
-    currentPromptDraftInput,
-    followUpExecutionSelection,
-    isDefaultExecutionOptionsLoading,
-    isHandoffSelection,
-    promptDraft,
-    sendMessage,
-    setBottomAttachmentError,
-    thread.id,
-    runtimeDisplayStatus,
-  ]);
-  const submitProgrammatically = useCallback(
-    async (
-      submitOptions: ExperimentalComposerSubmitOptions,
-      pluginSubmission: SendMessageRequest["pluginSubmission"],
-    ) => {
-      if (shouldHideComposer) throw new Error("This thread is read-only.");
+  const handleSend = useCallback(
+    async ({ sendAt, pluginSubmission }: ComposerSubmitExtras = {}) => {
+      const submittedDraft = promptDraft.getCurrent();
+      const submittedInput = promptDraftToInput(submittedDraft);
       if (isHandoffSelection) {
         if (effectiveSelectedModel.length === 0) {
           throw new Error("The selected model is still loading.");
@@ -1373,8 +1290,8 @@ export function ThreadDetailPromptArea({
         let created = false;
         try {
           created = await createHandoffThread(
-            promptDraft.getCurrent(),
-            submitOptions.sendAt,
+            submittedDraft,
+            sendAt,
             pluginSubmission,
           );
         } catch (submitError) {
@@ -1391,48 +1308,63 @@ export function ThreadDetailPromptArea({
         }
         return;
       }
-      if (isDefaultExecutionOptionsLoading) {
-        throw new Error("This thread's model options are still loading.");
-      }
-      const submittedDraft = promptDraft.getCurrent();
-      const request = buildAutoFollowUpRequest({
-        compactFirst: compactFirst && submitOptions.sendAt === undefined,
-        threadId: thread.id,
-        input: promptDraftToInput(submittedDraft),
-        execution: followUpExecutionSelection,
-      });
-      if (request === null) {
+      const isQueuingMessage =
+        shouldQueueFollowUpMessage(runtimeDisplayStatus) &&
+        sendAt === undefined &&
+        pluginSubmission === undefined;
+      if (submittedInput.length === 0) {
         throw new Error("Type a message before submitting it.");
       }
-      const clearedSubmittedDraft =
-        promptDraft.clearIfCurrentMatches(submittedDraft);
+      if (!isQueuingMessage && isDefaultExecutionOptionsLoading) {
+        throw new Error("This thread's model options are still loading.");
+      }
+
+      promptDraft.clearIfCurrentMatches(submittedDraft);
       setBottomAttachmentError(null);
+
       try {
-        await sendMessage.mutateAsync({
-          ...request,
-          ...(submitOptions.sendAt === undefined
-            ? {}
-            : { sendAt: submitOptions.sendAt }),
-          ...(pluginSubmission === undefined ? {} : { pluginSubmission }),
-        });
-        setFullHistoryThreadId(null);
-      } catch (scheduleError) {
-        if (clearedSubmittedDraft) {
-          promptDraft.restoreIfEmpty(submittedDraft);
+        if (isQueuingMessage) {
+          const request = buildCreateQueuedFollowUpRequest({
+            threadId: thread.id,
+            input: submittedInput,
+            execution: followUpExecutionSelection,
+          });
+          if (request) {
+            await createQueuedMessage.mutateAsync(request);
+          }
+        } else {
+          const request = buildAutoFollowUpRequest({
+            compactFirst: compactFirst && sendAt === undefined,
+            threadId: thread.id,
+            input: submittedInput,
+            execution: followUpExecutionSelection,
+          });
+          if (request) {
+            await sendMessage.mutateAsync({
+              ...request,
+              ...(sendAt === undefined ? {} : { sendAt }),
+              ...(pluginSubmission === undefined ? {} : { pluginSubmission }),
+            });
+            setFullHistoryThreadId(null);
+          }
         }
-        throw new Error(
-          getMutationErrorMessage({
-            error: scheduleError,
-            fallbackMessage: "Failed to submit message",
-            lifecycleOperation: "send_message",
-          }),
-        );
+      } catch (nextError) {
+        promptDraft.restoreIfEmpty(submittedDraft);
+        throw reportMutationError({
+          error: nextError,
+          fallbackMessage: isQueuingMessage
+            ? "Failed to queue message"
+            : "Failed to send message",
+          lifecycleOperation: isQueuingMessage
+            ? "queue_message"
+            : "send_message",
+        });
       }
     },
     [
       compactFirst,
       createHandoffThread,
-      shouldHideComposer,
+      createQueuedMessage,
       effectiveSelectedModel,
       followUpExecutionSelection,
       isDefaultExecutionOptionsLoading,
@@ -1441,85 +1373,92 @@ export function ThreadDetailPromptArea({
       sendMessage,
       setBottomAttachmentError,
       thread.id,
+      runtimeDisplayStatus,
     ],
   );
-  useEffect(() => {
-    submitProgrammaticallyRef.current = submitProgrammatically;
-  }, [submitProgrammatically]);
+  const handleModifierSubmit = useCallback(
+    async ({ sendAt, pluginSubmission }: ComposerSubmitExtras = {}) => {
+      if (!canSubmitModifierShortcut) {
+        throw new Error("There is nothing to send right now.");
+      }
 
-  const handleModifierSubmit = useCallback(async () => {
-    if (!canSubmitModifierShortcut) {
-      return;
-    }
+      const submittedDraft = promptDraft.getCurrent();
+      const submittedInput = promptDraftToInput(submittedDraft);
+      const shortcutRequest = buildFollowUpShortcutRequest({
+        execution: followUpExecutionSelection,
+        input: submittedInput,
+        queuedMessages: queuedMessagesRef.current,
+        threadId: thread.id,
+      });
+      if (!shortcutRequest) {
+        throw new Error("There is nothing to send right now.");
+      }
 
-    const submittedDraft = currentPromptDraft;
-    const submittedInput = currentPromptDraftInput;
-    const shortcutRequest = buildFollowUpShortcutRequest({
-      execution: followUpExecutionSelection,
-      input: submittedInput,
-      queuedMessages: queuedMessagesRef.current,
-      threadId: thread.id,
-    });
-    if (!shortcutRequest) {
-      return;
-    }
+      if (shortcutRequest.kind === "draft") {
+        promptDraft.clearIfCurrentMatches(submittedDraft);
+        setBottomAttachmentError(null);
+        await runWhileFollowUpShortcutSending(
+          setIsFollowUpShortcutSending,
+          async () => {
+            try {
+              await sendMessage.mutateAsync({
+                ...shortcutRequest.request,
+                ...(sendAt === undefined ? {} : { sendAt }),
+                ...(pluginSubmission === undefined ? {} : { pluginSubmission }),
+              });
+            } catch (nextError) {
+              promptDraft.restoreIfEmpty(submittedDraft);
+              throw reportMutationError({
+                error: nextError,
+                fallbackMessage: "Failed to send message",
+                lifecycleOperation: "send_message",
+              });
+            }
+          },
+        );
+        return;
+      }
 
-    if (shortcutRequest.kind === "draft") {
-      promptDraft.clearIfCurrentMatches(submittedDraft);
-      setBottomAttachmentError(null);
+      if (sendAt !== undefined || pluginSubmission !== undefined) {
+        throw new Error(
+          "There is no new message to schedule or attach data to.",
+        );
+      }
+      const queuedMessageId = shortcutRequest.request.queuedMessageId;
+      if (queuedMessagesRef.current[0]?.id !== queuedMessageId) {
+        throw new Error("The next queued message changed.");
+      }
+
       await runWhileFollowUpShortcutSending(
         setIsFollowUpShortcutSending,
         async () => {
-          try {
-            await sendMessage.mutateAsync(shortcutRequest.request);
-          } catch (nextError) {
-            promptDraft.restoreIfEmpty(submittedDraft);
-            showMutationErrorToast({
-              error: nextError,
-              fallbackMessage: "Failed to send message",
-              lifecycleOperation: "send_message",
-            });
-          }
+          await sendQueuedMessageById({
+            guard: "current-head",
+            messageId: queuedMessageId,
+            mode: shortcutRequest.request.mode,
+          });
         },
       );
-      return;
-    }
-
-    const queuedMessageId = shortcutRequest.request.queuedMessageId;
-    if (queuedMessagesRef.current[0]?.id !== queuedMessageId) {
-      return;
-    }
-
-    await runWhileFollowUpShortcutSending(
-      setIsFollowUpShortcutSending,
-      async () => {
-        await sendQueuedMessageById({
-          guard: "current-head",
-          messageId: queuedMessageId,
-          mode: shortcutRequest.request.mode,
-        });
-      },
-    );
-  }, [
-    canSubmitModifierShortcut,
-    currentPromptDraft,
-    currentPromptDraftInput,
-    followUpExecutionSelection,
-    promptDraft,
-    queuedMessagesRef,
-    sendMessage,
-    sendQueuedMessageById,
-    setBottomAttachmentError,
-    thread.id,
-  ]);
+    },
+    [
+      canSubmitModifierShortcut,
+      followUpExecutionSelection,
+      promptDraft,
+      queuedMessagesRef,
+      sendMessage,
+      sendQueuedMessageById,
+      setBottomAttachmentError,
+      thread.id,
+    ],
+  );
 
   const handleSendQueuedMessage = useCallback(
     (messageId: string) => {
-      void sendQueuedMessageById({
+      sendQueuedMessageById({
         guard: "exists",
         messageId,
         mode: shouldSteerWhenReady ? "steer" : "auto",
-      });
+      }).catch(ignoreReportedSubmitError);
     },
     [sendQueuedMessageById, shouldSteerWhenReady],
   );
@@ -1565,12 +1504,6 @@ export function ThreadDetailPromptArea({
       promptDraft.updateAttachments,
     ],
   );
-  const handleBottomComposerSubmit = useCallback(() => {
-    void handleSend();
-  }, [handleSend]);
-  const handleBottomComposerModifierSubmit = useCallback(() => {
-    void handleModifierSubmit();
-  }, [handleModifierSubmit]);
   const handleInlineComposerSubmit = useCallback(() => {
     void handleSaveInlineQueuedMessage();
   }, [handleSaveInlineQueuedMessage]);
@@ -1587,8 +1520,8 @@ export function ThreadDetailPromptArea({
       message: currentPromptDraft.text,
       mentionRanges: currentPromptDraft.mentions,
       onChangeMessage: promptDraft.setTextAndMentions,
-      onModifierSubmit: handleBottomComposerModifierSubmit,
-      onSubmit: handleBottomComposerSubmit,
+      onModifierSubmit: handleModifierSubmit,
+      onSubmit: handleSend,
       ...(isHandoffSelection
         ? {
             submitLabel: "New thread",
@@ -1607,8 +1540,8 @@ export function ThreadDetailPromptArea({
       canSubmitModifierShortcut,
       compactPromptPlaceholder,
       currentPromptDraft,
-      handleBottomComposerModifierSubmit,
-      handleBottomComposerSubmit,
+      handleModifierSubmit,
+      handleSend,
       isFollowUpSubmitting,
       isHandoffSelection,
       promptHistoryDrafts,

@@ -1,6 +1,9 @@
+import type { PullRequest } from "bb-plugin-bb--github-pr-status/contract";
 import { EnvironmentProviderIcon } from "@/components/plugin/EnvironmentProviderIcon";
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -17,6 +20,16 @@ import {
   ThreadStorageSection,
   type ThreadStorageSectionProps,
 } from "./info/ThreadStorageSection";
+import {
+  ThreadInfoRows,
+  ThreadInfoSections,
+  type CoreThreadInfoRegistration,
+} from "./info/ThreadInfoSlots";
+import {
+  experimental_THREAD_INFO_ROW_GROUPS,
+  experimental_THREAD_INFO_SECTION_GROUPS,
+  type ExperimentalThreadInfoProps,
+} from "@get-bb/plugin-sdk";
 import { Link } from "react-router-dom";
 import type {
   Environment,
@@ -24,7 +37,6 @@ import type {
   Thread,
   ThreadListEntry,
   ThreadParentNotifications,
-  ThreadPullRequest,
   WorkspaceStatus,
 } from "@bb/domain";
 import type { WorkspaceResolutionFailure } from "@bb/host-daemon-contract";
@@ -50,7 +62,6 @@ import { useFittedPathMiddle } from "@/components/ui/truncate-path-middle";
 import {
   DetailCard,
   DetailRow,
-  DetailRowIconLabel,
   DETAIL_ROW_ICON_CLASS,
 } from "@/components/ui/detail-card.js";
 import { useCreateThreadInEnvironment } from "@/hooks/useCreateThreadInEnvironment";
@@ -65,7 +76,10 @@ import {
   selectWorkspaceChangedFilesSections,
   type WorkspaceChangedFileSelection,
 } from "@/components/workspace/workspace-change-summary";
-import { getGitStatusDisplay } from "@/components/workspace/workspace-status";
+import {
+  getGitStatusDisplay,
+  SquashMergeInfo,
+} from "@/components/workspace/workspace-status";
 import {
   useUnarchiveThread,
   useUpdateThread,
@@ -143,10 +157,7 @@ export function ParentSelectorRow({
   }
 
   return (
-    <DetailRow
-      label={<DetailRowIconLabel icon="UserRound">Parent</DetailRowIconLabel>}
-      valueClassName="min-w-0"
-    >
+    <DetailRow icon="UserRound" label="Parent">
       {parentThreadId ? (
         <div
           className={cn(
@@ -229,12 +240,7 @@ export function ParentNotificationsRow({
   });
   if (thread.parentThreadId === null) return null;
   return (
-    <DetailRow
-      label={
-        <DetailRowIconLabel icon="BellDot">Notify parent</DetailRowIconLabel>
-      }
-      valueClassName="min-w-0"
-    >
+    <DetailRow icon="BellDot" label="Notify parent">
       <OptionPicker
         label="Notify parent"
         value={thread.parentNotifications}
@@ -318,12 +324,14 @@ export function EnvironmentRow({
               <span className="min-w-0 truncate">Environment</span>
             </span>
           ) : (
-            <DetailRowIconLabel icon={infoDisplay.icon}>
-              Environment
-            </DetailRowIconLabel>
+            "Environment"
           )
         }
-        valueClassName="min-w-0"
+        icon={
+          providerLookup.status === "loaded" && providerLookup.provider !== null
+            ? undefined
+            : infoDisplay.icon
+        }
       >
         <span className="flex min-w-0 items-center gap-1">
           <span className="min-w-0 truncate" title={infoDisplay.label}>
@@ -361,7 +369,6 @@ export function EnvironmentRow({
               <span className="min-w-0 truncate">Machine</span>
             </span>
           }
-          valueClassName="min-w-0"
         >
           <span
             className="flex min-w-0 items-center gap-1"
@@ -390,10 +397,7 @@ export function ProjectRow({ projectId }: { projectId: string }) {
   if (!projectName) return null;
 
   return (
-    <DetailRow
-      label={<DetailRowIconLabel icon="Folder">Project</DetailRowIconLabel>}
-      valueClassName="min-w-0"
-    >
+    <DetailRow icon="Folder" label="Project">
       <span className="block min-w-0 truncate" title={projectName}>
         {projectName}
       </span>
@@ -408,14 +412,7 @@ export function EnvironmentProvisioningFailureRow({
 }) {
   if (!failed) return null;
   return (
-    <DetailRow
-      label={
-        <DetailRowIconLabel icon="AlertTriangle">
-          Environment
-        </DetailRowIconLabel>
-      }
-      valueClassName="min-w-0"
-    >
+    <DetailRow icon="AlertTriangle" label="Environment">
       <span className="flex min-w-0 items-center gap-1">
         <span className="min-w-0 truncate">Not created</span>
         <span className="shrink-0 text-muted-foreground">
@@ -454,12 +451,7 @@ function WorkspacePathValue({ path }: { path: string }) {
   );
 
   return (
-    <DetailRow
-      label={
-        <DetailRowIconLabel icon="FolderOpen">Directory</DetailRowIconLabel>
-      }
-      valueClassName="min-w-0"
-    >
+    <DetailRow icon="FolderOpen" label="Directory">
       <div ref={containerRef} className="min-w-0">
         <CopyableInlineLabel
           text={path}
@@ -485,26 +477,23 @@ export function BranchRow({ workspaceStatus }: BranchRowProps) {
     : null;
   if (checkoutDisplay === null) return null;
   return (
-    <DetailRow
-      label={
-        <DetailRowIconLabel icon="GitBranch">
-          {checkoutDisplay.rowLabel}
-        </DetailRowIconLabel>
-      }
-      valueClassName="min-w-0 truncate"
-    >
+    <DetailRow icon="GitBranch" label={checkoutDisplay.rowLabel}>
       {checkoutDisplay.copyValue !== null ? (
-        <CopyableInlineLabel
-          text={checkoutDisplay.copyValue}
-          label={checkoutDisplay.copyLabel ?? "Copy checkout value"}
-          title={checkoutDisplay.title}
-          successMessage={checkoutDisplay.copySuccessMessage ?? "Value copied"}
-          errorMessage={
-            checkoutDisplay.copyErrorMessage ?? "Failed to copy value"
-          }
-        >
-          {checkoutDisplay.label}
-        </CopyableInlineLabel>
+        <span className="block truncate">
+          <CopyableInlineLabel
+            text={checkoutDisplay.copyValue}
+            label={checkoutDisplay.copyLabel ?? "Copy checkout value"}
+            title={checkoutDisplay.title}
+            successMessage={
+              checkoutDisplay.copySuccessMessage ?? "Value copied"
+            }
+            errorMessage={
+              checkoutDisplay.copyErrorMessage ?? "Failed to copy value"
+            }
+          >
+            {checkoutDisplay.label}
+          </CopyableInlineLabel>
+        </span>
       ) : (
         <span className="block truncate" title={checkoutDisplay.title}>
           {checkoutDisplay.label}
@@ -515,7 +504,7 @@ export function BranchRow({ workspaceStatus }: BranchRowProps) {
 }
 
 interface PullRequestRowProps {
-  pullRequest: ThreadPullRequest | null;
+  pullRequest: PullRequest | null;
 }
 
 export function PullRequestRow({ pullRequest }: PullRequestRowProps) {
@@ -524,14 +513,7 @@ export function PullRequestRow({ pullRequest }: PullRequestRowProps) {
   const stateDisplay = getPullRequestStateDisplay(pullRequest);
   const nextStep = getPullRequestNextStep(pullRequest);
   return (
-    <DetailRow
-      label={
-        <DetailRowIconLabel icon="GitPullRequestArrow">
-          Pull request
-        </DetailRowIconLabel>
-      }
-      valueClassName="min-w-0"
-    >
+    <DetailRow icon="GitPullRequestArrow" label="Pull request">
       <span className="flex h-5 max-w-full min-w-0 items-center gap-2">
         <a
           href={pullRequest.url}
@@ -688,12 +670,7 @@ export function MergeBaseRow({
   );
 
   return (
-    <DetailRow
-      label={
-        <DetailRowIconLabel icon="GitMerge">Merge base</DetailRowIconLabel>
-      }
-      valueClassName="min-w-0"
-    >
+    <DetailRow icon="GitMerge" label="Merge base">
       {canSelectMergeBase && mergeBaseBranch ? (
         <BranchPicker
           value={mergeBaseBranch}
@@ -752,12 +729,7 @@ export function GitStatusRow({
         }).summary.replace(/\.$/, "")}. Showing the last known status.`
       : null;
     return (
-      <DetailRow
-        label={
-          <DetailRowIconLabel icon="FileDiff">Git status</DetailRowIconLabel>
-        }
-        valueClassName="min-w-0"
-      >
+      <DetailRow icon="FileDiff" label="Git status">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="block min-w-0 truncate text-foreground">
             {formatBranchComparison({
@@ -784,6 +756,7 @@ export function GitStatusRow({
               <TooltipContent>{refreshFailure}</TooltipContent>
             </Tooltip>
           ) : null}
+          {!mergeBase.squashMergeCheckComplete ? <SquashMergeInfo /> : null}
         </span>
       </DetailRow>
     );
@@ -795,13 +768,7 @@ export function GitStatusRow({
     workspaceDeleted: environment?.status === "destroyed",
   });
   return (
-    <DetailRow
-      label={
-        <DetailRowIconLabel icon="FileDiff">Git status</DetailRowIconLabel>
-      }
-      align="start"
-      valueClassName="min-w-0"
-    >
+    <DetailRow icon="FileDiff" label="Git status" align="start">
       <span className="flex min-w-0 items-center gap-1.5">
         <Icon
           name="AlertTriangle"
@@ -832,11 +799,13 @@ export function ArchivedRow({ thread }: ArchivedRowProps) {
   }, [thread.id, unarchiveThread]);
   if (thread.archivedAt == null) return null;
   return (
-    <DetailRow
-      label={<DetailRowIconLabel icon="Archive">Archived</DetailRowIconLabel>}
-      valueClassName="min-w-0 truncate"
-    >
-      <ThreadUnarchiveButton isPending={isPending} onUnarchive={onUnarchive} />
+    <DetailRow icon="Archive" label="Archived">
+      <span className="block truncate">
+        <ThreadUnarchiveButton
+          isPending={isPending}
+          onUnarchive={onUnarchive}
+        />
+      </span>
     </DetailRow>
   );
 }
@@ -857,7 +826,7 @@ export interface ThreadMetadataContentProps {
   workspaceStatus: WorkspaceStatus | undefined;
   workspaceStatusError: Error | null;
   workspaceUnavailable?: WorkspaceResolutionFailure;
-  pullRequest: ThreadPullRequest | null;
+  pullRequest: PullRequest | null;
   selectedMergeBaseBranch: string | undefined;
   mergeBaseBranchRef?: GitBranchRefClassification | null;
   mergeBaseBranchOptions: readonly string[] | undefined;
@@ -966,124 +935,282 @@ export function ThreadMetadataCard({ children }: DetailCardWrapperProps) {
   );
 }
 
-export function ThreadMetadataContent(props: ThreadMetadataContentProps) {
-  const {
-    thread,
-    projectId,
-    parentThreadProjectId,
-    parentThreadDisplayName,
-    parentThreads,
-    canAssignToParent,
-    canTakeOverThread,
-    isLoadingParentThreads,
-    isParentThreadsError,
-    environment,
-    environmentProvisioningFailure,
-    environmentDisplayHost,
-    workspaceStatus,
-    workspaceStatusError,
-    workspaceUnavailable,
-    pullRequest,
-    selectedMergeBaseBranch,
-    mergeBaseBranchRef,
-    mergeBaseBranchOptions,
-    mergeBaseRemoteBranchOptions,
-    isLoadingMergeBaseBranchOptions,
-    updateThreadPending,
-    storage,
-    onAssignParent,
-    onParentSelectorOpenChange,
-    onRetryParentThreads,
-    onMergeBaseBranchChange,
-    onMergeBasePickerOpenChange,
-    onMergeBaseBranchSearchQueryChange,
-    onChangedFileClick,
-    onCommitClick,
-    onOpenChangedFile,
-  } = props;
+const ThreadInfoHostContext = createContext<ThreadMetadataContentProps | null>(
+  null,
+);
 
-  const isHostActive =
-    environment === null || environment.hostLifecycle === "active";
+function useThreadInfoHost(): ThreadMetadataContentProps {
+  const host = useContext(ThreadInfoHostContext);
+  if (host === null) {
+    throw new Error(
+      "thread Info rows must render inside ThreadMetadataContent",
+    );
+  }
+  return host;
+}
 
+function useIsThreadInfoHostActive(): boolean {
+  const { environment } = useThreadInfoHost();
+  return environment === null || environment.hostLifecycle === "active";
+}
+
+function CoreParentRow() {
+  const host = useThreadInfoHost();
   return (
-    <ThreadMetadataCard>
-      <div className="flex min-w-0 flex-col divide-y divide-border [&>*]:py-3 [&>*:first-child]:pt-0 [&>*:last-child:not(:only-child)]:pb-0 [&>*:only-child]:border-b [&>*:only-child]:border-border">
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <ParentSelectorRow
-            thread={thread}
-            projectId={projectId}
-            parentThreadProjectId={parentThreadProjectId}
-            parentThreadDisplayName={parentThreadDisplayName}
-            parentThreads={parentThreads}
-            canAssignToParent={canAssignToParent}
-            canTakeOverThread={canTakeOverThread}
-            isLoadingParentThreads={isLoadingParentThreads}
-            isParentThreadsError={isParentThreadsError}
-            updateThreadPending={updateThreadPending}
-            onAssignParent={onAssignParent}
-            onParentSelectorOpenChange={onParentSelectorOpenChange}
-            onRetryParentThreads={onRetryParentThreads}
+    <ParentSelectorRow
+      thread={host.thread}
+      projectId={host.projectId}
+      parentThreadProjectId={host.parentThreadProjectId}
+      parentThreadDisplayName={host.parentThreadDisplayName}
+      parentThreads={host.parentThreads}
+      canAssignToParent={host.canAssignToParent}
+      canTakeOverThread={host.canTakeOverThread}
+      isLoadingParentThreads={host.isLoadingParentThreads}
+      isParentThreadsError={host.isParentThreadsError}
+      updateThreadPending={host.updateThreadPending}
+      onAssignParent={host.onAssignParent}
+      onParentSelectorOpenChange={host.onParentSelectorOpenChange}
+      onRetryParentThreads={host.onRetryParentThreads}
+    />
+  );
+}
+
+function CoreParentNotificationsRow() {
+  return <ParentNotificationsRow thread={useThreadInfoHost().thread} />;
+}
+
+function CoreProjectRow({ projectId }: ExperimentalThreadInfoProps) {
+  return <ProjectRow projectId={projectId} />;
+}
+
+function CoreEnvironmentRow() {
+  const host = useThreadInfoHost();
+  return (
+    <EnvironmentRow
+      thread={host.thread}
+      environment={host.environment}
+      environmentDisplayHost={host.environmentDisplayHost}
+    />
+  );
+}
+
+function CoreEnvironmentProvisioningFailureRow() {
+  return (
+    <EnvironmentProvisioningFailureRow
+      failed={useThreadInfoHost().environmentProvisioningFailure}
+    />
+  );
+}
+
+function CoreWorkspacePathRow() {
+  return <WorkspacePathRow environment={useThreadInfoHost().environment} />;
+}
+
+function CoreBranchRow() {
+  const host = useThreadInfoHost();
+  if (!useIsThreadInfoHostActive()) return null;
+  return <BranchRow workspaceStatus={host.workspaceStatus} />;
+}
+
+function CoreMergeBaseRow() {
+  const host = useThreadInfoHost();
+  if (!useIsThreadInfoHostActive()) return null;
+  return (
+    <MergeBaseRow
+      workspaceStatus={host.workspaceStatus}
+      selectedMergeBaseBranch={host.selectedMergeBaseBranch}
+      mergeBaseBranchRef={host.mergeBaseBranchRef}
+      mergeBaseBranchOptions={host.mergeBaseBranchOptions}
+      mergeBaseRemoteBranchOptions={host.mergeBaseRemoteBranchOptions}
+      isLoadingMergeBaseBranchOptions={host.isLoadingMergeBaseBranchOptions}
+      onMergeBaseBranchChange={host.onMergeBaseBranchChange}
+      onMergeBasePickerOpenChange={host.onMergeBasePickerOpenChange}
+      onMergeBaseBranchSearchQueryChange={
+        host.onMergeBaseBranchSearchQueryChange
+      }
+    />
+  );
+}
+
+function CoreGitStatusRow() {
+  const host = useThreadInfoHost();
+  if (!useIsThreadInfoHostActive()) return null;
+  return (
+    <GitStatusRow
+      thread={host.thread}
+      environment={host.environment}
+      workspaceStatus={host.workspaceStatus}
+      workspaceStatusError={host.workspaceStatusError}
+      workspaceUnavailable={host.workspaceUnavailable}
+    />
+  );
+}
+
+function CorePullRequestRow() {
+  return <PullRequestRow pullRequest={useThreadInfoHost().pullRequest} />;
+}
+
+function CoreArchivedRow() {
+  return <ArchivedRow thread={useThreadInfoHost().thread} />;
+}
+
+function CoreChildThreadsSection() {
+  return <ChildThreadsSection thread={useThreadInfoHost().thread} />;
+}
+
+function CoreForksSection() {
+  return <ForksSection thread={useThreadInfoHost().thread} />;
+}
+
+function CoreCommitsSection() {
+  const host = useThreadInfoHost();
+  if (!useIsThreadInfoHostActive()) return null;
+  return (
+    <CommitsSection
+      workspaceStatus={host.workspaceStatus}
+      onCommitClick={host.onCommitClick}
+      onChangedFileClick={host.onChangedFileClick}
+      onOpenChangedFile={host.onOpenChangedFile}
+    />
+  );
+}
+
+function CoreUncommittedChangesSection() {
+  const host = useThreadInfoHost();
+  if (!useIsThreadInfoHostActive()) return null;
+  return (
+    <UncommittedChangesSection
+      workspaceStatus={host.workspaceStatus}
+      onChangedFileClick={host.onChangedFileClick}
+      onOpenChangedFile={host.onOpenChangedFile}
+    />
+  );
+}
+
+function CoreThreadStorageSection() {
+  const { storage } = useThreadInfoHost();
+  return storage ? <ThreadStorageSection {...storage} /> : null;
+}
+
+const ROW_GROUPS = experimental_THREAD_INFO_ROW_GROUPS;
+const SECTION_GROUPS = experimental_THREAD_INFO_SECTION_GROUPS;
+
+const CORE_THREAD_INFO_ROWS: readonly CoreThreadInfoRegistration[] = [
+  {
+    id: "parent",
+    group: ROW_GROUPS.thread,
+    order: 10,
+    component: CoreParentRow,
+  },
+  {
+    id: "parentNotifications",
+    group: ROW_GROUPS.thread,
+    order: 20,
+    component: CoreParentNotificationsRow,
+  },
+  {
+    id: "project",
+    group: ROW_GROUPS.thread,
+    order: 30,
+    component: CoreProjectRow,
+  },
+  {
+    id: "environment",
+    group: ROW_GROUPS.environment,
+    order: 10,
+    component: CoreEnvironmentRow,
+  },
+  {
+    id: "environmentProvisioningFailure",
+    group: ROW_GROUPS.environment,
+    order: 20,
+    component: CoreEnvironmentProvisioningFailureRow,
+  },
+  {
+    id: "directory",
+    group: ROW_GROUPS.environment,
+    order: 30,
+    component: CoreWorkspacePathRow,
+  },
+  { id: "branch", group: ROW_GROUPS.git, order: 10, component: CoreBranchRow },
+  {
+    id: "mergeBase",
+    group: ROW_GROUPS.git,
+    order: 20,
+    component: CoreMergeBaseRow,
+  },
+  {
+    id: "gitStatus",
+    group: ROW_GROUPS.git,
+    order: 30,
+    component: CoreGitStatusRow,
+  },
+  {
+    id: "pullRequest",
+    group: ROW_GROUPS.pullRequest,
+    order: 10,
+    component: CorePullRequestRow,
+  },
+  {
+    id: "archived",
+    group: ROW_GROUPS.lifecycle,
+    order: 10,
+    component: CoreArchivedRow,
+  },
+];
+
+const CORE_THREAD_INFO_SECTIONS: readonly CoreThreadInfoRegistration[] = [
+  {
+    id: "childThreads",
+    group: SECTION_GROUPS.related,
+    order: 10,
+    component: CoreChildThreadsSection,
+  },
+  {
+    id: "forks",
+    group: SECTION_GROUPS.related,
+    order: 20,
+    component: CoreForksSection,
+  },
+  {
+    id: "commits",
+    group: SECTION_GROUPS.changes,
+    order: 10,
+    component: CoreCommitsSection,
+  },
+  {
+    id: "uncommittedChanges",
+    group: SECTION_GROUPS.changes,
+    order: 20,
+    component: CoreUncommittedChangesSection,
+  },
+  {
+    id: "threadStorage",
+    group: SECTION_GROUPS.storage,
+    order: 10,
+    component: CoreThreadStorageSection,
+  },
+];
+
+export function ThreadMetadataContent(props: ThreadMetadataContentProps) {
+  return (
+    <ThreadInfoHostContext.Provider value={props}>
+      <ThreadMetadataCard>
+        <div className="flex min-w-0 flex-col [&_[data-info-section]]:mt-3 [&_[data-info-section]]:border-t [&_[data-info-section]]:border-border [&_[data-info-section]]:pt-3">
+          <div className="flex min-w-0 flex-col gap-1.5 [:not(:has([data-info-section]))>&]:border-b [:not(:has([data-info-section]))>&]:border-border [:not(:has([data-info-section]))>&]:pb-3">
+            <ThreadInfoRows
+              core={CORE_THREAD_INFO_ROWS}
+              threadId={props.thread.id}
+              projectId={props.projectId}
+            />
+          </div>
+          <ThreadInfoSections
+            core={CORE_THREAD_INFO_SECTIONS}
+            threadId={props.thread.id}
+            projectId={props.projectId}
           />
-          <ParentNotificationsRow thread={thread} />
-          <ProjectRow projectId={projectId} />
-          <EnvironmentRow
-            thread={thread}
-            environment={environment}
-            environmentDisplayHost={environmentDisplayHost}
-          />
-          <EnvironmentProvisioningFailureRow
-            failed={environmentProvisioningFailure}
-          />
-          <WorkspacePathRow environment={environment} />
-          {isHostActive ? (
-            <>
-              <BranchRow workspaceStatus={workspaceStatus} />
-              <MergeBaseRow
-                workspaceStatus={workspaceStatus}
-                selectedMergeBaseBranch={selectedMergeBaseBranch}
-                mergeBaseBranchRef={mergeBaseBranchRef}
-                mergeBaseBranchOptions={mergeBaseBranchOptions}
-                mergeBaseRemoteBranchOptions={mergeBaseRemoteBranchOptions}
-                isLoadingMergeBaseBranchOptions={
-                  isLoadingMergeBaseBranchOptions
-                }
-                onMergeBaseBranchChange={onMergeBaseBranchChange}
-                onMergeBasePickerOpenChange={onMergeBasePickerOpenChange}
-                onMergeBaseBranchSearchQueryChange={
-                  onMergeBaseBranchSearchQueryChange
-                }
-              />
-              <GitStatusRow
-                thread={thread}
-                environment={environment}
-                workspaceStatus={workspaceStatus}
-                workspaceStatusError={workspaceStatusError}
-                workspaceUnavailable={workspaceUnavailable}
-              />
-            </>
-          ) : null}
-          <PullRequestRow pullRequest={pullRequest} />
-          <ArchivedRow thread={thread} />
         </div>
-        <ChildThreadsSection thread={thread} />
-        <ForksSection thread={thread} />
-        {isHostActive ? (
-          <>
-            <CommitsSection
-              workspaceStatus={workspaceStatus}
-              onCommitClick={onCommitClick}
-              onChangedFileClick={onChangedFileClick}
-              onOpenChangedFile={onOpenChangedFile}
-            />
-            <UncommittedChangesSection
-              workspaceStatus={workspaceStatus}
-              onChangedFileClick={onChangedFileClick}
-              onOpenChangedFile={onOpenChangedFile}
-            />
-          </>
-        ) : null}
-        {storage ? <ThreadStorageSection {...storage} /> : null}
-      </div>
-    </ThreadMetadataCard>
+      </ThreadMetadataCard>
+    </ThreadInfoHostContext.Provider>
   );
 }

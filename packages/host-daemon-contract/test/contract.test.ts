@@ -151,6 +151,7 @@ const WORKSPACE_STATUS_AVAILABLE_RESULT: JsonObject = {
       baseRef: "abc123",
       aheadCount: 1,
       behindCount: 0,
+      squashMergeCheckComplete: true,
       hasCommittedUnmergedChanges: true,
       commits: [
         {
@@ -179,6 +180,13 @@ const WORKSPACE_DIFF_AVAILABLE_RESULT: JsonObject = {
 const ONLINE_RPC_RESPONSE_RESULT_FIXTURES: OnlineRpcResponseResultFixtures = {
   "environment.hook.run": {},
   "environment.hook.cancel": { status: "terminated" },
+  "environment.inspect_cleanup": {
+    supported: true,
+    active: false,
+    pids: [],
+    unreadablePids: [],
+  },
+  "desktop.broker.prove": { proof: "a".repeat(64) },
   "desktop.browser.list_instances": { instances: [] },
   "desktop.browser.list_tabs": { tabs: [] },
   "desktop.browser.create_tab": {
@@ -523,34 +531,6 @@ const ONLINE_RPC_RESPONSE_RESULT_FIXTURES: OnlineRpcResponseResultFixtures = {
   },
   "workspace.diffFiles": WORKSPACE_UNAVAILABLE_RESULT,
   "workspace.diffPatch": WORKSPACE_UNAVAILABLE_RESULT,
-  "workspace.pull_request": {
-    outcome: "available",
-    pullRequest: {
-      number: 42,
-      title: "Add host RPC guard",
-      state: "OPEN",
-      url: "https://github.com/acme/bb/pull/42",
-      isDraft: false,
-      baseRefName: "main",
-      headRefName: "feature/host-rpc",
-      updatedAt: "2026-06-16T12:30:00Z",
-      autoMerge: false,
-      inMergeQueue: false,
-      checks: [
-        {
-          name: "test",
-          status: "completed",
-          conclusion: "success",
-          url: null,
-          startedAt: "2026-06-16T12:25:00Z",
-        },
-      ],
-      reviewDecision: "APPROVED",
-      reviewRequestCount: 0,
-      mergeStateStatus: "CLEAN",
-      mergeable: "MERGEABLE",
-    },
-  },
   "server_move.inspect": {
     dataDir: "/home/me/.bb-machines/bb.example.com",
     platform: "linux",
@@ -612,7 +592,6 @@ const SETTLED_RESPONSE_RESULT_FIXTURES: SettledResponseResultFixtures = {
     commitSha: "abcdef123456",
     commitSubject: "Checkpoint work",
   },
-  "workspace.pull_request_action": {},
 };
 
 const WORKSPACE_DIFF_FILES_AVAILABLE_RESULT: JsonObject = {
@@ -723,19 +702,6 @@ const ADDITIONAL_ONLINE_RPC_RESPONSE_ROUND_TRIP_CASES: OnlineRpcResponseRoundTri
       name: "workspace.diffPatch available result",
       commandType: "workspace.diffPatch",
       result: WORKSPACE_DIFF_PATCH_AVAILABLE_RESULT,
-    },
-    {
-      name: "workspace.pull_request no-PR result",
-      commandType: "workspace.pull_request",
-      result: { outcome: "absent" },
-    },
-    {
-      name: "workspace.pull_request unavailable result",
-      commandType: "workspace.pull_request",
-      result: {
-        outcome: "unavailable",
-        message: "GitHub CLI is not available",
-      },
     },
   ];
 
@@ -1266,8 +1232,80 @@ describe("host-daemon command schemas", () => {
   });
 
   it("uses the current host-daemon protocol version", () => {
-    expect(HOST_DAEMON_PROTOCOL_VERSION).toBe(246);
+    expect(HOST_DAEMON_PROTOCOL_VERSION).toBe(251);
     expect(HOST_ARTIFACT_MAX_BYTES).toBe(256 * 1024 * 1024);
+  });
+
+  it("accepts only daemons that report the environment branch", () => {
+    expect(contract.isCompatibleHostDaemonProtocolVersion(245)).toBe(false);
+    expect(contract.isCompatibleHostDaemonProtocolVersion(246)).toBe(false);
+    expect(contract.isCompatibleHostDaemonProtocolVersion(247)).toBe(false);
+    expect(contract.isCompatibleHostDaemonProtocolVersion(248)).toBe(false);
+    expect(contract.isCompatibleHostDaemonProtocolVersion(249)).toBe(false);
+    expect(contract.isCompatibleHostDaemonProtocolVersion(250)).toBe(true);
+    expect(contract.isCompatibleHostDaemonProtocolVersion(251)).toBe(true);
+    expect(contract.isCompatibleHostDaemonProtocolVersion(252)).toBe(false);
+    expect(contract.hostDaemonSupportsConnectNext(246)).toBe(false);
+    expect(contract.hostDaemonSupportsConnectNext(247)).toBe(true);
+    expect(contract.hostDaemonSupportsDesktopBrokerProof(247)).toBe(false);
+    expect(contract.hostDaemonSupportsDesktopBrokerProof(248)).toBe(true);
+  });
+
+  it("reads workspace status from daemons that predate squash-check completeness", () => {
+    const legacyResult: unknown = JSON.parse(
+      JSON.stringify(WORKSPACE_STATUS_AVAILABLE_RESULT, (key, value) =>
+        key === "squashMergeCheckComplete" ? undefined : value,
+      ),
+    );
+    expect(
+      contract.hostDaemonOnlineRpcResultSchemaByType["workspace.status"].parse(
+        legacyResult,
+      ),
+    ).toMatchObject({
+      outcome: "available",
+      workspaceStatus: { mergeBase: { squashMergeCheckComplete: true } },
+    });
+  });
+
+  it("parses connect next config and status messages strictly", () => {
+    const config = {
+      domain: "next.getbb.app",
+      server: { protocol: "wss", host: "tunnel.next.getbb.app", port: 443 },
+    };
+    expect(
+      hostDaemonServerWsMessageSchema.parse({
+        type: "connect-next.replace",
+        generation: 3,
+        config,
+      }),
+    ).toEqual({ type: "connect-next.replace", generation: 3, config });
+    expect(
+      hostDaemonServerWsMessageSchema.safeParse({
+        type: "connect-next.replace",
+        generation: 3,
+        config: { ...config, credential: "x" },
+      }).success,
+    ).toBe(false);
+    const status = {
+      state: "connected",
+      label: "laptop",
+      lastError: null,
+      nextRetryAt: null,
+      since: 1,
+      shares: [{ port: 3000, state: "active", error: null }],
+    };
+    expect(
+      hostDaemonDaemonWsMessageSchema.parse({
+        type: "connect-next.status",
+        status,
+      }),
+    ).toEqual({ type: "connect-next.status", status });
+    expect(
+      hostDaemonDaemonWsMessageSchema.safeParse({
+        type: "connect-next.status",
+        status: { ...status, state: "halted" },
+      }).success,
+    ).toBe(false);
   });
 
   it.each([
@@ -1465,61 +1503,6 @@ describe("host-daemon command schemas", () => {
       contributedEnv: [],
       path: "/tmp/project",
     });
-
-    expect(
-      hostDaemonCommandSchema.parse({
-        type: "workspace.pull_request_action",
-        operation: "ready",
-        environmentId: "env_123",
-        workspaceContext: {
-          workspacePath: "/tmp/workspace",
-        },
-      }),
-    ).toMatchObject({
-      type: "workspace.pull_request_action",
-      operation: "ready",
-    });
-
-    expect(
-      hostDaemonCommandSchema.parse({
-        type: "workspace.pull_request_action",
-        operation: "draft",
-        environmentId: "env_123",
-        workspaceContext: {
-          workspacePath: "/tmp/workspace",
-        },
-      }),
-    ).toMatchObject({
-      type: "workspace.pull_request_action",
-      operation: "draft",
-    });
-
-    expect(
-      hostDaemonCommandSchema.parse({
-        type: "workspace.pull_request_action",
-        operation: "merge",
-        method: "squash",
-        environmentId: "env_123",
-        workspaceContext: {
-          workspacePath: "/tmp/workspace",
-        },
-      }),
-    ).toMatchObject({
-      type: "workspace.pull_request_action",
-      operation: "merge",
-      method: "squash",
-    });
-
-    expect(() =>
-      hostDaemonCommandSchema.parse({
-        type: "workspace.pull_request_action",
-        operation: "merge",
-        environmentId: "env_123",
-        workspaceContext: {
-          workspacePath: "/tmp/workspace",
-        },
-      }),
-    ).toThrow();
 
     expect(
       hostDaemonOnlineRpcCommandSchema.parse({
@@ -3155,6 +3138,16 @@ describe("host-daemon session schemas", () => {
         leaseTimeoutMs: 30_000,
       }).connectShares,
     ).toEqual({ generation: 0, ports: [] });
+
+    expect(
+      hostDaemonSessionOpenResponseSchema.parse({
+        sessionId: "session_default_next",
+        machineEnvironment: { revision: 0, entries: [] },
+        idleProviderSessionTimeoutMinutes: 30,
+        heartbeatIntervalMs: 5_000,
+        leaseTimeoutMs: 30_000,
+      }).connectNext,
+    ).toEqual({ generation: 0, config: null });
 
     expect(() =>
       hostDaemonSessionOpenResponseSchema.parse({

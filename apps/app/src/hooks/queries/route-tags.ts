@@ -1,4 +1,5 @@
 import type {
+  InfiniteData,
   QueryClient,
   QueryFunctionContext,
   QueryKey,
@@ -27,6 +28,42 @@ export function routeTaggedRead<Input, Output>(
     }),
     queryFn: ({ client, queryKey, signal }: QueryFunctionContext) =>
       runTaggedRead(client, queryKey, () => read(signal)),
+  };
+}
+
+function isInfiniteData<Output>(
+  data: InfiniteData<Output> | Output,
+): data is InfiniteData<Output> {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "pages" in data &&
+    "pageParams" in data
+  );
+}
+
+export function routeTaggedPages<Input, Output>(
+  client: QueryClient,
+  queryKey: QueryKey,
+  route: ContractTagDeclarations<Input, Output>,
+  input: Input,
+  read: (pageParam: number, signal: AbortSignal) => Promise<Output>,
+) {
+  return {
+    ...taggedQueryOptions<InfiniteData<Output> | Output>(client, queryKey, {
+      scope: CORE_TAG_SCOPE,
+      tagsOf: (data) =>
+        (isInfiniteData<Output>(data) ? data.pages : [data]).flatMap(
+          (page) => route.tags?.(input, page) ?? [],
+        ),
+    }),
+    queryFn: ({
+      client,
+      queryKey,
+      pageParam,
+      signal,
+    }: QueryFunctionContext<QueryKey, number>) =>
+      runTaggedRead(client, queryKey, () => read(pageParam, signal)),
   };
 }
 

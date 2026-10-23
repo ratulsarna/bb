@@ -1,4 +1,4 @@
-import type { ThreadPullRequest } from "@bb/domain";
+import type { PullRequest } from "bb-plugin-bb--github-pr-status/contract";
 import { Icon } from "@bb/shared-ui/icon";
 import { cn } from "@bb/shared-ui/lib/utils";
 import {
@@ -15,7 +15,7 @@ export function PullRequestStateIcon({
   pullRequest,
   className,
 }: {
-  pullRequest: ThreadPullRequest;
+  pullRequest: PullRequest;
   className?: string;
 }) {
   const statusIcon = getPullRequestStateDisplay(pullRequest);
@@ -32,7 +32,7 @@ export function PullRequestStatusPill({
   pullRequest,
   className,
 }: {
-  pullRequest: ThreadPullRequest;
+  pullRequest: PullRequest;
   className?: string;
 }) {
   const checkStatus = getPullRequestGithubCheckStatus(pullRequest);

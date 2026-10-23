@@ -24,7 +24,6 @@ import type {
   SidebarBootstrapResponse,
   TerminalSession,
 } from "@bb/server-contract";
-import { ComposerStarterRows } from "@/components/promptbox/ComposerStarterRows";
 import {
   NewThreadComposer,
   type NewThreadComposerState,
@@ -96,7 +95,7 @@ import {
   type OpenAttachmentRequest,
 } from "@/components/secondary-panel/AttachmentOpenerContext";
 import { PluginComposerHostProvider } from "@/components/plugin/plugin-composer-host";
-import type { PromptMentionLinkResolver } from "@/components/promptbox/editor/prompt-mention-link";
+import type { PromptMentionLinkResolver } from "@bb/client-core";
 import { useQuickCreateProjectController } from "@/hooks/useQuickCreateProject";
 import { useNavigateToThreadAfterCreatePreference } from "@/lib/root-compose-create-preference";
 import {
@@ -1520,16 +1519,6 @@ function RootComposeSurface({
     },
     onRequestMachineSetup: handleRequestMachineSetup,
   });
-  const starterRows = (
-    <ComposerStarterRows
-      promptDraft={promptDraft}
-      focus={pluginComposerHost.focus}
-      isProjectless={isProjectless}
-      isSubmitting={isSubmitting}
-      sidebarNavigation={sidebarNavigation}
-      className={isCompactViewport ? "pb-2" : "mt-3"}
-    />
-  );
 
   return (
     <PluginDetailPanelContext.Provider value={pluginDetails}>
@@ -1554,16 +1543,13 @@ function RootComposeSurface({
                   }
                   isCompactHomeLayout={isCompactViewport}
                   compactScrollContent={
-                    <>
-                      <RootComposeMobileRecents
-                        highlightedThreadId={lastCreatedThreadId}
-                        projectNamesById={mobileRecentProjectNamesById}
-                        providersById={mobileRecentProvidersById}
-                        showCreatingRow={isSubmitting}
-                        threads={mobileRecentThreads}
-                      />
-                      {starterRows}
-                    </>
+                    <RootComposeMobileRecents
+                      highlightedThreadId={lastCreatedThreadId}
+                      projectNamesById={mobileRecentProjectNamesById}
+                      providersById={mobileRecentProvidersById}
+                      showCreatingRow={isSubmitting}
+                      threads={mobileRecentThreads}
+                    />
                   }
                   isSecondaryPanelOpen={isSecondaryPanelOpen}
                   onToggleSecondaryPanel={handleToggleSecondaryPanel}
@@ -1593,7 +1579,6 @@ function RootComposeSurface({
                   }}
                 >
                   {promptBox}
-                  {isCompactViewport ? null : starterRows}
                 </RootComposeSecondaryContent>
               </PluginThreadPanelNavigationProvider>
             </AppNavigationHostProvider>

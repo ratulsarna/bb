@@ -4,6 +4,8 @@ import {
   CORE_TAG_SCOPE,
   createTaggedKeyedQueryOwner,
   invalidateTags,
+  KeyedCollection,
+  optimisticKeyedUpdate,
   optimisticQueryUpdate,
   runTaggedMutation,
   runTaggedRead,
@@ -24,6 +26,7 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+const collection = new KeyedCollection<unknown>("rows");
 function setup() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -223,6 +226,7 @@ it("shares one keyed observer, batches consumers, and retains data through refre
     client,
     queryKey: ["keyed"],
     scope: CORE_TAG_SCOPE,
+    collection,
     read: async (keys) => {
       requested.push([...keys]);
       if (failure) throw new Error("offline");
@@ -273,6 +277,7 @@ it("re-reads after a dormant read completes without a subscription to changes", 
     client,
     queryKey: ["dormant"],
     scope: CORE_TAG_SCOPE,
+    collection,
     read: async () => {
       const captured = value;
       if (first) {
@@ -307,6 +312,7 @@ it("refreshes only keys matched by key tags and all keys matched by response tag
     client,
     queryKey: ["precise"],
     scope: CORE_TAG_SCOPE,
+    collection,
     read: async (keys) => {
       requested.push([...keys]);
       return {
@@ -359,6 +365,7 @@ it.each([false, true])(
       client,
       queryKey: ["partial"],
       scope: CORE_TAG_SCOPE,
+      collection,
       read,
     });
     disposers.push(owner.subscribe(["a", "b"], () => {}));
@@ -418,6 +425,7 @@ it("inherits retry and mount freshness defaults from the query client", async ()
     client,
     queryKey: ["defaults"],
     scope: CORE_TAG_SCOPE,
+    collection,
     read,
   });
   const stop = owner.subscribe(["a"], () => {});
@@ -446,6 +454,7 @@ it("loads new subscribers without rereading other rows during a keyed invalidati
     client,
     queryKey: ["membership"],
     scope: CORE_TAG_SCOPE,
+    collection,
     read,
   });
   disposers.push(owner.subscribe(["a", "b"], () => {}));
@@ -694,7 +703,7 @@ describe("optimistic tagged mutations", () => {
     },
   );
 
-  it("does not replace an accepted row prediction when only a different row refreshes", async () => {
+  it("drops an unsubscribed stale row with an accepted prediction and reads it fresh on resubscribe", async () => {
     const client = setup();
     const queryKey = ["optimistic-rows"];
     let value = 1;
@@ -703,6 +712,7 @@ describe("optimistic tagged mutations", () => {
       client,
       queryKey,
       scope: CORE_TAG_SCOPE,
+      collection,
       read: async (keys) => {
         if (failure && keys.includes("a")) throw new Error("read offline");
         return {
@@ -731,9 +741,7 @@ describe("optimistic tagged mutations", () => {
       async () => outcome(),
       {
         client,
-        optimistic: [
-          optimisticQueryUpdate<number>(queryKey, () => 2, ["result", "a"]),
-        ],
+        optimistic: [optimisticKeyedUpdate(collection, "a", () => 2)],
       },
     );
     expect(owner.observer.getCurrentResult().data?.result).toEqual({
@@ -743,10 +751,7 @@ describe("optimistic tagged mutations", () => {
     stopA();
     value = 3;
     await invalidateTags(client, CORE_TAG_SCOPE, ["item:b"]);
-    expect(owner.observer.getCurrentResult().data?.result).toEqual({
-      a: 2,
-      b: 3,
-    });
+    expect(owner.observer.getCurrentResult().data?.result).toEqual({ b: 3 });
     failure = false;
     value = 4;
     disposers.push(owner.subscribe(["a"], () => {}));
@@ -795,7 +800,7 @@ it("re-reads when a write completes between a read resolving and its cache commi
   await vi.waitFor(() => expect(read.value()).toBe(3));
 });
 
-it("does not acknowledge a row read before the write from a later batch's start time", async () => {
+it("does not show a row read that started before the write once a later batch refreshes", async () => {
   const client = setup();
   const queryKey = ["row-receipts"];
   let value = 1;
@@ -809,6 +814,7 @@ it("does not acknowledge a row read before the write from a later batch's start 
     client,
     queryKey,
     scope: CORE_TAG_SCOPE,
+    collection,
     read,
   });
   const stopA = owner.subscribe(["a"], () => {});
@@ -828,9 +834,7 @@ it("does not acknowledge a row read before the write from a later batch's start 
     () => write.promise,
     {
       client,
-      optimistic: [
-        optimisticQueryUpdate<number>(queryKey, () => 2, ["result", "a"]),
-      ],
+      optimistic: [optimisticKeyedUpdate(collection, "a", () => 2)],
     },
   );
   const old = deferred<ReturnType<typeof response>>();
@@ -845,10 +849,7 @@ it("does not acknowledge a row read before the write from a later batch's start 
     write.resolve({ result: "saved", invalidated: ["item:a"] });
   });
   await Promise.all([first, second, mutation]);
-  expect(owner.observer.getCurrentResult().data?.result).toEqual({
-    a: 2,
-    b: 3,
-  });
+  expect(owner.observer.getCurrentResult().data?.result).toEqual({ b: 3 });
   disposers.push(owner.subscribe(["a"], () => {}));
   await vi.waitFor(() =>
     expect(owner.observer.getCurrentResult().data?.result).toEqual({
