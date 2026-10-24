@@ -51,19 +51,6 @@ else
   echo "::: installer test budget pattern not found; upstream changed it, check whether this step is still needed"
 fi
 
-# Upstream's 0.47 merge left this test failing on this VPS whenever its whole
-# file runs, while it passes alone and in upstream CI. Skip it in this
-# throwaway worktree only; drop this once the root cause is fixed.
-PROMPT_AREA_TEST=apps/app/src/views/thread-detail/ThreadDetailPromptArea.test.tsx
-PROMPT_AREA_CASE='it("dismisses a missing queued message but keeps a stale edit recoverable"'
-if grep -qF "$PROMPT_AREA_CASE" "$PROMPT_AREA_TEST"; then
-  sed -i "s/  it(\"dismisses a missing queued message but keeps a stale edit recoverable\"/  it.skip(\"dismisses a missing queued message but keeps a stale edit recoverable\"/" "$PROMPT_AREA_TEST"
-  grep -qF 'it.skip("dismisses a missing queued message' "$PROMPT_AREA_TEST"
-  echo "::: skipped the queued edit recovery test (build worktree only)"
-else
-  echo "::: queued edit recovery test not found; upstream changed it, check whether this skip is still needed"
-fi
-
 echo "::: STEP typecheck"
 pnpm exec turbo run typecheck \
   --filter=@bb/app \
