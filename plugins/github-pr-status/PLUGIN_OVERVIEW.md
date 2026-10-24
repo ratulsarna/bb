@@ -4,11 +4,11 @@ See the GitHub pull request for each thread's branch where you already work: the
 
 - One rolled-up status per pull request: checks, review, conflicts, merge queue and auto-merge.
 - Ready for review, Convert to draft and Merge (merge, squash or rebase).
-- Live updates while you watch: pending checks are re-checked every 30 seconds, and views refresh only when something changed.
+- Live updates while you watch: pending checks are re-checked every 30 seconds and other open PRs every 5 minutes, and views refresh only when something changed.
 
 ## How it works
 
-The plugin runs `gh pr view` in the environment's workspace on its own machine, so fork and upstream remotes and that machine's `gh` login apply. bb never wakes a sleeping machine for PR status; a suspended or offline machine shows no PR until it is back.
+The plugin batches GitHub reads through `gh api graphql` in the environment's workspace on its own machine, so fork and upstream remotes and that machine's `gh` login apply. bb never wakes a sleeping machine for PR status; a suspended or offline machine shows no PR until it is back.
 
 Use the CLI from any thread:
 

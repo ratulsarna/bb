@@ -1772,6 +1772,78 @@ export interface ExperimentalThreadInfoProps {
    */
   threadId: string;
   projectId: string;
+  /**
+   * The thread's environment, or null when the thread has no environment,
+   * its host is not active, or the environment is not a usable checkout.
+   */
+  environment: ExperimentalThreadEnvironment | null;
+}
+
+/** An environment a thread surface hands to plugin components. */
+export interface ExperimentalThreadEnvironment {
+  id: string;
+}
+
+/**
+ * A visible thread context segment. `key` is `<pluginId>/<id>`, where bb's own
+ * segments use `bb--core`, as thread action keys do.
+ */
+export interface ExperimentalThreadContextSegmentReference {
+  key: string;
+  pluginId: string;
+}
+
+/** What a thread context segment knows about its thread. */
+export interface ExperimentalThreadContextSegmentInput {
+  threadId: string;
+  projectId: string;
+  /**
+   * The thread's environment, or null when the thread has no environment,
+   * its host is not active, the environment is not a usable checkout, or the
+   * user turned off "Show Git changes and Commit button".
+   */
+  environment: ExperimentalThreadEnvironment | null;
+}
+
+/** Props of a thread context segment's `summary`, `action` and `details`. */
+export interface ExperimentalThreadContextSegmentProps extends ExperimentalThreadContextSegmentInput {
+  /** The visible segments in row order, this one included. */
+  segments: readonly ExperimentalThreadContextSegmentReference[];
+  /** One segment of a thread's context row is expanded at a time. */
+  isExpanded: boolean;
+  onToggle(): void;
+}
+
+/**
+ * A segment of the context row above an existing thread's composer. bb's
+ * parent thread and changed files register through this slot too. The host
+ * mounts each component in its own crash boundary.
+ */
+export interface ExperimentalThreadContextSegmentRegistration {
+  /** Unique within the plugin; letters, digits, `-`, `_`. */
+  id: string;
+  /** Accessible name of the group the host wraps around `summary`. */
+  title: string;
+  /**
+   * Segments sort by `group` (string compare), then by `order` within a group
+   * (unset sorts last), then by registration order, with bb's own first on a
+   * tie. bb's groups are
+   * {@link PluginSdkApp.experimental_THREAD_CONTEXT_SEGMENT_GROUPS}; any other
+   * string is a group of its own, placed where it sorts.
+   */
+  group: string;
+  order?: number;
+  /** Renders in the context row. */
+  summary: ComponentType<ExperimentalThreadContextSegmentProps>;
+  /** Renders at the row's end, after every segment's summary. */
+  action?: ComponentType<ExperimentalThreadContextSegmentProps>;
+  /** Renders below the row; show content only while `isExpanded`. */
+  details?: ComponentType<ExperimentalThreadContextSegmentProps>;
+  /**
+   * Runs in plugin scope for each thread; false hides the segment and leaves
+   * it out of `segments`. Omit to always show.
+   */
+  useVisible?(input: ExperimentalThreadContextSegmentInput): boolean;
 }
 
 /**
@@ -2149,6 +2221,17 @@ export interface PluginSidebarSplitLayout {
     threadId: string | null;
     isFocused: boolean;
   }[];
+}
+
+/** Options for {@link PluginSdkApp.experimental_useSidebarThreadSplit}. */
+export interface PluginSidebarThreadSplitOptions {
+  /**
+   * Every thread a drag from this row carries, in list order, when the row is
+   * part of a multi-row selection; include the row's own thread. With more
+   * than one thread the drag offers no split or replace targets and drops
+   * onto a composer as one mention per thread. Omit for a single-row drag.
+   */
+  dragThreadIds?: readonly string[];
 }
 
 /**
@@ -2704,11 +2787,14 @@ export interface ExperimentalComposerEditor {
   focus(): boolean;
   /** Focus the editor with the caret at the end of the draft. */
   focusEnd(): void;
-  /** Whether a thread dragged from the sidebar can be dropped now. */
+  /** Whether threads dragged from the sidebar can be dropped now. */
   acceptsThreadDrop(): boolean;
-  /** Insert a dropped thread at the viewport point `x`, `y`. */
-  insertDroppedThread(
-    thread: ExperimentalDroppedThreadMention,
+  /**
+   * Insert one mention per dropped thread, in order, starting at the viewport
+   * point `x`, `y`. A drag from a multi-row sidebar selection drops several.
+   */
+  insertDroppedThreads(
+    threads: readonly ExperimentalDroppedThreadMention[],
     x: number,
     y: number,
   ): void;
@@ -2753,7 +2839,7 @@ export interface ExperimentalComposerThreadLink extends ExperimentalComposerThre
   label: string;
 }
 
-/** The thread an app drag dropped onto the composer. */
+/** A thread an app drag dropped onto the composer. */
 export interface ExperimentalDroppedThreadMention {
   threadId: string;
   label: string;
@@ -3418,6 +3504,14 @@ export interface PluginAppSlots {
    */
   experimental_threadHeaderAction(
     registration: PluginThreadHeaderActionRegistration,
+  ): void;
+  /**
+   * Add context beside an existing thread's composer (see
+   * {@link ExperimentalThreadContextSegmentRegistration}). Experimental: see
+   * docs/api_to_audit.md.
+   */
+  experimental_threadContextSegment(
+    registration: ExperimentalThreadContextSegmentRegistration,
   ): void;
   /**
    * Add a row to the thread Info tab's details block (see
@@ -5005,6 +5099,13 @@ export interface PluginSdkApp {
    */
   useRealtimeConnectionState(): PluginRealtimeConnectionState;
   useSettings(): PluginSettingsState;
+  /**
+   * Whether the bb experiment `key` is on (Settings → Experiments,
+   * `bb settings experiment <key>`), following live changes. False while the
+   * app config loads and for keys this bb does not know. Experimental: see
+   * docs/api_to_audit.md.
+   */
+  experimental_useExperiment(key: string): boolean;
   useBbContext(): BbContext;
   /**
    * The id of the plugin that owns the calling component: the same id
@@ -5130,6 +5231,17 @@ export interface PluginSdkApp {
     readonly lifecycle: "4_lifecycle";
   };
   /**
+   * bb's thread context segment groups, for an
+   * `experimental_threadContextSegment` that joins one: `thread` (Parent
+   * thread) and `git` (Changed files). A plugin names its own
+   * group to sort between them, such as `"2_pullRequest"`. Experimental: see
+   * docs/api_to_audit.md.
+   */
+  experimental_THREAD_CONTEXT_SEGMENT_GROUPS: {
+    readonly thread: "1_thread";
+    readonly git: "3_git";
+  };
+  /**
    * bb's thread Info row groups, for an `experimental_threadInfoRow` that
    * joins one: `thread` (Parent, Notify parent, Project), `environment`
    * (Environment, Machine, provisioning failure, Directory), `git` (Branch,
@@ -5161,6 +5273,7 @@ export interface PluginSdkApp {
    */
   experimental_useSidebarThreadSplit(
     threadId: string,
+    options?: PluginSidebarThreadSplitOptions,
   ): PluginSidebarThreadSplit;
   /**
    * The sidebar navigation items in the user's saved order, the active item,

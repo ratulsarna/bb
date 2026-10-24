@@ -1385,6 +1385,12 @@ export interface PluginProviderOptionDescriptor {
   id: string;
   label: string;
   description?: string;
+  /** Host glyph name (`"Zap"`) or declared icon (`"<pluginId>/<name>"`, an
+   * entry of this plugin's `bb.branding.experimental_icons`; any other plugin
+   * id or an undeclared name fails the load) shown beside a selected service
+   * tier. Host glyphs draw filled. Ignored for reasoning levels. Defaults to
+   * `"Zap"`. */
+  experimental_icon?: string;
 }
 
 /**

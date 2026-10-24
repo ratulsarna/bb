@@ -4,7 +4,7 @@ import {
   makeHostResponse,
   type ExperimentalFakeHostRpcCall,
 } from "@get-bb/plugin-sdk/testing";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GitHubPullRequestView } from "./contract.js";
 import plugin, { environmentChangeEffect } from "./server.js";
 
@@ -50,6 +50,7 @@ function view(
     inMergeQueue: false,
     baseRefName: "main",
     headRefName: "bb/pr",
+    headRefOid: null,
     updatedAt: "2026-10-01T00:00:00Z",
     checks: [],
     reviewDecision: null,
@@ -66,11 +67,13 @@ async function setup(options: {
   callHost?: (call: ExperimentalFakeHostRpcCall) => unknown;
 }) {
   const environments = options.environments ?? { "env-1": environment() };
+  const sdkCalls: string[] = [];
   const fake = createFakePluginHost({
     pluginId: "bb--github-pr-status",
     sdk: {
       environments: {
         get: async ({ environmentId }: { environmentId: string }) => {
+          sdkCalls.push(`environments.get ${environmentId}`);
           const found = environments[environmentId];
           if (found === undefined) {
             throw Object.assign(new Error("Environment not found"), {
@@ -80,20 +83,100 @@ async function setup(options: {
           return found;
         },
       },
-      hosts: { get: async () => makeHostResponse(options.host) },
+      hosts: {
+        get: async () => {
+          sdkCalls.push("hosts.get");
+          return makeHostResponse(options.host);
+        },
+      },
     },
     experimental_callHostRpc:
       options.callHost ??
       ((call) =>
-        call.method === "view"
-          ? { outcome: "found", pullRequest: view() }
-          : { ok: true }),
+        call.method === "upstream"
+          ? { oid: null, branchName: "bb/pr" }
+          : call.method === "view"
+            ? { outcome: "found", pullRequest: view() }
+            : { ok: true }),
   });
   await plugin(fake.bb);
-  return fake;
+  return Object.assign(fake, { sdkCalls });
 }
 
 describe("GitHub PR Status server", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps identical snapshots unchanged across a real plugin database reload", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const fake = await setup({});
+    await fake.harness.callRpc("pullRequests", {
+      keys: ["env-1"],
+    });
+    const next = await fake.harness.reload(plugin);
+    const before = next.bb.storage
+      .database()
+      .prepare("SELECT total_changes() AS n")
+      .get();
+    vi.setSystemTime(Date.now() + 11_000);
+    await next.harness.callRpc("pullRequests", {
+      keys: ["env-1"],
+    });
+    expect(
+      next.bb.storage.database().prepare("SELECT total_changes() AS n").get(),
+    ).toEqual(before);
+    await next.harness.dispose();
+  });
+
+  it.each([
+    ["stale snapshot shape", JSON.stringify({ number: 7 })],
+    ["malformed snapshot JSON", "{invalid"],
+  ])("discards %s on reload and refetches", async (_, content) => {
+    const fake = await setup({});
+    await fake.harness.callRpc("pullRequests", {
+      keys: ["env-1"],
+    });
+    fake.bb.storage
+      .database()
+      .prepare("UPDATE snapshots SET content = ?")
+      .run(content);
+
+    const next = await fake.harness.reload(plugin);
+    expect(
+      next.bb.storage.database().prepare("SELECT url FROM snapshots").all(),
+    ).toEqual([]);
+    await expect(
+      next.harness.callRpc("pullRequests", { keys: ["env-1"] }),
+    ).resolves.toMatchObject({
+      "env-1": {
+        outcome: "available",
+        pullRequest: { number: 7, title: "Ship it" },
+      },
+    });
+    expect(
+      next.harness.experimental_hostRpcCalls.filter(
+        (call) => call.method === "view",
+      ),
+    ).toHaveLength(1);
+    await next.harness.dispose();
+  });
+
+  it("serves cached rows without looking up the environment or machine again", async () => {
+    const fake = await setup({});
+    await fake.harness.callRpc("pullRequests", { keys: ["env-1"] });
+    fake.sdkCalls.length = 0;
+    await expect(
+      fake.harness.callRpc("pullRequests", { keys: ["env-1"] }),
+    ).resolves.toMatchObject({
+      "env-1": { outcome: "available", pullRequest: { number: 7 } },
+    });
+    expect(fake.sdkCalls).toEqual([]);
+    expect(
+      fake.harness.experimental_hostRpcCalls.filter(
+        (call) => call.method === "view",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("reads every requested environment in one call", async () => {
     const fake = await setup({
       environments: {
@@ -103,6 +186,8 @@ describe("GitHub PR Status server", () => {
       },
       callHost: (call) => {
         if (call.hostId === "host-2") throw new Error("Host is suspended");
+        if (call.method === "upstream")
+          return { oid: null, branchName: "bb/pr" };
         return { outcome: "found", pullRequest: view() };
       },
     });
@@ -124,9 +209,16 @@ describe("GitHub PR Status server", () => {
       "env-asleep": { outcome: "unavailable", message: "Host is suspended" },
       "env-missing": { outcome: "absent" },
     });
-    expect(fake.harness.experimental_hostRpcCalls).toMatchObject([
-      { method: "view", input: { path: "/work/env-1" }, hostId: "host-1" },
-      { method: "view", hostId: "host-2" },
+    expect(
+      fake.harness.experimental_hostRpcCalls.filter(
+        (call) => call.method === "view",
+      ),
+    ).toMatchObject([
+      {
+        method: "view",
+        input: { path: "/work/env-1", url: null, refresh: false },
+        hostId: "host-1",
+      },
     ]);
   });
 
@@ -190,9 +282,13 @@ describe("GitHub PR Status server", () => {
   it("returns the gh failure as a refusal and the CLI prints it", async () => {
     const fake = await setup({
       callHost: (call) =>
-        call.method === "view"
-          ? { outcome: "found", pullRequest: view({ isDraft: true }) }
-          : { ok: false, message: "gh pr ready failed: HTTP 403" },
+        call.method === "upstream"
+          ? { oid: null, branchName: "bb/pr" }
+          : call.method === "upstream"
+            ? { oid: null, branchName: "bb/pr" }
+            : call.method === "view"
+              ? { outcome: "found", pullRequest: view({ isDraft: true }) }
+              : { ok: false, message: "gh pr ready failed: HTTP 403" },
     });
 
     await expect(

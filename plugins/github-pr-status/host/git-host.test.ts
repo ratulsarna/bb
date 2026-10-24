@@ -20,6 +20,7 @@ function ghJson(overrides: Record<string, unknown> = {}): string {
     isDraft: false,
     baseRefName: "main",
     headRefName: "bb/add-pr-section",
+    headRefOid: null,
     updatedAt: "2026-06-16T12:30:00Z",
     statusCheckRollup: [],
     reviewDecision: null,
@@ -40,6 +41,7 @@ describe("parseGitHubPullRequestView", () => {
       isDraft: false,
       baseRefName: "main",
       headRefName: "bb/add-pr-section",
+      headRefOid: null,
       updatedAt: "2026-06-16T12:30:00Z",
       autoMerge: false,
       inMergeQueue: null,
@@ -218,6 +220,7 @@ describe("getPullRequestForCurrentBranch", () => {
     return getPullRequestForCurrentBranch({
       cwd: await makeTempDir("bb-pr-lookup-"),
       localBranch: "bb/pr-lookup",
+      refresh: false,
     });
   }
 
@@ -226,7 +229,14 @@ describe("getPullRequestForCurrentBranch", () => {
       "queued",
       {
         stdout: JSON.stringify({
-          data: { resource: { isInMergeQueue: true } },
+          data: {
+            p0: {
+              ...JSON.parse(
+                ghJson({ autoMergeRequest: { mergeMethod: "SQUASH" } }),
+              ),
+              isInMergeQueue: true,
+            },
+          },
         }),
       },
       true,
@@ -235,7 +245,14 @@ describe("getPullRequestForCurrentBranch", () => {
       "not queued",
       {
         stdout: JSON.stringify({
-          data: { resource: { isInMergeQueue: false } },
+          data: {
+            p0: {
+              ...JSON.parse(
+                ghJson({ autoMergeRequest: { mergeMethod: "SQUASH" } }),
+              ),
+              isInMergeQueue: false,
+            },
+          },
         }),
       },
       false,

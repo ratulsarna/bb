@@ -90,10 +90,12 @@ import {
   useSidebarSplitLayout,
   useSidebarThreadSplit,
 } from "./plugin-sidebar-split";
+import { useExperiment } from "./plugin-experiments";
 import { useAppNavigationHost } from "./app-navigation-host";
 import {
   experimental_PluginRpcCallError,
   experimental_THREAD_ACTION_GROUPS,
+  experimental_THREAD_CONTEXT_SEGMENT_GROUPS,
   experimental_THREAD_INFO_ROW_GROUPS,
   experimental_THREAD_INFO_SECTION_GROUPS,
 } from "@get-bb/plugin-sdk";
@@ -204,9 +206,11 @@ export const pluginSdkAppImplementation = {
   experimental_ThreadActionsContextMenu: ThreadActionsContextMenu,
   experimental_PluginRpcCallError,
   experimental_THREAD_ACTION_GROUPS,
+  experimental_THREAD_CONTEXT_SEGMENT_GROUPS,
   experimental_THREAD_INFO_ROW_GROUPS,
   experimental_THREAD_INFO_SECTION_GROUPS,
   experimental_useSidebarThreadSplit: useSidebarThreadSplit,
+  experimental_useExperiment: useExperiment,
   experimental_useSidebarNavigation: useSidebarNavigation,
   experimental_useSidebarNavigationSplit: useSidebarNavigationSplit,
   experimental_SidebarNavigationIcon: SidebarNavigationIcon,

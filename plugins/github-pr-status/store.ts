@@ -1,236 +1,344 @@
 import type { EnvironmentPullRequest, PullRequest } from "./contract.js";
+import type { PullRequestPersistence } from "./persistence.js";
 
 const CACHE_TTL_MS = 10_000;
+const ABSENT_CACHE_TTL_MS = 5 * 60_000;
 const ACTIVE_CHECK_MS = 30_000;
+const QUIET_CHECK_MS = 5 * 60_000;
 
-type EnvironmentLookup =
+type Snapshot = { pullRequest: PullRequest; fetchedAt: number };
+type Lookup =
   | { outcome: "available"; url: string }
   | { outcome: "absent" }
   | { outcome: "unavailable"; message: string };
+type Entry = { lookup: Lookup; fetchedAt: number };
+type Check = { environmentId: string; interval: number; dueAt: number };
 
-interface CachedLookup {
-  lookup: EnvironmentLookup;
-  fetchedAt: number;
-}
-
-interface Watch {
-  fingerprint: string | null;
-  timer: ReturnType<typeof setTimeout> | null;
-  checking: boolean;
-  recheck: boolean;
-}
-
-export interface PullRequestStore {
-  read(
-    environmentId: string,
-    options: { viewer: boolean },
-  ): Promise<EnvironmentPullRequest>;
-  refresh(environmentId: string): void;
-  recheck(environmentId: string): void;
-  invalidate(environmentId: string): void;
-  watch(environmentId: string, signal: AbortSignal): void;
-  isWatched(environmentId: string): boolean;
-}
-
-function needsActiveChecks(result: EnvironmentPullRequest): boolean {
-  if (result.outcome !== "available") return false;
-  const { pullRequest } = result;
+function active(pr: PullRequest): boolean {
   return (
-    pullRequest.state === "open" &&
-    (pullRequest.autoMerge ||
-      pullRequest.inMergeQueue === true ||
-      pullRequest.checks.state === "pending" ||
-      pullRequest.mergeability.state === "unknown")
+    pr.state === "open" &&
+    (pr.autoMerge ||
+      pr.inMergeQueue === true ||
+      pr.checks.state === "pending" ||
+      pr.mergeability.state === "unknown")
   );
 }
 
 export function createPullRequestStore(options: {
-  load(environmentId: string): Promise<EnvironmentPullRequest>;
+  load(
+    environmentId: string,
+    url: string | null,
+    refresh: boolean,
+  ): Promise<EnvironmentPullRequest>;
+  branch(environmentId: string): string | null;
+  persistence: PullRequestPersistence;
   publish(environmentIds: readonly string[]): void;
-  onCheckFailed?(environmentId: string, error: unknown): void;
-  now?(): number;
-}): PullRequestStore {
-  const now = options.now ?? Date.now;
-  const lookups = new Map<string, CachedLookup>();
-  const pullRequests = new Map<string, PullRequest>();
-  const inflight = new Map<
-    string,
-    { load: Promise<EnvironmentPullRequest>; toReader: boolean }
-  >();
+  onCheckFailed(environmentId: string, error: unknown): void;
+}) {
+  const snapshots = new Map<string, Snapshot>();
+  const lookups = new Map<string, Entry>();
+  const watches = new Map<string, Set<AbortSignal>>();
   const served = new Map<string, string>();
+  const inflight = new Map<string, Promise<void>>();
+  const loadingReaders = new Map<string, Set<string>>();
+  const settling = new Map<string, number>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const generations = new Map<string, number>();
-  const watches = new Map<string, Watch>();
-
-  function resolve(lookup: EnvironmentLookup): EnvironmentPullRequest {
-    if (lookup.outcome !== "available") return lookup;
-    const pullRequest = pullRequests.get(lookup.url);
-    return pullRequest === undefined
-      ? { outcome: "absent" }
-      : { outcome: "available", pullRequest };
+  const restored = new Set<string>();
+  let disposed = false;
+  for (const snapshot of options.persistence.snapshots())
+    snapshots.set(snapshot.pullRequest.url, snapshot);
+  for (const link of options.persistence.links()) {
+    const snapshot = link.url === null ? undefined : snapshots.get(link.url);
+    if (link.url !== null && snapshot === undefined) continue;
+    lookups.set(link.environmentId, {
+      lookup:
+        link.url === null
+          ? { outcome: "absent" }
+          : { outcome: "available", url: link.url },
+      fetchedAt: snapshot?.fetchedAt ?? link.discoveredAt,
+    });
+    restored.add(link.environmentId);
   }
 
-  function fingerprintOf(environmentId: string): string | null {
-    const cached = lookups.get(environmentId);
-    return cached === undefined ? null : JSON.stringify(resolve(cached.lookup));
-  }
-
-  function urlOf(environmentId: string): string | null {
+  function currentUrl(environmentId: string): string | null {
     const lookup = lookups.get(environmentId)?.lookup;
     return lookup?.outcome === "available" ? lookup.url : null;
   }
 
-  function markServed(environmentId: string): void {
-    const fingerprint = fingerprintOf(environmentId);
-    if (fingerprint === null) return;
-    served.set(environmentId, fingerprint);
-    const watch = watches.get(environmentId);
-    if (watch === undefined) return;
-    watch.fingerprint = fingerprint;
-    if (!watch.checking) schedule(environmentId, watch);
+  function resultFor(environmentId: string): EnvironmentPullRequest {
+    const lookup = lookups.get(environmentId)?.lookup;
+    if (lookup === undefined) return { outcome: "absent" };
+    if (lookup.outcome !== "available") return lookup;
+    const snapshot = snapshots.get(lookup.url);
+    return snapshot
+      ? { outcome: "available", pullRequest: snapshot.pullRequest }
+      : { outcome: "absent" };
   }
 
-  function record(
-    environmentId: string,
-    result: EnvironmentPullRequest,
-    toReader: boolean,
-  ) {
-    const lookup: EnvironmentLookup =
-      result.outcome === "available"
-        ? { outcome: "available", url: result.pullRequest.url }
-        : result;
-    if (result.outcome === "available")
-      pullRequests.set(result.pullRequest.url, result.pullRequest);
-    lookups.set(environmentId, { lookup, fetchedAt: now() });
-    const changed: string[] = [];
-    for (const [watchedId, watch] of watches) {
-      const affected =
-        watchedId === environmentId ||
-        (lookup.outcome === "available" && urlOf(watchedId) === lookup.url);
-      if (!affected) continue;
-      const fingerprint = fingerprintOf(watchedId);
-      if (
-        watch.fingerprint !== null &&
-        watch.fingerprint !== fingerprint &&
-        !(toReader && watchedId === environmentId)
-      )
-        changed.push(watchedId);
-      watch.fingerprint = fingerprint;
-      if (!watch.checking) schedule(watchedId, watch);
+  function dropOrphanSnapshots() {
+    const referenced = new Set<string>();
+    for (const environmentId of lookups.keys()) {
+      const url = currentUrl(environmentId);
+      if (url !== null) referenced.add(url);
     }
-    if (toReader) markServed(environmentId);
+    for (const url of snapshots.keys()) {
+      if (referenced.has(url)) continue;
+      snapshots.delete(url);
+      settling.delete(url);
+    }
+  }
+
+  function publishChanges(readers: ReadonlySet<string>) {
+    if (disposed) return;
+    const changed: string[] = [];
+    for (const environmentId of watches.keys()) {
+      const content = JSON.stringify(resultFor(environmentId));
+      const previous = served.get(environmentId);
+      if (
+        previous !== undefined &&
+        previous !== content &&
+        !readers.has(environmentId)
+      )
+        changed.push(environmentId);
+      served.set(environmentId, content);
+    }
     if (changed.length > 0) options.publish(changed);
   }
 
-  function forget(environmentId: string): void {
-    generations.set(environmentId, (generations.get(environmentId) ?? 0) + 1);
-    lookups.delete(environmentId);
-    inflight.delete(environmentId);
+  function checks(): Map<string, Check> {
+    const due = new Map<string, Check>();
+    for (const environmentId of watches.keys()) {
+      const url = currentUrl(environmentId);
+      if (url === null || due.has(url) || inflight.has(url)) continue;
+      const snapshot = snapshots.get(url);
+      if (snapshot === undefined) continue;
+      const interval =
+        active(snapshot.pullRequest) ||
+        (settling.get(url) ?? 0) > snapshot.fetchedAt
+          ? ACTIVE_CHECK_MS
+          : snapshot.pullRequest.state === "open"
+            ? QUIET_CHECK_MS
+            : null;
+      if (interval !== null)
+        due.set(url, {
+          environmentId,
+          interval,
+          dueAt: snapshot.fetchedAt + interval,
+        });
+    }
+    return due;
   }
 
-  function read(
+  function schedule() {
+    clearTimeout(timer);
+    timer = undefined;
+    if (disposed) return;
+    const pending = [...checks().values()];
+    if (pending.length === 0) return;
+    const next = Math.min(...pending.map((check) => check.dueAt));
+    timer = setTimeout(
+      () => {
+        timer = undefined;
+        const now = Date.now();
+        for (const [url, check] of checks()) {
+          if (check.dueAt - check.interval / 2 <= now)
+            void load(check.environmentId, url, new Set());
+        }
+        schedule();
+      },
+      Math.max(0, next - Date.now()),
+    );
+  }
+
+  async function load(
     environmentId: string,
-    toReader: boolean,
+    url: string | null,
+    readers: ReadonlySet<string>,
+    refresh = false,
+  ): Promise<void> {
+    const key = url ?? `environment:${environmentId}`;
+    const pending = inflight.get(key);
+    if (pending !== undefined) {
+      for (const reader of readers) loadingReaders.get(key)?.add(reader);
+      return pending;
+    }
+    const recipients = new Set(readers);
+    loadingReaders.set(key, recipients);
+    const generation = generations.get(environmentId) ?? 0;
+    const task = Promise.resolve()
+      .then(async () => {
+        let result = await options.load(environmentId, url, refresh);
+        if (url !== null && result.outcome === "unavailable") {
+          for (const candidate of watches.keys()) {
+            if (candidate === environmentId || currentUrl(candidate) !== url)
+              continue;
+            const alternative = await options.load(candidate, url, false);
+            if (
+              alternative.outcome === "available" &&
+              alternative.pullRequest.url === url
+            ) {
+              result = alternative;
+              break;
+            }
+          }
+        }
+        if (disposed || (generations.get(environmentId) ?? 0) !== generation)
+          return;
+        const fetchedAt = Date.now();
+        if (result.outcome === "available") {
+          const pr = result.pullRequest;
+          snapshots.set(pr.url, { pullRequest: pr, fetchedAt });
+          options.persistence.saveSnapshot(pr, fetchedAt);
+          for (const [id, entry] of lookups) {
+            if (currentUrl(id) === pr.url)
+              lookups.set(id, { ...entry, fetchedAt });
+          }
+        } else if (url !== null) {
+          const snapshot = snapshots.get(url);
+          if (snapshot !== undefined) snapshot.fetchedAt = fetchedAt;
+        }
+        if (url === null || currentUrl(environmentId) === url) {
+          lookups.set(environmentId, {
+            lookup:
+              result.outcome === "available"
+                ? { outcome: "available", url: result.pullRequest.url }
+                : result,
+            fetchedAt,
+          });
+          if (result.outcome !== "unavailable")
+            options.persistence.link(
+              environmentId,
+              result.outcome === "available" ? result.pullRequest.url : null,
+              options.branch(environmentId),
+              fetchedAt,
+            );
+          dropOrphanSnapshots();
+        }
+        publishChanges(recipients);
+      })
+      .catch((error) => {
+        if (url !== null) {
+          const snapshot = snapshots.get(url);
+          if (snapshot) snapshot.fetchedAt = Date.now();
+        }
+        options.onCheckFailed(environmentId, error);
+      })
+      .finally(() => {
+        if (inflight.get(key) === task) {
+          inflight.delete(key);
+          loadingReaders.delete(key);
+        }
+        schedule();
+      });
+    inflight.set(key, task);
+    return task;
+  }
+
+  async function read(
+    environmentId: string,
+    { viewer }: { viewer: boolean },
   ): Promise<EnvironmentPullRequest> {
     const cached = lookups.get(environmentId);
-    if (cached !== undefined && now() - cached.fetchedAt < CACHE_TTL_MS) {
-      if (toReader) markServed(environmentId);
-      return Promise.resolve(resolve(cached.lookup));
+    const immediate =
+      viewer && restored.has(environmentId) && cached !== undefined;
+    if (viewer) restored.delete(environmentId);
+    const ttl =
+      viewer && cached?.lookup.outcome === "absent"
+        ? ABSENT_CACHE_TTL_MS
+        : CACHE_TTL_MS;
+    if (cached === undefined || Date.now() - cached.fetchedAt >= ttl) {
+      const loading = load(
+        environmentId,
+        currentUrl(environmentId),
+        new Set(viewer && !immediate ? [environmentId] : []),
+      );
+      if (!immediate) await loading;
     }
-    const pending = inflight.get(environmentId);
-    if (pending !== undefined) {
-      pending.toReader ||= toReader;
-      return pending.load;
-    }
-    const generation = generations.get(environmentId) ?? 0;
-    const entry = {
-      toReader,
-      load: options.load(environmentId).then((result) => {
-        if ((generations.get(environmentId) ?? 0) === generation) {
-          inflight.delete(environmentId);
-          record(environmentId, result, entry.toReader);
-        }
-        return result;
-      }),
-    };
-    inflight.set(environmentId, entry);
-    entry.load.catch(() => {
-      if (inflight.get(environmentId) === entry) inflight.delete(environmentId);
-    });
-    return entry.load;
-  }
-
-  function schedule(environmentId: string, watch: Watch): void {
-    if (watch.timer !== null) clearTimeout(watch.timer);
-    watch.timer = null;
-    const cached = lookups.get(environmentId);
-    if (cached === undefined || !needsActiveChecks(resolve(cached.lookup)))
-      return;
-    watch.timer = setTimeout(() => {
-      watch.timer = null;
-      void check(environmentId, true);
-    }, ACTIVE_CHECK_MS);
-  }
-
-  async function check(environmentId: string, fresh: boolean): Promise<void> {
-    const watch = watches.get(environmentId);
-    if (watch === undefined) return;
-    if (watch.checking) {
-      watch.recheck ||= fresh;
-      return;
-    }
-    watch.checking = true;
-    if (fresh) forget(environmentId);
-    try {
-      await read(environmentId, false);
-    } catch (error) {
-      options.onCheckFailed?.(environmentId, error);
-    } finally {
-      watch.checking = false;
-    }
-    if (watches.get(environmentId) !== watch) return;
-    if (watch.recheck) {
-      watch.recheck = false;
-      void check(environmentId, true);
-      return;
-    }
-    schedule(environmentId, watch);
+    const result = resultFor(environmentId);
+    if (viewer) served.set(environmentId, JSON.stringify(result));
+    schedule();
+    return result;
   }
 
   return {
-    read: (environmentId, { viewer }) => read(environmentId, viewer),
-    refresh(environmentId) {
-      if (watches.has(environmentId)) void check(environmentId, true);
-      else forget(environmentId);
+    read,
+    currentUrl,
+    hasPullRequest(environmentId: string) {
+      return currentUrl(environmentId) !== null;
     },
-    recheck(environmentId) {
-      if (watches.has(environmentId)) void check(environmentId, false);
+    isWatched(environmentId: string) {
+      return watches.has(environmentId);
     },
-    invalidate(environmentId) {
+    refresh(environmentId: string, discover = false) {
+      if (discover) {
+        generations.set(
+          environmentId,
+          (generations.get(environmentId) ?? 0) + 1,
+        );
+        lookups.delete(environmentId);
+        restored.delete(environmentId);
+      } else {
+        const cached = lookups.get(environmentId);
+        if (cached) cached.fetchedAt = Number.NEGATIVE_INFINITY;
+      }
+      if (watches.has(environmentId)) {
+        const url = discover ? null : currentUrl(environmentId);
+        const pending = inflight.get(url ?? `environment:${environmentId}`);
+        if (pending)
+          void pending.then(() =>
+            load(environmentId, url, new Set(), discover),
+          );
+        else void load(environmentId, url, new Set(), discover);
+      }
+    },
+    pushed(environmentId: string) {
+      const url = currentUrl(environmentId);
+      if (url === null) return;
+      settling.set(url, Date.now() + ACTIVE_CHECK_MS);
       const cached = lookups.get(environmentId);
-      if (cached !== undefined) cached.fetchedAt = Number.NEGATIVE_INFINITY;
+      if (cached) cached.fetchedAt = Number.NEGATIVE_INFINITY;
+      if (watches.has(environmentId)) void load(environmentId, url, new Set());
     },
-    watch(environmentId, signal) {
-      if (signal.aborted) return;
-      const watch: Watch = {
-        fingerprint: served.get(environmentId) ?? null,
-        timer: null,
-        checking: false,
-        recheck: false,
-      };
-      watches.set(environmentId, watch);
+    recheck(environmentId: string) {
+      if (watches.has(environmentId))
+        void read(environmentId, { viewer: false });
+    },
+    remove(environmentId: string) {
+      const previous = JSON.stringify(resultFor(environmentId));
+      generations.set(environmentId, (generations.get(environmentId) ?? 0) + 1);
+      lookups.delete(environmentId);
+      restored.delete(environmentId);
+      served.delete(environmentId);
+      options.persistence.removeEnvironment(environmentId);
+      if (
+        watches.has(environmentId) &&
+        previous !== JSON.stringify(resultFor(environmentId))
+      )
+        options.publish([environmentId]);
+      dropOrphanSnapshots();
+      schedule();
+    },
+    watch(environmentId: string, signal: AbortSignal) {
+      if (signal.aborted || disposed) return;
+      const signals = watches.get(environmentId) ?? new Set<AbortSignal>();
+      signals.add(signal);
+      watches.set(environmentId, signals);
       signal.addEventListener(
         "abort",
         () => {
-          if (watch.timer !== null) clearTimeout(watch.timer);
-          if (watches.get(environmentId) === watch)
-            watches.delete(environmentId);
+          signals.delete(signal);
+          if (signals.size === 0) watches.delete(environmentId);
+          schedule();
         },
         { once: true },
       );
-      void check(environmentId, false);
+      void read(environmentId, { viewer: false });
     },
-    isWatched(environmentId) {
-      return watches.has(environmentId);
+    dispose() {
+      disposed = true;
+      clearTimeout(timer);
+      timer = undefined;
     },
   };
 }

@@ -33,7 +33,7 @@ import {
 } from "./plugin-thread-row-status";
 import { getThreadConversationCollapsedAtom } from "@/components/secondary-panel/threadSecondaryPanelAtoms";
 import { useThreadActions } from "@/components/thread/ThreadActionsProvider";
-import { useEnvironmentPullRequest } from "@/hooks/queries/pull-request-queries";
+import { useRetiredSidebarEnvironmentPullRequest } from "./retired-sidebar-pull-request";
 import { useHosts } from "@/hooks/queries/host-queries";
 import { useArchivedThreads } from "@/hooks/queries/thread-queries";
 import { useSidebarNavigation } from "@/hooks/queries/sidebar-navigation-query";
@@ -392,7 +392,8 @@ export function useSidebarThreadPullRequest(
 ): RetiredSidebarThreadPullRequestState {
   const entry = useSidebarThreadEntry(threadId);
   const environmentId = entry?.environmentId ?? null;
-  const { isLoading, pullRequest } = useEnvironmentPullRequest(environmentId);
+  const { isLoading, pullRequest } =
+    useRetiredSidebarEnvironmentPullRequest(environmentId);
 
   return useMemo<RetiredSidebarThreadPullRequestState>(
     () => ({

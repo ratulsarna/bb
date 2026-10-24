@@ -976,6 +976,21 @@ Docs: `backend-sdk.md`.
 2. **Batch size.** 200 ids per request; callers chunk. Revisit if the
    attributes layer replaces per-registration reads.
 
+## `experimental_useExperiment` (`@get-bb/plugin-sdk/app`)
+
+`experimental_useExperiment(key)` returns whether the bb experiment `key` is
+on, from the same live system config core reads (Settings → Experiments,
+`bb settings experiment`). It is false while config loads and for unknown
+keys. First caller: the built-in thread list, which gates multi-row selection
+on `sidebarMultiSelect`.
+
+**Audit before stabilizing.**
+
+1. **Key type.** Keys are plain strings so the SDK does not ship bb's
+   experiment list; decide whether to export a typed key union instead.
+2. **Plugin-owned experiments.** Decide whether plugins should declare their
+   own experiments in Settings → Experiments rather than only read bb's.
+
 ## `bb.sdk.threads.experimental_listAncestors`
 
 `POST /threads/ancestors` with `{ threadIds }` (1–200 ids) returns
@@ -1419,6 +1434,29 @@ Docs: `backend-foundation.md`, `testing.md`.
     should continue simulating validation, cancellation, lifecycle, JSON, and
     size limits without pretending to model process startup, crashes, native
     watcher recovery, or reconnect behavior.
+
+## `PluginRpcMethodContract.experimental_retryable` (host contracts)
+
+A host contract method can declare `experimental_retryable: true`. When the
+daemon's response to such a call has not arrived within half of its transport
+timeout, the server cancels that call and sends it once more with a new call
+id. This is core's own retry: `callPluginHostRpc` goes through
+`callHostRetryablePluginHostCall`, which runs the same
+`callHostOnlineRpcWithRetry` path core uses for daemon commands marked
+`retryable: true` in `hostDaemonCommandRegistry`, and differs only in giving
+the second attempt a fresh `callId`, because the daemon rejects a duplicate id
+while the first call is pending. No daemon wire change. Client RPC
+registrations ignore the field.
+
+Callers: the GitHub PR Status plugin's `view` (core marked
+`workspace.pull_request` retryable; `act` is not).
+
+Docs: `backend-foundation.md`.
+
+**Audit before stabilizing.** Decide whether retryability belongs on the
+contract or should be inferred from a read/write method kind, whether one
+retry is enough for plugin calls with long timeouts, and whether the
+cancelled first attempt should count against worker lifetime.
 
 ## Fixed-tab targets (`experimental_target`, `experimental_useAppPanel`, and `experimental_useFixedTabTarget`)
 
@@ -2531,7 +2569,11 @@ Docs: `frontend-registration.md`.
    host's engage threshold; that `splitProps` staying an open object is the
    right forward-compatible shape, or whether it should narrow to a named
    handler; and that exposing the full `panes` array does not leak more
-   layout state than a row needs.
+   layout state than a row needs. `options.dragThreadIds` lets a row in a
+   multi-row selection carry every selected thread: such a drag offers no
+   split targets and drops onto a composer as one mention per thread (the
+   built-in thread list is the caller). Confirm a mentions-only multi-drag is
+   right, or whether it should open several panes.
 9. **Archive selection and machine list.** Audit archive-only
    loading/errors, combined views, pagination retries, and archived row
    actions. Audit empty machine sections, machine removal, rename updates, and
@@ -2575,7 +2617,9 @@ Docs: `frontend-registration.md`.
 ## `app.slots.experimental_threadInfoRow` / `app.slots.experimental_threadInfoSection` / `experimental_THREAD_INFO_ROW_GROUPS` / `experimental_THREAD_INFO_SECTION_GROUPS` / `experimental_InfoSection` / `experimental_DetailRow` / `experimental_InfoList` / `experimental_InfoListRow` (`@get-bb/plugin-sdk/app`)
 
 A registration is `{ id, group, order?, component }`. The component receives
-`{ threadId, projectId }` and mounts once per visible thread's Info tab. Rows
+`{ threadId, projectId, environment }` and mounts once per visible thread's Info
+tab. `environment` is `{ id }`, or null when the thread has no environment, its
+host is not active, or the environment is not a usable checkout. Rows
 render in the details block, sections below it, each sorted the way thread
 actions are: by `group` (string compare), then `order` within the group (unset
 last), then registration order with core first on a tie. bb's groups are the
@@ -2595,10 +2639,12 @@ stored in the `infoPanel.collapsedSections` preference under the core id or
 (`apps/app/src/components/secondary-panel/info/ThreadInfoSlots.tsx`), which
 merge `CORE_THREAD_INFO_ROWS` and `CORE_THREAD_INFO_SECTIONS` with plugin
 registrations. `experimental_DetailRow` is bb's only label/value row
-(`DetailRow` in `apps/app/src/components/ui/detail-card.tsx`): all eleven core
+(`DetailRow` in `apps/app/src/components/ui/detail-card.tsx`): all ten core
 rows and the commit dialog draw with it, and core's five sections draw with
 `InfoSection` and `InfoList`. The
-Automations plugin registers the Automations section. Contract tests:
+Automations plugin registers the Automations section, and the GitHub PR Status
+plugin registers the Pull request row in the `pullRequest` group, reading its
+pull request through `environment`. Contract tests:
 `ThreadInfoSlots.test.tsx`.
 
 Docs: `frontend-registration.md`, `frontend-components.md`.
@@ -3539,7 +3585,7 @@ field introduces no separate backend or headless side effect.
 - Predictions remain over incoming reads until confirmed matched reads arrive, independently of mutation pending state. A rejected write rolls back its layer and surfaces the mutation error. An accepted write whose refresh fails keeps its prediction with the read error and Retry; a successful refresh replaces it. Later predictions and confirmed values are protected from older mutation settles and rollbacks. Inverted completion retains the later confirmed value until a subsequent fresh read can replace it. Keyed rows live in the `@bb/query-tags` keyed store: an accepted row prediction becomes the row's value, and only a read of that row that started after acceptance replaces it. Stabilization includes overlapping writes, external invalidation, refresh failures, plain/keyed targets and completion without stale flicker.
 - `defineRpcContract` accepts the core `ContractTagDeclarations`: `tags(input, output)`, `keyTags(key, value)`, and `invalidates(input, output)` receive validated values. Tags are in the RPC envelope; successful writes broadcast their invalidated tags and return `invalidated`. Tagged mutations resolve at write acknowledgement while matching active reads refresh in the background.
 - `bb.rpc.experimental_invalidate(tags)` requires nonempty tags; `experimental_invalidateAll()` refreshes all reads of that plugin, including untagged reads. Load, reload, disable and reconnect refresh plugin reads through the same cache path. Plugin changed messages are scoped to `{ kind: "plugin", pluginId }` subscribers; reconnect batches subscriptions and unknown targets are ignored.
-- Core uses the same tagged reads, invalidation and mutation implementation for UI preferences. Core keeps each thread once, in the same `@bb/query-tags` keyed store as plugin keyed rows, and derives thread detail, every thread list, search and sidebar navigation from it as keyed views. Every core thread write (pin and unpin through one batcher, read state, rename, section and parent moves, archive, unarchive, delete, stop, send status, environment rename) predicts on the entity with `optimisticKeyedUpdate` through `beginOptimisticMutation`, the path `cache.updateKey` uses, and confirms at the server's acknowledgement. One contract table (`@bb/query-tags/testing`) runs against core thread entities and plugin keyed rows; the pin hooks add `useTaggedMutation` with `meta.errorMessage` for core's error toast. Push-notifications thread levels are the first plugin caller; delivery retains `useRealtime`. Core's composer banner, Info row and the retired sidebar pull request member call `experimental_useRpcKeyedQuery` and `experimental_useRpcMutation` with an explicit `pluginId: "bb--github-pr-status"` outside any plugin slot, the calls another plugin makes, so that UI can move into the plugin unchanged; the hooks require `pluginId` only when no plugin slot provides one. Stabilization requires additional plugin callers and validation of scoped tags, failures, reconnects, batching and sidebar observer counts. Cache seeding remains outside this API.
+- Core uses the same tagged reads, invalidation and mutation implementation for UI preferences. Core keeps each thread once, in the same `@bb/query-tags` keyed store as plugin keyed rows, and derives thread detail, every thread list, search and sidebar navigation from it as keyed views. Every core thread write (pin and unpin through one batcher, read state, rename, section and parent moves, archive, unarchive, delete, stop, send status, environment rename) predicts on the entity with `optimisticKeyedUpdate` through `beginOptimisticMutation`, the path `cache.updateKey` uses, and confirms at the server's acknowledgement. One contract table (`@bb/query-tags/testing`) runs against core thread entities and plugin keyed rows; the pin hooks add `useTaggedMutation` with `meta.errorMessage` for core's error toast. Push-notifications thread levels are the first plugin caller; delivery retains `useRealtime`. The GitHub PR Status plugin's composer segment and Info row call `experimental_useRpcKeyedQuery` and `experimental_useRpcMutation` from their own slots. The retired sidebar pull request member calls the keyed read with an explicit `pluginId: "bb--github-pr-status"` outside any plugin slot, the call another plugin makes; the hooks require `pluginId` only when no plugin slot provides one. Stabilization requires additional plugin callers and validation of scoped tags, failures, reconnects, batching and sidebar observer counts. Cache seeding remains outside this API.
 
 ## Typed RPC refusals (`experimental_PluginRpcRefusal`)
 
@@ -3579,7 +3625,7 @@ back/forward navigation, crash/reload recovery, links and overflow.
 
 ## Plugin watched reads
 
-The GitHub PR Status plugin's keyed `pullRequests` read is the first producer: it re-checks a watched environment every 30 seconds while checks are pending, auto-merge is on, the PR is queued or mergeability is unknown, and after a thread on the environment goes idle or the environment's refs, status or metadata change. It invalidates the row's key tag only when the row changed, replacing core's `environment-pull-request` watched target.
+The GitHub PR Status plugin's keyed `pullRequests` read is the first producer: it shares a timer per PR and rechecks watched pending checks, auto-merge, queue and unknown mergeability about every 30 seconds. Upstream OID changes trigger a push refresh; turns recheck branches with no PR or known PRs when the turn ran gh. Status and branch changes still refresh. It invalidates the row's key tag only when the row changed, replacing core's `environment-pull-request` watched target.
 
 `bb.rpc.experimental_whileWatched(method, handler)` starts one producer for each distinct subscribed `{input}` or `{key}` read, and aborts it when its last client leaves or the plugin unloads. An app tab hidden for five seconds stops counting as a client until it is visible again. Register after the RPC method. Read identity uses canonical JSON and the encoded read is capped at 16 KiB. The server drops an oversized target from a subscribe message and keeps the rest, and the app doesn't send one. Every live app query hook holds a `plugin-read` subscription for its read, whether or not the method has a producer. Producers start and stop through the hub's watched-target registry, the path core uses for daemon git and thread-storage watching, thread timeline pushes and environment pull request checks.
 
@@ -3587,7 +3633,7 @@ Stabilize after exercising producer cancellation, reload, reconnect and byte lim
 
 ## Retired `experimental_useSidebarThreadPullRequest` runtime member
 
-`experimental_useSidebarThreadPullRequest(threadId)` and its `PluginSidebarPullRequest` and `PluginSidebarThreadPullRequestState` types are gone from `@get-bb/plugin-sdk/app`, the Plugin Guide and the authoring docs. Published bundles resolve `@get-bb/plugin-sdk/app` exports by name on `globalThis.__bbPluginRuntime.pluginSdkApp`, so the app installs `retiredPluginSdkAppMembers` (`apps/app/src/lib/plugin-sdk-app-impl.tsx`) next to the implementation. The member keeps its old shape, reads the GitHub PR Status plugin's `pullRequests` row for the thread's environment through the same `useEnvironmentPullRequest` hook core's banner and Info row use, and returns `{ isLoading: false, pullRequest: null }` when the plugin is disabled or the read fails. The name leaves only the typings. `bb-plugin-build` keeps it in the `@get-bb/plugin-sdk/app` runtime shim's export list (`RETIRED_PLUGIN_SDK_APP_EXPORTS` in `packages/plugin-build/src/build-plugin-app.ts`), so plugins that still import it build and run, because git-sourced marketplace plugins are built by bb at install and update and path and builtin plugins rebuild when the SDK version changes. An import of it is a build warning carrying the replacement call: `bb plugin build` and `bb plugin dev` print it, and the server writes it to the plugin's log and the server log when it builds the plugin. Callers are marketplace plugins written against the old SDK (t3sidebar, dockside, gtd-sidebar, thread-inbox, radar-sidebar, bb-sidebar, sidebar-plus, cursor-sidebar, switchboard, vantage, jb-flow, tinted-threads among them). Remove the runtime member and the shim entry only after those plugins have migrated.
+`experimental_useSidebarThreadPullRequest(threadId)` and its `PluginSidebarPullRequest` and `PluginSidebarThreadPullRequestState` types are gone from `@get-bb/plugin-sdk/app`, the Plugin Guide and the authoring docs. Published bundles resolve `@get-bb/plugin-sdk/app` exports by name on `globalThis.__bbPluginRuntime.pluginSdkApp`, so the app installs `retiredPluginSdkAppMembers` (`apps/app/src/lib/plugin-sdk-app-impl.tsx`) next to the implementation. The member keeps its old shape, reads the GitHub PR Status plugin's `pullRequests` row for the thread's environment through `useRetiredSidebarEnvironmentPullRequest` (`apps/app/src/lib/retired-sidebar-pull-request.ts`), main's hook kept for it: a cached row refetches on mount and a stale row on page show. It returns `{ isLoading: false, pullRequest: null }` when the plugin is disabled or the read fails. The GitHub PR Status plugin's own segment and Info row use the plugin's copy of that hook. Both copies announce each refetch they start with `PULL_REQUESTS_REFETCH_EVENT` on `window` and recheck staleness before a page-show refetch, so a row shown by both is read once. The name leaves only the typings. `bb-plugin-build` keeps it in the `@get-bb/plugin-sdk/app` runtime shim's export list (`RETIRED_PLUGIN_SDK_APP_EXPORTS` in `packages/plugin-build/src/build-plugin-app.ts`), so plugins that still import it build and run, because git-sourced marketplace plugins are built by bb at install and update and path and builtin plugins rebuild when the SDK version changes. An import of it is a build warning carrying the replacement call: `bb plugin build` and `bb plugin dev` print it, and the server writes it to the plugin's log and the server log when it builds the plugin. Callers are marketplace plugins written against the old SDK (t3sidebar, dockside, gtd-sidebar, thread-inbox, radar-sidebar, bb-sidebar, sidebar-plus, cursor-sidebar, switchboard, vantage, jb-flow, tinted-threads among them). Remove the runtime member and the shim entry only after those plugins have migrated.
 
 ## Unified tabs (`experimental_tab`)
 
@@ -3597,3 +3643,49 @@ Stabilize after exercising producer cancellation, reload, reconnect and byte lim
 - **Persistence and automation:** thread fixed entries use `{id, kind: 'plugin-fixed', pluginId, tabId}` through SDK `threads.tabs.get/update` and CLI `bb thread tabs show/set`, with revision checks. Existing `plugin-page-fixed` and `plugin-panel` action entries/params keep their IDs and storage keys. Selection is client-local. Legacy core Info/Diff kinds, active selections and split IDs convert without reordering; server entries rewrite through the revision-checked queue. Split restoration waits for registration/visibility readiness.
 - **Core callers:** Info and Diff register as thread + fixed and use the shared content host, visibility, descriptor and open paths. Diff retains shortcut, Git setting, file/commit navigation and review state. Core-only Info metadata and Diff controllers remain pane-owned contexts; they are not public plugin API. Docs, GitHub, Side Chat, Tasks, Workflows and the ThreadChat demo use the unified registration.
 - **Stabilization:** audit context typing, targets versus persisted inputs, visibility and crash/reload lifecycles, independent panes/threads, startup split restoration, revision conflicts and compact drawers. Keep the shared contract table across contexts and legacy adapters, verify actual published plugin installs, then rename project-wide and remove this entry.
+
+## Thread context segments (`app.slots.experimental_threadContextSegment` / `experimental_THREAD_CONTEXT_SEGMENT_GROUPS`)
+
+- **Surface:** `PluginAppSlots.experimental_threadContextSegment`, `PluginSdkApp.experimental_THREAD_CONTEXT_SEGMENT_GROUPS`, `ExperimentalThreadContextSegmentRegistration`, `ExperimentalThreadContextSegmentProps`, `ExperimentalThreadContextSegmentInput`, `ExperimentalThreadContextSegmentReference` and `ExperimentalThreadEnvironment` (also used by `ExperimentalThreadInfoProps.environment`).
+- **Behavior:** a registration is `{ id, title, group, order?, summary, action?, details?, useVisible? }`. Segments share the context row above an existing thread's composer, and the host mounts each component in its own crash boundary: `summary` in the row (wrapped in a group named by `title`), `action` at the row's end after every summary, and `details` below the row. Segments sort like Info rows and thread actions: by `group` (string compare), then `order` within it (unset last), then registration order, core first on a tie. Core's groups are `experimental_THREAD_CONTEXT_SEGMENT_GROUPS`: `thread` (`1_thread`: parent thread) and `git` (`3_git`: changed files). The constant names only groups core renders; a plugin names its own group, placed where its string sorts. Each entry of `segments` is `{ key, pluginId }` with `key` `<pluginId>/<id>`, the key shape thread actions use; core's segments use `bb--core`. `useVisible(input)` runs in plugin scope per thread; false, or a crash, leaves the segment out of the row and of `segments`. Props carry `threadId`, `projectId`, `environment`, the visible `segments` in row order, and the shared disclosure state: one segment of the row is expanded at a time, keyed by `key`. `environment` is `{ id }`, or null when the thread has no environment, its host is not active, the environment is not a usable checkout, or the user turned off "Show Git changes and Commit button". The row is withheld while core's workspace status loads and while a question is pending, and read-only history (archived thread or gone environment) shows core's parent thread only. The banner renders under every composer plugin, because the host draws it above `ComposerBox`.
+- **Core callers:** `ThreadPromptContextBanner` (`apps/app/src/components/promptbox/banner/ThreadPromptContextBanner.tsx`) registers the parent thread (summary and details, including read-only history) and changed files (summary, merge-base action, details) through `definePluginApp` and the same collector, and renders them with plugin registrations through `useThreadContextSegments` and `ThreadContextSegmentMount` (`apps/app/src/components/plugin/PluginThreadContextSegments.tsx`). Core segments read pane-local data from a React context and render without a plugin crash boundary, as core Info rows do. The GitHub PR Status plugin registers the pull request segment in its own group `2_pullRequest`, between core's two and its Mark ready and merge actions. Active child threads are a separate core row above the context row (`ThreadChildThreadsBanner`), not a segment. Contract tests: `ThreadPromptContextBanner.segments.test.tsx`.
+- **Known coupling:** `environment` folds in the "Show Git changes and Commit button" setting so the pull request segment hides with core's changed files, as before; that setting should become the git plugin's own when changed files move out of core.
+- **Stabilization:** audit per-component mounts and crash recovery across reloads and plugin disable, `segments` stability while visibility settles, focus handoff between a plugin's summary and details, independent panes, and compact widths with several plugin segments. Then rename project-wide and remove this entry.
+
+## Provider skills index
+
+`@get-bb/plugin-sdk/provider-bridge` exports `experimental_scanSkillFiles`,
+`experimental_selectedSkillMentions`, `ExperimentalSkillScanRoot`, and
+`ExperimentalIndexedSkillFile`. The scanner resolves canonical filesystem paths,
+follows user links, bounds project links, enforces traversal limits, and returns
+each `SKILL.md` with its bytes and SHA-256 digest. Selected mentions are
+validated against their exact text ranges before provider translation.
+
+The implementation lives in `@bb/skill-index`. Core daemon command/skill discovery,
+workspace context reads, server/plugin catalogs, listing identity, and staging use
+that same implementation. The SDK exports are direct re-exports; frontmatter
+parsing stays in core (`@bb/skill-index/metadata`). Provider callers are Claude
+Code (native catalog overlap and selected mentions), Codex (selected mentions and
+structured inputs), and Pi (selected mentions).
+
+Before stabilization, audit Windows/junction behavior, filesystem mutation during
+scans, provider-native precedence, traversal-limit reporting, and duplicate aliases
+through read/write/delete. Exercise packaged provider forks and compare live
+provider catalogs. Then rename project-wide and remove this entry.
+
+## `PluginProviderOptionDescriptor.experimental_icon`
+
+An optional icon on a declared service tier: a host glyph name, drawn filled
+like the default `Zap`, or a declared icon `"<pluginId>/<name>"` from the
+plugin's `bb.branding.experimental_icons`. The model picker trigger and the
+single-tier toggle row show it when that tier is selected; Codex declares
+`"provider-codex/ultrafast"`, a double bolt shipped in its own `icons/`.
+Plugin-relative paths are rejected, and a declared icon must be one of the
+registering plugin's, checked with the provider icon at
+`bb.providers.register`. The server projects it onto
+`ProviderInfo.serviceTiers[].icon`; reasoning levels ignore it.
+
+Docs: `providers.md`.
+
+Before stabilization, decide whether `model/list` `supportedServiceTiers` may
+override the icon and whether reasoning levels should render it.

@@ -35,6 +35,7 @@ Read the installed SDK declarations for the exact current signatures.
 - `useRealtime`
 - `useRealtimeConnectionState`
 - `useSettings`
+- `experimental_useExperiment`
 - `useBbContext`
 - `experimental_usePluginId`
 - `experimental_useQuestionFormHost`
@@ -69,6 +70,7 @@ Read the installed SDK declarations for the exact current signatures.
 - `experimental_ThreadActionsMenu`
 - `experimental_ThreadActionsContextMenu`
 - `experimental_THREAD_ACTION_GROUPS`
+- `experimental_THREAD_CONTEXT_SEGMENT_GROUPS`
 - `experimental_THREAD_INFO_ROW_GROUPS`
 - `experimental_THREAD_INFO_SECTION_GROUPS`
 - `experimental_useSidebarThreadSplit`
@@ -132,6 +134,10 @@ Read the installed SDK declarations for the exact current signatures.
 - `PluginThreadListProps`
 - `PluginThreadHeaderActionProps`
 - `ExperimentalThreadInfoProps`
+- `ExperimentalThreadEnvironment`
+- `ExperimentalThreadContextSegmentInput`
+- `ExperimentalThreadContextSegmentProps`
+- `ExperimentalThreadContextSegmentReference`
 - `ExperimentalInfoSectionProps`
 - `ExperimentalDetailRowProps`
 - `ExperimentalInfoListProps`
@@ -201,6 +207,7 @@ Read the installed SDK declarations for the exact current signatures.
 - `PluginBoundThreadsArea`
 - `PluginBrowserBbSdk`
 - `PluginThreadHeaderActionRegistration`
+- `ExperimentalThreadContextSegmentRegistration`
 - `ExperimentalThreadInfoRowRegistration`
 - `ExperimentalThreadInfoSectionRegistration`
 - `PluginThreadActionTarget`
@@ -223,6 +230,7 @@ Read the installed SDK declarations for the exact current signatures.
 - `PluginSidebarSplitPane`
 - `PluginSidebarSplitLayout`
 - `PluginSidebarThreadSplit`
+- `PluginSidebarThreadSplitOptions`
 - `PluginThreadListRegistration`
 - `ExperimentalSidebarNavigationShortcut`
 - `ExperimentalSidebarNavigationAction`

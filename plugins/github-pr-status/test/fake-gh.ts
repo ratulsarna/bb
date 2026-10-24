@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import { z } from "zod";
 
 interface FakeGhResponse {
   stdout?: string;
   stderr?: string;
   exit?: number;
+  whenQueryIncludes?: { text: string; response: FakeGhResponse };
 }
 
 export async function makeTempDir(prefix: string): Promise<string> {
@@ -15,7 +17,10 @@ export async function makeTempDir(prefix: string): Promise<string> {
 
 export async function installFakeGh(
   responses: Record<string, FakeGhResponse>,
-): Promise<{ readCalls(): Promise<string[][]> }> {
+): Promise<{
+  readCalls(): Promise<string[][]>;
+  readQueries(): Promise<string[]>;
+}> {
   const binPath = await makeTempDir("bb-fake-gh-");
   const logPath = path.join(binPath, "gh.log");
   const scriptPath = path.join(binPath, "gh.cjs");
@@ -24,9 +29,12 @@ export async function installFakeGh(
     `
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.TEST_GH_LOG, args.join("\\t") + "\\n");
+const inputIndex = args.indexOf("--input");
+const query = inputIndex === -1 ? null : JSON.parse(fs.readFileSync(args[inputIndex + 1], "utf8")).query;
+fs.appendFileSync(process.env.TEST_GH_LOG, JSON.stringify({args, query}) + "\\n");
 const responses = JSON.parse(process.env.TEST_GH_RESPONSES);
-const response = responses[args.slice(0, 2).join(" ")] ?? {};
+const configured = responses[args.slice(0, 2).join(" ")] ?? {};
+const response = configured.whenQueryIncludes && query?.includes(configured.whenQueryIncludes.text) ? configured.whenQueryIncludes.response : configured;
 if (response.stdout) process.stdout.write(response.stdout);
 if (response.stderr) process.stderr.write(response.stderr);
 process.exitCode = response.exit ?? 0;
@@ -43,17 +51,34 @@ process.exitCode = response.exit ?? 0;
       : `#!/bin/sh\nexec '${process.execPath.replaceAll("'", "'\\''")}' '${scriptPath.replaceAll("'", "'\\''")}' "$@"\n`,
     { mode: 0o755 },
   );
+  vi.stubEnv("GH_CONFIG_DIR", binPath);
   vi.stubEnv("TEST_GH_LOG", logPath);
   vi.stubEnv("TEST_GH_RESPONSES", JSON.stringify(responses));
   vi.stubEnv("PATH", `${binPath}${path.delimiter}${process.env.PATH ?? ""}`);
   return {
+    async readQueries() {
+      const lines = (await fs.readFile(logPath, "utf8"))
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+      return lines.flatMap((line) => {
+        const row = z
+          .object({ query: z.string().nullable() })
+          .parse(JSON.parse(line));
+        return row.query === null ? [] : [row.query];
+      });
+    },
     async readCalls() {
       try {
         return (await fs.readFile(logPath, "utf8"))
           .trim()
           .split("\n")
           .filter(Boolean)
-          .map((line) => line.split("\t"));
+          .map(
+            (line) =>
+              z.object({ args: z.array(z.string()) }).parse(JSON.parse(line))
+                .args,
+          );
       } catch (error) {
         if (
           error instanceof Error &&
