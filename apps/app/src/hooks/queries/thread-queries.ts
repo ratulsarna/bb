@@ -1,3 +1,5 @@
+import { useThreadDefaultExecutionOptions } from "./thread-default-execution-options-query";
+import { useThreadQueuedMessages } from "./thread-panel-queries";
 import {
   infiniteQueryOptions,
   queryOptions,
@@ -15,11 +17,16 @@ import type {
   ThreadResponse,
   ThreadSearchResponse,
   ThreadWithIncludesResponse,
+  ThreadTimelineReadResponse,
   ThreadTimelineResponse,
 } from "@bb/server-contract";
 import { useDebouncedValue } from "../useDebouncedValue";
 import { routeTaggedPages, routeTaggedRead } from "./route-tags";
-import { applyTimelineDelta, publicApiRoutes } from "@bb/server-contract";
+import {
+  applyThreadTimelineDelta,
+  isThreadTimelineDelta,
+  publicApiRoutes,
+} from "@bb/server-contract";
 import type { ThreadListFilters } from "@bb/client-core";
 import { sdk } from "@/lib/sdk";
 import {
@@ -65,6 +72,7 @@ import { clearThreadTimelineUnseenEvents } from "../cache-owners/thread-timeline
 import {
   isCachedThreadTimelinePushEnabled,
   resolveThreadTimelineSegmentLimit,
+  syncThreadTimelineSubscriptionTag,
 } from "../cache-owners/thread-timeline-push-owner";
 import { markStreamTrace } from "@/lib/stream-trace";
 import { THREAD_OPEN_CACHE_GC_MS } from "../cache-owners/thread-open-cache-owner";
@@ -802,6 +810,8 @@ export function useThreadDetailBootstrap(
   const queryClient = useQueryClient();
   const enabled = (options?.enabled ?? true) && Boolean(id);
   useThreadDetailRealtimeSubscription(id, { enabled });
+  useThreadDefaultExecutionOptions(id, { enabled });
+  useThreadQueuedMessages(id, { enabled });
   return useQuery(threadDetailBootstrapQueryOptions(queryClient, id, options));
 }
 
@@ -838,19 +848,17 @@ export function useThreadPendingInteractions(
 
 async function mergeThreadTimelineDelta(
   previous: ThreadTimelineResponse | undefined,
-  response: ThreadTimelineResponse,
+  response: ThreadTimelineReadResponse,
   fetchFull: () => Promise<ThreadTimelineResponse>,
 ): Promise<ThreadTimelineResponse> {
-  if (response.delta === undefined) {
+  if (!isThreadTimelineDelta(response)) {
     return response;
   }
-  const merged = previous
-    ? applyTimelineDelta(previous.rows, response.delta)
-    : null;
-  if (merged !== null) {
-    return { ...response, rows: merged, delta: undefined };
-  }
-  return fetchFull();
+  const merged =
+    previous === undefined
+      ? null
+      : applyThreadTimelineDelta(previous, response);
+  return merged ?? fetchFull();
 }
 
 interface FetchThreadTimelineArgs {
@@ -877,9 +885,7 @@ export async function fetchThreadTimeline({
     threadId,
     signal,
     ...pageArgs,
-    ...(previous?.maxSeq !== undefined
-      ? { afterSequence: String(previous.maxSeq) }
-      : {}),
+    ...(previous === undefined ? {} : { afterTag: previous.tag }),
   });
   const merged = await mergeThreadTimelineDelta(previous, response, () =>
     sdk.threads.timeline({ threadId, signal, ...pageArgs }),
@@ -890,10 +896,11 @@ export async function fetchThreadTimeline({
   const timeline =
     pushed !== undefined && pushed.maxSeq > merged.maxSeq ? pushed : merged;
   clearThreadTimelineUnseenEvents(queryClient, threadId, timeline.maxSeq);
+  syncThreadTimelineSubscriptionTag(queryClient, threadId, timeline.tag);
   markStreamTrace("bb:timeline-applied", {
     threadId,
     maxSeq: timeline.maxSeq,
-    source: response.delta === undefined ? "fetch" : "fetch-delta",
+    source: isThreadTimelineDelta(response) ? "fetch-delta" : "fetch",
   });
   return timeline;
 }

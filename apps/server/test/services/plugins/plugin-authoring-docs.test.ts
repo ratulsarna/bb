@@ -157,7 +157,11 @@ const PUBLIC_PLUGIN_SDK_EXPORT_NAMES = [
       join(REPO_ROOT, "packages/plugin-sdk/bundled-types", filename),
       "utf8",
     ),
-  ).filter((name) => !name.startsWith("InternalDoNotUse")),
+  ).filter(
+    (name) =>
+      !name.startsWith("InternalDoNotUse") &&
+      !name.startsWith("internal_DO_NOT_USE_"),
+  ),
 );
 
 const BB_PLUGIN_API_KEYS = [
@@ -385,7 +389,13 @@ const FRONTEND_SLOT_PROP_FIELDS = {
   ],
   experimental_threadInfoRow: ["threadId", "projectId", "environment"],
   experimental_threadInfoSection: ["threadId", "projectId", "environment"],
-  experimental_threadAction: ["thread", "data", "sdk", "navigate"],
+  experimental_threadAction: [
+    "thread",
+    "data",
+    "sdk",
+    "navigate",
+    "experimental_panel",
+  ],
   experimental_browserToolbarAction: [
     "threadId",
     "tabId",
@@ -424,10 +434,10 @@ const FRONTEND_SLOT_PROP_FIELDS = {
     "threadId",
     "message",
     "selectedText",
-    "openPanel",
+    "experimental_panel",
     "composer",
   ],
-  commandPaletteAction: ["threadId", "projectId", "openPanel"],
+  commandPaletteAction: ["threadId", "projectId", "experimental_panel"],
   experimental_providerIcon: ["providerKind", "providerId", "icon"],
   experimental_timelineRenderer: [
     "row",

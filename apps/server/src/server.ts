@@ -1,6 +1,9 @@
 import { createPluginUpdateJobs } from "./services/plugins/plugin-update-jobs.js";
 import { registerPluginUpdateJobRoutes } from "./routes/plugin-update-jobs.js";
-import { recheckEnvironmentProvisioning } from "./services/threads/thread-environment-providers.js";
+import {
+  recheckEnvironmentProvisioning,
+  recheckEnvironmentProviderCreations,
+} from "./services/threads/thread-environment-providers.js";
 import {
   enrolledInstallerScript,
   enrolledWindowsInstallerScript,
@@ -58,7 +61,6 @@ import {
   setEnvironmentProvisioningRecheckHandler,
   setPluginEnvironmentProviderBridge,
 } from "./services/plugins/plugin-environment-provider-registry.js";
-import { recheckEnvironmentProviderCreations } from "./services/threads/thread-environment-providers.js";
 import {
   setServerAccessBridge,
   setServerAccessRecheckHandler,
@@ -69,6 +71,7 @@ import { requestQueuedMessageDispatch } from "./services/threads/queued-message-
 import { registerInternalEventRoutes } from "./internal/events.js";
 import { registerInternalHostRoutes } from "./internal/hosts.js";
 import { registerInternalInteractiveRequestRoutes } from "./internal/interactive-requests.js";
+import { hostArtifactFileResponse } from "./internal/host-artifact-response.js";
 import { registerInternalPluginHostArtifactRoutes } from "./internal/plugin-host-artifacts.js";
 import { registerInternalSessionRoutes } from "./internal/session.js";
 import { registerInternalSkillRoutes } from "./internal/skills.js";
@@ -685,10 +688,15 @@ export function createApp(
       if (context.req.header("if-none-match") === etag) {
         return new Response(null, { headers, status: 304 });
       }
-      const tarball = await readFile(artifact.path);
-      return new Response(tarball, {
-        headers: { ...headers, "content-length": String(artifact.size) },
+      const response = await hostArtifactFileResponse({
+        path: artifact.path,
+        byteLength: artifact.size,
+        headers,
       });
+      if (response === null) {
+        throw new Error(`Host package ${artifact.path} is missing or changed`);
+      }
+      return response;
     } catch (error) {
       const diagnosticId = randomUUID();
       const code =
@@ -908,7 +916,7 @@ export function createApp(
   registerHostRoutes(publicApi, deps, pluginService);
   registerDesktopBrowserRoutes(publicApi, deps);
   registerTerminalRoutes(publicApi, deps);
-  registerEnvironmentRoutes(publicApi, deps);
+  registerEnvironmentRoutes(publicApi, deps, pluginService);
   registerThreadRoutes(publicApi, deps);
   registerQueueRoutes(publicApi, deps);
   registerSystemRoutes(publicApi, deps, pluginService);

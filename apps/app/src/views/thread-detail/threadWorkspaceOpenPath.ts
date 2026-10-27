@@ -1,11 +1,9 @@
-import type { Environment, WorkspaceFileStatus } from "@bb/domain";
+import type { Environment } from "@bb/domain";
 import type { OpenInTargetContext } from "@bb/host-daemon-contract";
 import type { WorkspaceChangedFilesSection } from "@/components/workspace/workspace-change-summary";
-import type {
-  EnvironmentFilePreviewSource,
-  WorkspaceFilePreviewStatusLabel,
-} from "@bb/client-core";
-import { buildAbsoluteFilePath } from "@/lib/absolute-file-path";
+import type { ExperimentalFileOpenOptions } from "@get-bb/plugin-sdk";
+import type { LiveFileRoot } from "@/hooks/useResolvedLiveFileTarget";
+import type { WorkspaceFileStatus } from "bb-plugin-bb--git/contract";
 
 interface ResolveThreadWorkspaceOpenPathArgs {
   canOpenWorkspace: boolean;
@@ -19,37 +17,34 @@ interface ResolveEnvironmentOpenContextArgs {
   threadEnvironmentIsLocal: boolean;
 }
 
-interface BuildOpenInEditorHandlerArgs {
-  rootPath: string | null;
-  canOpenPreferredTarget: boolean;
-  openInPreferredTarget: (request: {
-    lineNumber: number | null;
-    path: string;
-  }) => Promise<boolean>;
+interface BuildOpenFileExternallyHandlerArgs {
+  root: LiveFileRoot | null;
+  canOpenFileExternally: boolean;
+  openFileExternally: (intent: ExperimentalFileOpenOptions) => boolean;
+  lineNumber: number | null;
 }
 
-export function buildOpenInEditorHandler(
-  args: BuildOpenInEditorHandlerArgs,
-): ((relativePath: string) => void) | undefined {
-  if (!args.rootPath || !args.canOpenPreferredTarget) {
+export function buildOpenFileExternallyHandler(
+  args: BuildOpenFileExternallyHandlerArgs,
+): ((path: string) => void) | undefined {
+  const { root, lineNumber } = args;
+  if (root === null || !args.canOpenFileExternally) {
     return undefined;
   }
-  const rootPath = args.rootPath;
-  return (relativePath) => {
-    void args.openInPreferredTarget({
-      lineNumber: null,
-      path: buildAbsoluteFilePath({ path: relativePath, rootPath }),
+  return (path) => {
+    args.openFileExternally({
+      target: { ...root, path },
+      location:
+        lineNumber === null
+          ? null
+          : { kind: "line", line: lineNumber, column: null },
     });
   };
 }
 
 type WorkspaceChangedFileOpenTarget =
   | { kind: "diff" }
-  | {
-      kind: "preview";
-      source: EnvironmentFilePreviewSource;
-      statusLabel: WorkspaceFilePreviewStatusLabel | null;
-    };
+  | { kind: "preview"; ref: string | undefined };
 
 interface ResolveWorkspaceChangedFileOpenTargetArgs {
   file: WorkspaceFileStatus;
@@ -60,28 +55,16 @@ export function resolveWorkspaceChangedFileOpenTarget(
   args: ResolveWorkspaceChangedFileOpenTargetArgs,
 ): WorkspaceChangedFileOpenTarget {
   if (args.file.status === "A" || args.file.status === "??") {
-    return {
-      kind: "preview",
-      source: { kind: "working-tree" },
-      statusLabel: null,
-    };
+    return { kind: "preview", ref: undefined };
   }
 
   if (args.file.status === "D") {
     if (args.section.kind === "committed") {
       return args.section.mergeBaseRef
-        ? {
-            kind: "preview",
-            source: { kind: "merge-base", ref: args.section.mergeBaseRef },
-            statusLabel: "deleted",
-          }
+        ? { kind: "preview", ref: args.section.mergeBaseRef }
         : { kind: "diff" };
     }
-    return {
-      kind: "preview",
-      source: { kind: "head" },
-      statusLabel: "deleted",
-    };
+    return { kind: "preview", ref: "HEAD" };
   }
 
   return { kind: "diff" };

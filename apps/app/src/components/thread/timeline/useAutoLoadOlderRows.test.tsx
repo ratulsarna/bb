@@ -25,7 +25,6 @@ function createBottomAnchor(
     isAtBottom: false,
     scrollToBottom: vi.fn(),
     scrollElementIntoView: vi.fn(),
-    scrollElementIntoViewClampedToMaxScroll: vi.fn(),
     positionKeeper,
     holdContentPosition: vi.fn(),
   };

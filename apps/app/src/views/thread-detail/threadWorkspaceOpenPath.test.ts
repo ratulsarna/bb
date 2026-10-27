@@ -1,8 +1,4 @@
-import type {
-  Environment,
-  WorkspaceFileStatus,
-  WorkspaceFileStatusKind,
-} from "@bb/domain";
+import type { Environment } from "@bb/domain";
 import type { WorkspaceChangedFilesSection } from "@/components/workspace/workspace-change-summary";
 import { makeEnvironment } from "@bb/test-helpers/domain-fixtures";
 import { describe, expect, it } from "vitest";
@@ -11,6 +7,10 @@ import {
   resolveEnvironmentOpenContext,
   resolveThreadWorkspaceOpenPath,
 } from "./threadWorkspaceOpenPath";
+import type {
+  WorkspaceFileStatus,
+  WorkspaceFileStatusKind,
+} from "bb-plugin-bb--git/contract";
 
 function makeWorkspaceEnvironment(
   overrides: Partial<Environment> = {},
@@ -131,21 +131,13 @@ describe("resolveWorkspaceChangedFileOpenTarget", () => {
         file: makeWorkspaceFileStatus("A"),
         section: makeWorkspaceChangedFilesSection(),
       }),
-    ).toEqual({
-      kind: "preview",
-      source: { kind: "working-tree" },
-      statusLabel: null,
-    });
+    ).toEqual({ kind: "preview", ref: undefined });
     expect(
       resolveWorkspaceChangedFileOpenTarget({
         file: makeWorkspaceFileStatus("??"),
         section: makeWorkspaceChangedFilesSection({ kind: "untracked" }),
       }),
-    ).toEqual({
-      kind: "preview",
-      source: { kind: "working-tree" },
-      statusLabel: null,
-    });
+    ).toEqual({ kind: "preview", ref: undefined });
   });
 
   it("opens working-tree deleted files as HEAD previews because the current file no longer exists", () => {
@@ -154,11 +146,7 @@ describe("resolveWorkspaceChangedFileOpenTarget", () => {
         file: makeWorkspaceFileStatus("D"),
         section: makeWorkspaceChangedFilesSection(),
       }),
-    ).toEqual({
-      kind: "preview",
-      source: { kind: "head" },
-      statusLabel: "deleted",
-    });
+    ).toEqual({ kind: "preview", ref: "HEAD" });
   });
 
   it("opens committed deleted files as merge-base previews when the merge-base ref is known", () => {
@@ -170,11 +158,7 @@ describe("resolveWorkspaceChangedFileOpenTarget", () => {
           mergeBaseRef: "abc1234",
         }),
       }),
-    ).toEqual({
-      kind: "preview",
-      source: { kind: "merge-base", ref: "abc1234" },
-      statusLabel: "deleted",
-    });
+    ).toEqual({ kind: "preview", ref: "abc1234" });
   });
 
   it("opens committed deleted files as diffs when the merge-base ref is unknown", () => {

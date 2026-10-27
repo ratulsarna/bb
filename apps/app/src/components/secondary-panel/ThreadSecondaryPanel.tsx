@@ -84,6 +84,7 @@ import {
   useSidebarKeepsCollapsedRail,
 } from "@/components/ui/sidebar.js";
 import { IframeDragGuardOverlay } from "@/lib/iframe-drag-guard";
+import { useRememberSurfaceProvider } from "@/lib/plugin-surface-providers";
 import type {
   FixedPanelViewTab,
   SecondaryFixedPanelTab,
@@ -108,6 +109,7 @@ export type {
 } from "./secondaryPanelTab";
 
 const SECONDARY_RESIZABLE_PANEL_STYLE: CSSProperties = {
+  overflow: "clip",
   pointerEvents: "auto",
 };
 const SECONDARY_PANEL_CHROME_ICON_BUTTON_CLASS = `${COARSE_POINTER_COMPACT_ICON_BUTTON_CLASS} shrink-0 ${CHROME_SUBTLE_ICON_BUTTON_FOREGROUND_CLASS}`;
@@ -227,6 +229,20 @@ export interface ThreadSecondaryPanelProps {
   onToggleConversationCollapse: () => void;
   renderAsDrawer: boolean;
   isAtWindowTop?: boolean;
+}
+
+function panelTabPluginId(
+  tab: SecondaryPanelRenderableTab["tab"] | FixedPanelViewTab | undefined,
+): string | null {
+  switch (tab?.kind) {
+    case "plugin-panel":
+    case "plugin-page-fixed":
+      return tab.pluginId;
+    case "plugin-fixed":
+      return tab.pluginId === "core" ? null : tab.pluginId;
+    default:
+      return null;
+  }
 }
 
 export function ThreadSecondaryPanel(props: ThreadSecondaryPanelProps) {
@@ -360,6 +376,12 @@ function ThreadSecondaryPanelContent({
   const activeFixedTab =
     fixedTabs.find((fixedTab) => fixedTab.tab.id === activeTab?.id) ??
     (!hasActiveRenderableTab ? fixedTabs[0] : undefined);
+  useRememberSurfaceProvider(
+    "thread-panel-tab",
+    isOpen
+      ? panelTabPluginId(activeRenderableTab?.tab ?? activeFixedTab?.tab)
+      : null,
+  );
   const diffContent = useThreadDiffContent({
     toolbarClassName: getSecondaryPanelChromeStackClassName(true),
     environmentId,
@@ -1061,7 +1083,7 @@ function ThreadSecondaryPanelContent({
         order={2}
         style={SECONDARY_RESIZABLE_PANEL_STYLE}
         className={cn(
-          "min-w-0 overflow-clip",
+          "min-w-0",
           `relative transition-[flex-grow,flex-basis] ${PANEL_COLLAPSE_TRANSITION_CLASS}`,
         )}
       >

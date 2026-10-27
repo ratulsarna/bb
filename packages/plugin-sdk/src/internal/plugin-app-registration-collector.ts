@@ -532,12 +532,10 @@ export function collectPluginAppRegistrations(
     const target = registration.experimental_target;
     if (
       target !== undefined &&
-      (context.kind !== "nav-panel" ||
-        availability !== "fixed" ||
-        typeof target?.validate !== "function")
+      (availability !== "fixed" || typeof target?.validate !== "function")
     ) {
       throw new Error(
-        `${kind}: experimental_target requires a nav-panel fixed tab and a validate function`,
+        `${kind}: experimental_target requires a fixed tab and a validate function`,
       );
     }
     const validated = {
@@ -970,6 +968,14 @@ export function collectPluginAppRegistrations(
         ) {
           throw new Error(`${kind}: "useData" must be a function`);
         }
+        if (
+          registration.experimental_bulkItem !== undefined &&
+          typeof registration.experimental_bulkItem !== "function"
+        ) {
+          throw new Error(
+            `${kind}: "experimental_bulkItem" must be a function`,
+          );
+        }
         collected.threadActions.push({
           id,
           title: requireNonEmptyString(kind, "title", registration.title),
@@ -980,6 +986,11 @@ export function collectPluginAppRegistrations(
             ? { useData: registration.useData }
             : {}),
           item: registration.item,
+          ...(registration.experimental_bulkItem !== undefined
+            ? {
+                experimental_bulkItem: registration.experimental_bulkItem,
+              }
+            : {}),
         });
       },
       experimental_browserToolbarAction(registration) {

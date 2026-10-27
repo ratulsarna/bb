@@ -147,7 +147,10 @@ describe("ScrollPositionKeeper", () => {
     expect(timeline.topOf("row-3")).toBe(before);
   });
 
-  it("never attaches when content shrinks under a detached reader and the browser clamps to the end", () => {
+  it("attaches when content shrinks under a detached reader and the clamp to the end persists", () => {
+    vi.useFakeTimers({
+      toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"],
+    });
     const rows = rowsOf(10);
     const timeline = createTimeline(rows);
     timeline.userScrollTo(1200);
@@ -155,13 +158,85 @@ describe("ScrollPositionKeeper", () => {
     timeline.setRows(rows.slice(0, 7));
     timeline.keeper.reconcile();
     timeline.scrollElement.dispatchEvent(new Event("scroll"));
+    expect(timeline.keeper.isAttached()).toBe(false);
+    vi.advanceTimersToNextFrame();
 
     expect(timeline.layout.scrollTop).toBe(timeline.layout.maxScrollTop());
+    expect(timeline.keeper.isAttached()).toBe(true);
+  });
+
+  it("attaches when a row collapses onto the end right after a touch drag, while fling momentum still counts as the reader's", () => {
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "performance",
+      ],
+    });
+    const rows = rowsOf(10);
+    const timeline = createTimeline(rows, { attached: true });
+    timeline.scrollElement.dispatchEvent(new TouchEvent("touchstart"));
+    timeline.layout.layoutScrollTo(timeline.layout.scrollTop - 55);
+    timeline.scrollElement.dispatchEvent(new TouchEvent("touchend"));
+    vi.advanceTimersByTime(500);
+    expect(timeline.keeper.isAttached()).toBe(false);
+
+    timeline.scrollElement.dispatchEvent(new TouchEvent("touchstart"));
+    timeline.scrollElement.dispatchEvent(new TouchEvent("touchend"));
+    timeline.resize("row-9", 40);
+    timeline.layout.layoutScrollTo(timeline.layout.maxScrollTop());
+    timeline.keeper.reconcile();
+    vi.advanceTimersToNextFrame();
+
+    expect(timeline.layout.scrollTop).toBe(timeline.layout.maxScrollTop());
+    expect(timeline.keeper.isAttached()).toBe(true);
+  });
+
+  it("leaves a view the reader never placed at the top while its content loads in, instead of following it", () => {
+    vi.useFakeTimers({
+      toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"],
+    });
+    const timeline = createTimeline(rowsOf(1, 100));
+    vi.advanceTimersToNextFrame();
+
+    timeline.setRows(rowsOf(10));
+    timeline.keeper.reconcile();
+    vi.advanceTimersToNextFrame();
+
+    expect(timeline.layout.scrollTop).toBe(0);
+    expect(timeline.keeper.isAttached()).toBe(false);
+  });
+
+  it("keeps a detached reader on their row when content shrinks onto the end for a single frame", () => {
+    vi.useFakeTimers({
+      toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"],
+    });
+    const rows = rowsOf(10);
+    const timeline = createTimeline(rows);
+    timeline.userScrollTo(1200);
+    const before = timeline.topOf("row-7");
+
+    timeline.setRows(rows.slice(0, 7));
+    timeline.keeper.reconcile();
+    timeline.setRows(rows);
+    vi.advanceTimersToNextFrame();
+
+    expect(timeline.topOf("row-7")).toBe(before);
     expect(timeline.keeper.isAttached()).toBe(false);
   });
 
   it("attaches when the viewport grows and the reader's position no longer fits above the end", () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "performance",
+      ],
+    });
     const timeline = createTimeline(rowsOf(10));
     timeline.userScrollTo(1350);
     vi.advanceTimersByTime(500);
@@ -170,6 +245,7 @@ describe("ScrollPositionKeeper", () => {
     timeline.layout.setViewportHeight(800);
     timeline.layout.layoutScrollTo(timeline.layout.maxScrollTop());
     timeline.keeper.reconcile();
+    vi.advanceTimersToNextFrame();
     expect(timeline.keeper.isAttached()).toBe(true);
 
     timeline.setRows(rowsOf(11));
@@ -189,22 +265,6 @@ describe("ScrollPositionKeeper", () => {
 
     expect(timeline.keeper.isAttached()).toBe(false);
     expect(timeline.topOf("row-3")).toBe(before);
-  });
-
-  it("attaches a reader left detached at the end when they drag toward the end, though the drag cannot scroll", () => {
-    const rows = rowsOf(10);
-    const timeline = createTimeline(rows);
-    timeline.userScrollTo(1200);
-    timeline.setRows(rows.slice(0, 7));
-    timeline.keeper.reconcile();
-    expect(timeline.keeper.isAttached()).toBe(false);
-    const touch = (type: string, clientY: number) =>
-      Object.assign(new Event(type), { touches: [{ clientY }] });
-
-    timeline.scrollElement.dispatchEvent(touch("touchstart", 300));
-    timeline.scrollElement.dispatchEvent(touch("touchmove", 280));
-
-    expect(timeline.keeper.isAttached()).toBe(true);
   });
 
   it("saves a detached reader who sits at the end as at the bottom", () => {
@@ -233,6 +293,30 @@ describe("ScrollPositionKeeper", () => {
 
     expect(timeline.layout.scrollTop).toBe(timeline.layout.maxScrollTop());
     expect(timeline.keeper.isAttached()).toBe(true);
+  });
+
+  it("lands on a landmark between rows and holds it at the top while rows above it change height", () => {
+    const rows = rowsOf(10);
+    const timeline = createTimeline(rows, { attached: true });
+    const landmark = document.createElement("div");
+    landmark.setAttribute("data-scroll-landmark-id", "divider");
+    setFakeHeight(landmark, 24);
+    const items = timeline.scrollElement.querySelector("[data-timeline-items]");
+    const rowFour = items?.children[4] ?? null;
+    items?.insertBefore(landmark, rowFour);
+
+    timeline.keeper.restore({
+      rowId: "divider",
+      offsetWithinRow: 0,
+      atBottom: false,
+    });
+    const viewportTop = timeline.scrollElement.getBoundingClientRect().top;
+    expect(landmark.getBoundingClientRect().top).toBe(viewportTop);
+    expect(timeline.keeper.isAttached()).toBe(false);
+
+    timeline.resize("row-1", 520);
+    timeline.keeper.reconcile();
+    expect(landmark.getBoundingClientRect().top).toBe(viewportTop);
   });
 
   it("keeps the end in view on every layout change while attached and stays attached", () => {

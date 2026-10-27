@@ -180,6 +180,74 @@ characters and, for responses without nested rows, replaces outputs over 4,000
 characters with a head-and-tail preview. Turn summary details apply all three
 in one walk before their content pagination.
 
+## Deltas and pushes
+
+Every full timeline response carries `tag`, a hash of the window's whole
+content: rows, every top-level field, and `maxSeq`. Equal tags mean equal
+windows, whatever thread status, settings, or request built them. A client that
+holds a latest window sends `afterTag=<tag>` on its next read. When the server
+still holds the window it served under that tag, it answers with a delta,
+`{ maxSeq, tag, delta }`, built against exactly that window; otherwise it
+answers with the full window. `delta` holds:
+
+- `afterTag`: the tag of the window the delta applies to;
+- `upsertRows`: rows that are new or whose content changed;
+- `rowOrder`, only when membership or order changed: the new order as a list
+  of row ids new to the window and `[start, length]` ranges of the base
+  window's rows, by position;
+- `fields`: the top-level fields whose value changed, with
+  `contextWindowUsage: null` when usage is no longer reported.
+
+The server keeps a served window while someone may diff against it: the latest
+window for each request shape, every window a connected subscriber's tag names,
+and each read's window for 30 seconds. A later read with that window's
+`afterTag`, or the subscription sending its tag, releases the read's hold. It
+keeps at most 16 threads within 32 MB of window JSON, dropping the least
+recently used threads first, and never keeps a window over 8 MB. A dropped tag
+only costs a full window.
+
+`applyThreadTimelineDelta` from `@bb/server-contract` rebuilds the full window,
+or returns `null` when the held window's tag differs from `afterTag` or the
+delta does not fit its rows; the client then reads again with its own tag. The
+client keeps optimistic rows after the server's rows, so ranges still address
+the base window. `sdk.threads.timeline` returns a full window unless it is
+given `afterTag`.
+
+With the `timelinePush` experiment, the server pushes a full window or a delta
+over the WebSocket after events are appended. A `subscribe` message tells the
+server which window the client holds: `timelineTags` maps each
+`thread-timeline` target key to the tag the client holds, or to `null` before
+its first read returns. The tag is not part of the target, so updating it does
+not start a new watch. The app subscribes with `null`, reads the window over
+HTTP, then sends the response's tag; it resends its current tag whenever a read
+changes it, and with every subscription after a reconnect. The server tracks
+the tag per socket and moves it to each window it pushes there.
+
+- A subscriber holding a tag gets a delta built against that tag's window, and
+  receiving a tag schedules a push, so anything that changed after the client's
+  read is delivered. A tag the server no longer holds gets the full window.
+- A subscriber whose tag is `null` gets no push. Its read is built and recorded
+  in one synchronous step, so a change either lands in that read or comes after
+  it, and the tag that follows brings a delta for it.
+- A subscription without `timelineTags`, from a client from before this
+  protocol, gets the earlier behaviour: a delta against the window last pushed
+  to that subscription or, for a new subscription, the window most recently
+  served for the same request, which the client applies only if its tag
+  matches `afterTag`.
+
+Subscribers that hold the same window share one signal; each distinct baseline
+gets its own. A client applies a delta only if its tag matches `afterTag` and
+otherwise refetches with its own tag, which is usually a small HTTP delta. This
+keeps clients exact when windows built while a thread was idle and while it was
+active share a `maxSeq`. An older server ignores `timelineTags` and pushes as
+before.
+
+Pushes keep `afterSequence: null` so that a client from before tags treats a
+pushed delta as unusable and refetches. That older client sends
+`afterSequence`, which servers no longer read, so it receives full windows. A
+client reading from a server from before tags treats untagged responses and
+pushes as unusable and reads full windows.
+
 ## Conversation outline caching
 
 The conversation outline returns the full list of message previews;
@@ -226,7 +294,8 @@ anchor. The position changes only when:
 - the viewport gets narrower or wider and the anchor would leave the visible
   viewport, in which case the anchor moves just enough to stay on screen;
 - the content really shrinks, so the browser clamps a correction, and the clamp
-  is still there on the next frame.
+  is still there on the next frame;
+- the view sits at the end while detached (see below).
 
 A scroll counts as the reader's during an input session: a wheel, a scroll key,
 a touch or pointer drag that scrolled, and the momentum that follows (up to
@@ -240,12 +309,26 @@ so the app's own jump is never counted as the reader's gesture. Any other
 scroll that comes with a change in the scroll extent is layout, such as a clamp
 after content briefly shrank, and the owner reconciles it back to the position.
 A scroll without input or size change, such as find in page or focus moving to
-an offscreen control, is navigation, and the position follows it. Moving down
-into the last 4 px, or a wheel, End/PageDown or a touch drag toward the end
-while at the end, attaches. A navigation, a restore, or a viewport resize that
-leaves the reading position at or past the end also attaches. Moving up out of
-the end detaches. Content changes never attach or detach: a detached reader
-whose content shrinks onto the end stays detached until they scroll toward it.
+an offscreen control, is navigation, and the position follows it.
+
+Attachment follows one rule: a detached view within 4 px of the end attaches,
+whatever put it there, unless a restore or landing is still waiting for its row.
+When the reader's scroll, a navigation, or a completed restore put it there, it
+attaches at once. When only layout did, such as a row collapsing near the end
+or the viewport growing, it attaches if the view is still at the end on the
+next frame, so content that shrinks and regrows within a frame does not attach.
+Moving up out of the end detaches. Content changes never detach. A view the
+reader never placed, such as a tool output box that was not streaming when it
+opened, attaches only when the reader or a navigation brings it to the end, so
+output that loads in after it opens does not pull it down.
+
+`scroll-position-keeper.model.test.ts` checks these rules over random sequences
+of reader scrolls, touch gestures, toggles, streaming, prepends, regroups,
+transient shrinks, resizes, navigations, and restores, with and without iOS
+write deferral: attached exactly when at the end, content changes never detach,
+the reading row never moves without the reader unless the content cannot hold
+it, and a reader's scroll is never moved. It runs 200 sequences by default; set
+`KEEPER_MODEL_SEEDS` for a deeper local run.
 
 Every layout change is reconciled before paint. Triggers are ResizeObservers on
 the root, its content, and every mounted row, plus each windowed list's layout
@@ -313,6 +396,31 @@ the row has not loaded yet, the timeline waits
 at the bottom for up to a second. The timeline keeps the loaded pages of the
 eight most recent threads for each query client, so a position in older history
 survives a thread switch.
+
+Opening an unread thread decides its landing once, from the first copy of the
+thread fetched after it opens, not a cached one, and the rows loaded at that
+moment. Automatic read tracking waits for that opening snapshot, so sidebar
+placeholder data cannot mark the thread read before its unread cutoff is saved.
+If the read cutoff falls inside the loaded rows, the NEW divider is
+placed and the owner lands on it through the restore path, with the divider as
+the anchor at the top of the viewport, so rows that render or resize around it
+afterwards do not move it. Otherwise, and for a thread marked unread, there is
+no divider and the saved position or the bottom stands. No older pages are
+loaded to find the cutoff, and a divider dropped this way stays dropped when
+the reader pages back. A reader who scrolls before the landing keeps their
+position.
+
+`thread-opening.model.test.tsx` checks the landing end to end. It renders the
+timeline with the thread view's own loading and automatic read-tracking hooks,
+including cached sidebar placeholders, against a fake server that
+pages a random history, opens or returns to the thread with random read
+states, page sizes, and time away, and resolves the bootstrap, thread, and
+timeline requests in random orders, sometimes with the reader scrolling while
+they load. Once settled, NEW must sit above the first unread row of the whole
+history, must be at the top unless the reader scrolled or the view is at the
+end, and must show whenever the read cutoff is inside the first page;
+otherwise the saved position or the bottom stands. It runs 40 sequences by
+default; set `OPENING_MODEL_SEEDS` for more.
 
 Content shorter than the viewport is top-aligned. In that case a row that
 expands moves the rows below it, including the latest row.

@@ -334,6 +334,15 @@ with `cwd: null`. The host daemon probes from a dedicated empty
 receives an absolute working directory, so global provider commands are available
 before a personal workspace exists. Selected projects use their workspace path.
 
+The server caches each answer per machine, provider, and working directory,
+because a cold answer waits on a login-shell refresh and a bridge start. For
+60 seconds the cached list is served as is. After that, a request still gets
+the cached list while the server asks again in the background. When the new
+answer differs, the server sends a `provider-commands-changed` host change so
+open composers refetch. A failed refresh keeps the previous list. The
+native-root scan and skill catalog are read on every request, so commands and
+skills added or edited on disk appear right away.
+
 ### Recovery hints
 
 A hint says what went wrong in the provider's own terms and what the runtime
@@ -630,8 +639,10 @@ compares against that file when it exists. `pnpm parity --dump-dir <dir>`
 writes both legs' normalized event and row lists per cell.
 
 The conformance kit runs the same recordings as its recorded-traffic
-scenario set: `checkRecordedCellReplay` replays a bridge's cells and reports
+scenario set: `checkRecordedCellReplay` checks a bridge's replay results and reports
 `recorded/<cell>/{replays, events-schema-valid, grammar, turn-lifecycle,
 not-empty}` per cell. The pi, Claude Code, and Codex plugins' tests use only
 public dependencies, so `packages/provider-parity` replays their committed
-cells instead.
+cells instead. Its self-suite applies the recorded conformance checks to the
+same replay used for event and timeline parity, so each cell launches its
+bridge only once.

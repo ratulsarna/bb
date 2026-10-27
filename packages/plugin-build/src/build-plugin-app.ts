@@ -17,7 +17,7 @@ import {
 } from "./generated/plugin-theme.generated.js";
 import { renameIntoPlace } from "./rename-into-place.js";
 import { RUNTIME_EXPORT_MANIFEST } from "./generated/runtime-export-manifest.generated.js";
-import { type PluginBuildToolchain } from "./toolchain.js";
+import type { PluginBuildToolchain } from "./toolchain.js";
 import { createPluginArtifactMeta } from "./plugin-artifact-meta.js";
 import {
   isRecord,
@@ -33,6 +33,7 @@ import {
   SHARED_UI_QUESTION_FORM_HOST_SPECIFIER,
   SHARED_UI_VOICE_INPUT_TEXTAREA_SPECIFIER,
 } from "./runtime-shims.mjs";
+import { retiredSdkMemberWarnings } from "./retired-sdk-members.js";
 import {
   pluginScopeRoots,
   scopePluginUtilities,
@@ -217,6 +218,9 @@ export function runtimeShimPlugin(pluginSdkAppModuleUrl?: string): Plugin {
             warnings.push({
               text: `navPanel.fixedTabs is retired from SDK typings. Register each tab with app.slots.experimental_tab({ context: { kind: "nav-panel", panelId }, availability: "fixed", id, title, icon, component }). Existing bundles remain supported. ${migration}`,
             });
+          }
+          for (const text of retiredSdkMemberWarnings(source)) {
+            warnings.push({ text });
           }
           if (warnings.length === 0) return undefined;
           return {
@@ -494,6 +498,17 @@ async function bundledInputPaths(
   return paths;
 }
 
+function bundledRuntimeSlots(metafile: Metafile): string[] {
+  const prefix = `${SHIM_NAMESPACE}:`;
+  const slots = new Set<string>();
+  for (const input of Object.keys(metafile.inputs)) {
+    if (!input.startsWith(prefix)) continue;
+    const specifier = input.slice(prefix.length);
+    slots.add(RUNTIME_SLOT_BY_SPECIFIER[specifier]);
+  }
+  return [...slots].sort();
+}
+
 interface PluginAppBuildResult {
   jsPath: string;
   cssPath: string;
@@ -536,7 +551,7 @@ export async function buildPluginApp(
       outfile: stagedJsPath,
       absWorkingDir: rootDir,
       bundle: true,
-      metafile: dependencySources.length > 0,
+      metafile: true,
       format: "esm",
       platform: "browser",
       target: "es2022",
@@ -566,15 +581,11 @@ export async function buildPluginApp(
     } catch (error) {
       if (!isRecord(error) || error.code !== "ENOENT") throw error;
     }
-    let bundledInputs: ReadonlySet<string> = new Set();
-    if (dependencySources.length > 0) {
-      if (bundle.metafile === undefined) {
-        throw new Error(
-          "esbuild did not return the metafile required for dependency Tailwind scanning",
-        );
-      }
-      bundledInputs = await bundledInputPaths(bundle.metafile, rootDir);
-    }
+    const runtimeSlots = bundledRuntimeSlots(bundle.metafile);
+    const bundledInputs: ReadonlySet<string> =
+      dependencySources.length > 0
+        ? await bundledInputPaths(bundle.metafile, rootDir)
+        : new Set();
     const tailwindCss = (
       await buildTailwindCss(
         rootDir,
@@ -594,7 +605,10 @@ export async function buildPluginApp(
     await writeFile(
       stagedMetaPath,
       JSON.stringify(
-        createPluginArtifactMeta({ packageName, pluginVersion, bbVersion }),
+        {
+          ...createPluginArtifactMeta({ packageName, pluginVersion, bbVersion }),
+          runtimeSlots,
+        },
         null,
         2,
       ) + "\n",

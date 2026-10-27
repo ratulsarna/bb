@@ -2,12 +2,15 @@ import type { QueryClient } from "@tanstack/react-query";
 import { COMPACT_VIEWPORT_QUERY } from "@bb/shared-ui/hooks/use-compact-viewport";
 import { getMediaQuerySnapshot } from "@bb/shared-ui/hooks/use-media-query";
 import {
-  applyTimelineDelta,
+  applyThreadTimelineDelta,
+  isThreadTimelineDelta,
+  type ReceivedThreadTimelineSignal,
   type SystemConfigResponse,
+  type ThreadTimelineReadResponse,
   type ThreadTimelineResponse,
-  type ThreadTimelineSignal,
 } from "@bb/server-contract";
 import { markStreamTrace } from "@/lib/stream-trace";
+import { wsManager } from "@/lib/ws";
 import {
   systemConfigQueryKey,
   threadTimelineQueryKey,
@@ -36,24 +39,54 @@ export function isCachedThreadTimelinePushEnabled(
   );
 }
 
+export function syncThreadTimelineSubscriptionTag(
+  queryClient: QueryClient,
+  threadId: string,
+  tag: string,
+): void {
+  if (!isCachedThreadTimelinePushEnabled(queryClient)) {
+    return;
+  }
+  wsManager.syncThreadTimelineTag(
+    {
+      kind: "thread-timeline",
+      threadId,
+      segmentLimit: resolveThreadTimelineSegmentLimit() ?? null,
+      deferContent: true,
+    },
+    tag,
+  );
+}
+
+type PushedThreadTimeline =
+  | { kind: "apply"; timeline: ThreadTimelineResponse }
+  | { kind: "ignore" }
+  | { kind: "refetch" };
+
 function resolvePushedThreadTimeline(
   previous: ThreadTimelineResponse,
-  signal: ThreadTimelineSignal,
-): ThreadTimelineResponse | null {
-  const { afterSequence, timeline } = signal;
-  if (timeline.delta === undefined) {
-    return timeline;
+  timeline: ThreadTimelineReadResponse | null,
+): PushedThreadTimeline {
+  if (timeline === null) {
+    return { kind: "refetch" };
   }
-  if (afterSequence === null || previous.maxSeq < afterSequence) {
-    return null;
+  if (!isThreadTimelineDelta(timeline)) {
+    return timeline.maxSeq > previous.maxSeq
+      ? { kind: "apply", timeline }
+      : { kind: "ignore" };
   }
-  const rows = applyTimelineDelta(previous.rows, timeline.delta);
-  return rows === null ? null : { ...timeline, rows, delta: undefined };
+  const applied = applyThreadTimelineDelta(previous, timeline);
+  if (applied !== null) {
+    return { kind: "apply", timeline: applied };
+  }
+  return timeline.maxSeq > previous.maxSeq
+    ? { kind: "refetch" }
+    : { kind: "ignore" };
 }
 
 export function applyThreadTimelineSignal(
   queryClient: QueryClient,
-  signal: ThreadTimelineSignal,
+  signal: ReceivedThreadTimelineSignal,
 ): void {
   const { target } = signal;
   if (
@@ -64,11 +97,14 @@ export function applyThreadTimelineSignal(
   }
   const queryKey = threadTimelineQueryKey(target.threadId);
   const previous = queryClient.getQueryData<ThreadTimelineResponse>(queryKey);
-  if (previous === undefined || signal.timeline.maxSeq <= previous.maxSeq) {
+  if (previous === undefined) {
     return;
   }
-  const timeline = resolvePushedThreadTimeline(previous, signal);
-  if (timeline === null) {
+  const resolved = resolvePushedThreadTimeline(previous, signal.timeline);
+  if (resolved.kind === "ignore") {
+    return;
+  }
+  if (resolved.kind === "refetch") {
     void queryClient
       .refetchQueries(
         { exact: true, queryKey, type: "active" },
@@ -77,6 +113,7 @@ export function applyThreadTimelineSignal(
       .catch(() => {});
     return;
   }
+  const { timeline } = resolved;
   queryClient.setQueryData(queryKey, timeline);
   clearThreadTimelineUnseenEvents(
     queryClient,
@@ -86,6 +123,9 @@ export function applyThreadTimelineSignal(
   markStreamTrace("bb:timeline-applied", {
     threadId: target.threadId,
     maxSeq: timeline.maxSeq,
-    source: signal.afterSequence === null ? "push" : "push-delta",
+    source:
+      signal.timeline !== null && isThreadTimelineDelta(signal.timeline)
+        ? "push-delta"
+        : "push",
   });
 }

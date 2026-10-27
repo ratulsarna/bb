@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { listOpenFilePids, readPositivePidFile } from "@bb/test-helpers";
+import { setupMigratedConnectionTemplate } from "@bb/db/testing";
+import {
+  killProcessesReferencingPath,
+  listOpenFilePids,
+  readPositivePidFile,
+} from "@bb/test-helpers";
 import { isNodeError, removePathWithRetry } from "./helpers/remove-path.js";
 
 const INTEGRATION_TMP_PREFIX = "bb-integration-";
@@ -41,6 +46,7 @@ async function killProcess(pid: number): Promise<void> {
 }
 
 async function cleanupTmpRoot(tmpRoot: string): Promise<void> {
+  await killProcessesReferencingPath(tmpRoot);
   const openFilePids = new Set(await listOpenFilePids(tmpRoot));
   for (const pid of openFilePids) {
     await killProcess(pid).catch(() => undefined);
@@ -58,7 +64,7 @@ async function listIntegrationTmpRoots(): Promise<string[]> {
     .map((entry) => path.join(tmpdir(), entry.name));
 }
 
-export default async function globalSetup(): Promise<void> {
+export default async function globalSetup(): Promise<() => void> {
   const now = Date.now();
   for (const tmpRoot of await listIntegrationTmpRoots()) {
     const metadata = await fs.stat(tmpRoot).catch(() => null);
@@ -75,4 +81,5 @@ export default async function globalSetup(): Promise<void> {
 
     await cleanupTmpRoot(tmpRoot).catch(() => undefined);
   }
+  return setupMigratedConnectionTemplate();
 }

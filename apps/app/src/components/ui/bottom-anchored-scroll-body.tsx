@@ -28,9 +28,6 @@ export interface BottomAnchorContextValue {
   isAtBottom: boolean;
   scrollToBottom: () => void;
   scrollElementIntoView: (args: ScrollElementIntoViewArgs) => void;
-  scrollElementIntoViewClampedToMaxScroll: (
-    args: ScrollElementIntoViewClampedToMaxScrollArgs,
-  ) => void;
   holdContentPosition: (args: HoldContentPositionArgs) => void;
   positionKeeper: ScrollPositionKeeper;
 }
@@ -53,10 +50,6 @@ interface BottomAnchoredScrollBodyProps {
 interface ScrollElementIntoViewArgs {
   element: HTMLElement;
   options?: ScrollIntoViewOptions;
-}
-
-interface ScrollElementIntoViewClampedToMaxScrollArgs {
-  element: HTMLElement;
 }
 
 interface HoldContentPositionArgs {
@@ -160,23 +153,6 @@ export function BottomAnchoredScrollBody({
   const scrollElementIntoView = useCallback(
     ({ element, options }: ScrollElementIntoViewArgs) => {
       positionKeeper.revealElement(element, options ?? {});
-    },
-    [positionKeeper],
-  );
-
-  const scrollElementIntoViewClampedToMaxScroll = useCallback(
-    ({ element }: ScrollElementIntoViewClampedToMaxScrollArgs) => {
-      const scrollArea = scrollAreaRef.current;
-      if (!scrollArea) {
-        element.scrollIntoView({ block: "start", inline: "nearest" });
-        return;
-      }
-      positionKeeper.scrollTo(
-        element.getBoundingClientRect().top -
-          scrollArea.getBoundingClientRect().top +
-          scrollArea.scrollTop,
-        "instant",
-      );
     },
     [positionKeeper],
   );
@@ -332,7 +308,6 @@ export function BottomAnchoredScrollBody({
       isAtBottom,
       scrollToBottom,
       scrollElementIntoView,
-      scrollElementIntoViewClampedToMaxScroll,
       holdContentPosition,
       positionKeeper,
     }),
@@ -341,7 +316,6 @@ export function BottomAnchoredScrollBody({
       isAtBottom,
       scrollToBottom,
       scrollElementIntoView,
-      scrollElementIntoViewClampedToMaxScroll,
       holdContentPosition,
       positionKeeper,
     ],

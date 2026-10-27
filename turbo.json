@@ -847,6 +847,7 @@
     "smoke:tarball": {
       "dependsOn": ["build"],
       "cache": false,
+      "passThroughEnv": ["npm_config_cache"],
       "outputs": []
     },
     "smoke:boot": {
@@ -1109,12 +1110,23 @@
     "bb-plugin-environment-git-worktree#typecheck": {
       "dependsOn": ["@get-bb/plugin-sdk#build:types", "topo"]
     },
+    "bb-plugin-bb--git#typecheck": {
+      "dependsOn": ["@get-bb/plugin-sdk#build:types", "topo"]
+    },
+    "bb-plugin-bb--git#test": {
+      "env": ["VITEST_MAX_WORKERS"],
+      "dependsOn": ["@get-bb/plugin-sdk#build", "topo"]
+    },
     "bb-plugin-bb--github-pr-status#typecheck": {
       "dependsOn": ["@get-bb/plugin-sdk#build:types", "topo"]
     },
     "bb-plugin-bb--github-pr-status#test": {
       "env": ["VITEST_MAX_WORKERS"],
-      "dependsOn": ["@get-bb/plugin-sdk#build", "topo"]
+      "dependsOn": [
+        "//#ensure-native-modules",
+        "@get-bb/plugin-sdk#build",
+        "topo"
+      ]
     },
     "bb-plugin-environment-personal-workspace#typecheck": {
       "dependsOn": ["@get-bb/plugin-sdk#build:types", "topo"]

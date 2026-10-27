@@ -14,12 +14,16 @@ type Lookup =
 type Entry = { lookup: Lookup; fetchedAt: number };
 type Check = { environmentId: string; interval: number; dueAt: number };
 
+function live(pr: PullRequest): boolean {
+  return pr.state === "open" || pr.state === "draft";
+}
+
 function active(pr: PullRequest): boolean {
   return (
-    pr.state === "open" &&
+    live(pr) &&
     (pr.autoMerge ||
       pr.inMergeQueue === true ||
-      pr.checks.state === "pending" ||
+      pr.checks.pendingCount > 0 ||
       pr.mergeability.state === "unknown")
   );
 }
@@ -40,7 +44,6 @@ export function createPullRequestStore(options: {
   const watches = new Map<string, Set<AbortSignal>>();
   const served = new Map<string, string>();
   const inflight = new Map<string, Promise<void>>();
-  const loadingReaders = new Map<string, Set<string>>();
   const settling = new Map<string, number>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const generations = new Map<string, number>();
@@ -89,17 +92,13 @@ export function createPullRequestStore(options: {
     }
   }
 
-  function publishChanges(readers: ReadonlySet<string>) {
+  function publishChanges() {
     if (disposed) return;
     const changed: string[] = [];
     for (const environmentId of watches.keys()) {
       const content = JSON.stringify(resultFor(environmentId));
       const previous = served.get(environmentId);
-      if (
-        previous !== undefined &&
-        previous !== content &&
-        !readers.has(environmentId)
-      )
+      if (previous !== undefined && previous !== content)
         changed.push(environmentId);
       served.set(environmentId, content);
     }
@@ -117,7 +116,7 @@ export function createPullRequestStore(options: {
         active(snapshot.pullRequest) ||
         (settling.get(url) ?? 0) > snapshot.fetchedAt
           ? ACTIVE_CHECK_MS
-          : snapshot.pullRequest.state === "open"
+          : live(snapshot.pullRequest)
             ? QUIET_CHECK_MS
             : null;
       if (interval !== null)
@@ -143,7 +142,7 @@ export function createPullRequestStore(options: {
         const now = Date.now();
         for (const [url, check] of checks()) {
           if (check.dueAt - check.interval / 2 <= now)
-            void load(check.environmentId, url, new Set());
+            void load(check.environmentId, url);
         }
         schedule();
       },
@@ -154,17 +153,11 @@ export function createPullRequestStore(options: {
   async function load(
     environmentId: string,
     url: string | null,
-    readers: ReadonlySet<string>,
     refresh = false,
   ): Promise<void> {
     const key = url ?? `environment:${environmentId}`;
     const pending = inflight.get(key);
-    if (pending !== undefined) {
-      for (const reader of readers) loadingReaders.get(key)?.add(reader);
-      return pending;
-    }
-    const recipients = new Set(readers);
-    loadingReaders.set(key, recipients);
+    if (pending !== undefined) return pending;
     const generation = generations.get(environmentId) ?? 0;
     const task = Promise.resolve()
       .then(async () => {
@@ -215,7 +208,7 @@ export function createPullRequestStore(options: {
             );
           dropOrphanSnapshots();
         }
-        publishChanges(recipients);
+        publishChanges();
       })
       .catch((error) => {
         if (url !== null) {
@@ -225,10 +218,7 @@ export function createPullRequestStore(options: {
         options.onCheckFailed(environmentId, error);
       })
       .finally(() => {
-        if (inflight.get(key) === task) {
-          inflight.delete(key);
-          loadingReaders.delete(key);
-        }
+        if (inflight.get(key) === task) inflight.delete(key);
         schedule();
       });
     inflight.set(key, task);
@@ -248,11 +238,7 @@ export function createPullRequestStore(options: {
         ? ABSENT_CACHE_TTL_MS
         : CACHE_TTL_MS;
     if (cached === undefined || Date.now() - cached.fetchedAt >= ttl) {
-      const loading = load(
-        environmentId,
-        currentUrl(environmentId),
-        new Set(viewer && !immediate ? [environmentId] : []),
-      );
+      const loading = load(environmentId, currentUrl(environmentId));
       if (!immediate) await loading;
     }
     const result = resultFor(environmentId);
@@ -286,10 +272,8 @@ export function createPullRequestStore(options: {
         const url = discover ? null : currentUrl(environmentId);
         const pending = inflight.get(url ?? `environment:${environmentId}`);
         if (pending)
-          void pending.then(() =>
-            load(environmentId, url, new Set(), discover),
-          );
-        else void load(environmentId, url, new Set(), discover);
+          void pending.then(() => load(environmentId, url, discover));
+        else void load(environmentId, url, discover);
       }
     },
     pushed(environmentId: string) {
@@ -298,7 +282,7 @@ export function createPullRequestStore(options: {
       settling.set(url, Date.now() + ACTIVE_CHECK_MS);
       const cached = lookups.get(environmentId);
       if (cached) cached.fetchedAt = Number.NEGATIVE_INFINITY;
-      if (watches.has(environmentId)) void load(environmentId, url, new Set());
+      if (watches.has(environmentId)) void load(environmentId, url);
     },
     recheck(environmentId: string) {
       if (watches.has(environmentId))
