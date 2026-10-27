@@ -56,5 +56,10 @@ Install: \`npm install -g https://github.com/$REPO/releases/download/$TAG/bb-app
 gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease=false --latest
 
 echo "::: PUBLISHED $TAG"
-curl -fsSL --retry 10 --retry-all-errors --retry-delay 6 \
-  "https://github.com/$REPO/releases/latest/download/latest"
+for _ in $(seq 1 20); do
+  FEED="$(curl -fsSL "https://github.com/$REPO/releases/latest/download/latest" || true)"
+  case "$FEED" in *"\"$VERSION\""*) echo "::: FEED $FEED"; exit 0 ;; esac
+  sleep 6
+done
+echo "::: feed still shows ${FEED:-nothing}; check the release is marked Latest" >&2
+exit 1
