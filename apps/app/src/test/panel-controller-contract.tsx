@@ -13,6 +13,10 @@ import {
 } from "@/lib/plugin-sdk-hooks";
 import { useFixedPanelTabsState } from "@/lib/fixed-panel-tabs";
 import {
+  TabVisibleContext,
+  useTabVisible,
+} from "@/components/secondary-panel/tab-visibility";
+import {
   createPluginPanelFixedPanelTab,
   type FixedPanelTabsState,
 } from "@/lib/fixed-panel-tabs-state";
@@ -35,14 +39,14 @@ export interface PanelContractSurface {
   panel: () => ExperimentalPanelController;
   snapshot: () => PanelContractSnapshot;
   renderedTarget: () => string | null;
-  command: (id: "panel.toggle" | "diff.toggle") => boolean;
+  renderedTabVisible: () => string | null;
+  command: (id: "panel.toggle") => boolean;
   action: {
     tab: ExperimentalTabReference;
     panelTabId: (params: JsonValue | undefined) => string;
   };
   fixed: { targeted: ContractTab; untargeted: ContractTab } | null;
   foreignTab: ExperimentalTabReference;
-  diff: { panelTabId: string } | null;
   toggleRestoresActiveTab: boolean;
 }
 
@@ -70,8 +74,10 @@ export function ContractTargetedFixedTab({
     ...tab,
     experimental_target: contractTarget,
   });
+  const visible = useTabVisible();
   return (
     <div data-testid="contract-fixed-tab">
+      <output data-testid="contract-tab-visible">{String(visible)}</output>
       {target === null ? null : (
         <output data-testid="contract-target">
           {JSON.stringify(target.target)}
@@ -127,7 +133,6 @@ function actionOptions(
 
 export interface PanelContractSupport {
   fixedTabs: boolean;
-  diffToggle: boolean;
 }
 
 function required<T>(value: T | null): T {
@@ -153,6 +158,20 @@ export function describePanelControllerContract(
           isOpen: true,
           activeTabId: fixed.untargeted.panelTabId,
         });
+      },
+    );
+
+    it.runIf(supports.fixedTabs)(
+      "reports the shown tab visible only while the side panel is open",
+      async () => {
+        const surface = await mount();
+        const { targeted } = required(surface.fixed);
+        expect(
+          call(() => surface.panel().openTab({ tab: fixedTab(targeted) })),
+        ).toBe(true);
+        expect(surface.renderedTabVisible()).toBe("true");
+        expect(call(() => surface.panel().close())).toBe(true);
+        expect(surface.renderedTabVisible()).not.toBe("true");
       },
     );
 
@@ -311,21 +330,6 @@ export function describePanelControllerContract(
       if (surface.toggleRestoresActiveTab)
         expect(surface.snapshot().activeTabId).toBe(active);
     });
-
-    it.runIf(supports.diffToggle)(
-      "toggles the core Diff tab with diff.toggle",
-      async () => {
-        const surface = await mount();
-        const diff = required(surface.diff);
-        expect(call(() => surface.command("diff.toggle"))).toBe(true);
-        expect(surface.snapshot()).toMatchObject({
-          isOpen: true,
-          activeTabId: diff.panelTabId,
-        });
-        expect(call(() => surface.command("diff.toggle"))).toBe(true);
-        expect(surface.snapshot().isOpen).toBe(false);
-      },
-    );
   });
 }
 
@@ -353,7 +357,13 @@ export function ContractSecondaryPanel({
   const active = [...fixedTabs, ...tabs].find(
     (tab) => tab.tab.id === activeTab?.id,
   );
-  return <aside>{active?.renderContent?.(pane)}</aside>;
+  return (
+    <aside>
+      <TabVisibleContext.Provider value={isOpen}>
+        {active?.renderContent?.(pane)}
+      </TabVisibleContext.Provider>
+    </aside>
+  );
 }
 
 export interface ContractStateSink {

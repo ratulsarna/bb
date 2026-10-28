@@ -1,3 +1,4 @@
+import { applicationLinkApprovals } from "./application-url";
 import {
   LazyPluginMarkdown,
   LazyPluginDiff,
@@ -113,10 +114,12 @@ import {
 import { SidebarNavigationIcon } from "@/components/sidebar/SidebarNavigationModel";
 import {
   InfoList,
-  InfoListRow,
   InfoSection,
 } from "@/components/secondary-panel/info/info-list";
+import { InfoListRow } from "@bb/shared-ui/info-list-row";
 import { DetailRow } from "@/components/ui/detail-card";
+import { useTabVisible } from "@/components/secondary-panel/tab-visibility";
+import { ThreadRowMetadata } from "@/components/plugin/ThreadRowMetadata";
 
 function PluginInfoListRow({
   onSelect,
@@ -137,6 +140,8 @@ function useArchiveEnvironmentThreads(): (
 }
 
 export const pluginSdkAppImplementation = {
+  experimental_getApplicationLinkApprovals: applicationLinkApprovals.list,
+  experimental_revokeApplicationLinkApproval: applicationLinkApprovals.revoke,
   definePluginApp,
   experimental_Icon: Icon,
   experimental_ProviderIcon: ProviderIcon,
@@ -145,6 +150,7 @@ export const pluginSdkAppImplementation = {
   experimental_useQuestionFormHost: useQuestionFormHost,
   useBbNavigate,
   experimental_useCanOpenFileExternally: usePluginCanOpenFileExternally,
+  experimental_useTabVisible: useTabVisible,
   experimental_useAppPanel,
   experimental_useFixedTabTarget,
   useComposer,
@@ -190,6 +196,7 @@ export const pluginSdkAppImplementation = {
   experimental_SourceCode: LazyPluginSourceCode,
   experimental_Diff: LazyPluginDiff,
   experimental_InfoSection: InfoSection,
+  experimental_ThreadRowMetadata: ThreadRowMetadata,
   experimental_DetailRow: DetailRow,
   experimental_InfoList: InfoList,
   experimental_InfoListRow: PluginInfoListRow,

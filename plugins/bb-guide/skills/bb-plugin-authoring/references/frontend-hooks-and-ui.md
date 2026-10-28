@@ -355,8 +355,13 @@ panel.close();
   New thread screen a `{ context: { kind: "thread" }, availability: "action" }`
   tab resolves against `experimental_newThreadPanelAction` with the same id.
 
-bb's own panel shortcuts and controls (Mod+D, panel toggle, Info, tab strip,
-close buttons) go through the same controller.
+bb's own panel shortcuts and controls (panel toggle, Info, tab strip, close
+buttons) and the Git plugin's Mod+D command go through the same controller.
+
+`experimental_useTabVisible()` is true while the panel tab it renders in is
+the selected tab and the side panel is open, false otherwise. bb keeps a
+closed panel's tab mounted, so pause reads that only feed the tab while it is
+false; the Git plugin's Diff tab does.
 
 Retired members keep working for existing plugins, and `bb plugin build` warns
 with the replacement:
@@ -401,7 +406,9 @@ read is fetching never-loaded requested data. `isFetching` includes background
 attempts; keyed views share method activity. `error` is the last completed
 failure, cleared on success; retrying a first load clears its old error while
 loading. `refetch` forces an attempt, waits through retries, and records any
-failure in `error` without rejecting or discarding existing data.
+failure in `error` without rejecting or discarding existing data. Keyed reads
+also return `refetchKeys(keys)`, which reads only those keys again and keeps
+every other row, for a per-row Retry.
 
 Reads stay fresh for two seconds without polling. Focus does not refetch while
 BB's realtime connection is healthy. While disconnected, focus/browser-online

@@ -47,6 +47,47 @@ function copyRange(range: Range) {
   return { data, accepted };
 }
 
+it.each([
+  ["src/export_notes.ts", "file:///workspace/src/export_notes.ts"],
+  [
+    "src/отчёт_данные.ts",
+    "file:///workspace/src/%D0%BE%D1%82%D1%87%D1%91%D1%82_%D0%B4%D0%B0%D0%BD%D0%BD%D1%8B%D0%B5.ts",
+  ],
+  ["/workspace/src/export_notes.ts", "file:///workspace/src/export_notes.ts"],
+  [
+    "C:\\workspace\\src\\export_notes.ts",
+    "file:///C:/workspace/src/export_notes.ts",
+  ],
+])(
+  "copies auto-linked inline code %s as code while preserving authored links",
+  (reference, href) => {
+    const content = `**Changed**: \`${reference}\` and [Review](file:///workspace/review.md).`;
+    const { container } = render(
+      <SelectableMessageProse>
+        <MarkdownPreview
+          content={content}
+          linkRouting={{
+            localFile: {
+              absoluteLinks: { kind: "trusted-host" },
+              relativeLinks: { baseDir: "/workspace", rootPath: "/workspace" },
+              onOpenLink: () => true,
+            },
+          }}
+        />
+      </SelectableMessageProse>,
+    );
+    const range = document.createRange();
+    range.selectNodeContents(container.firstElementChild!);
+    const { data } = copyRange(range);
+    expect(data.get("text/html")).toContain(`<a href="${href}"`);
+    expect(data.get("text/plain")).toBe(content);
+
+    window.getSelection()!.removeAllRanges();
+    range.selectNodeContents(container.querySelector("a")!);
+    expect(copyRange(range).data.get("text/plain")).toBe(`\`${reference}\``);
+  },
+);
+
 it("copies only the selected portion of a highlighted code block as bare code, preserving blank lines", () => {
   const { container } = render(
     <SelectableMessageProse>

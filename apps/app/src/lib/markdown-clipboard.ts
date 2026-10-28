@@ -234,6 +234,8 @@ function nodeMarkdown(node: Node): string {
   if (tag === "EM" || tag === "I") return `*${content}*`;
   if (tag === "DEL" || tag === "S") return `~~${content}~~`;
   if (tag === "A") {
+    if (node.hasAttribute("data-clipboard-inline-code"))
+      return codeSpan(node.textContent ?? "");
     if (node.hasAttribute("data-bare-url")) return node.textContent ?? "";
     const href = safeUrl(node.getAttribute("href") ?? "");
     return href

@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { reconcileReasoningLevel } from "@bb/domain";
-import type {
-  Host,
-  ProjectSource,
-  PromptMentionCommandTrigger,
-  ProviderInfo,
-  ReasoningLevel,
-  Thread,
+import {
+  reconcileReasoningLevel,
+  type Host,
+  type ProjectSource,
+  type PromptMentionCommandTrigger,
+  type ProviderInfo,
+  type ReasoningLevel,
+  type Thread,
 } from "@bb/domain";
 import type {
   ProviderCliKey,

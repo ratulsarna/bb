@@ -41,6 +41,7 @@ Read the installed SDK declarations for the exact current signatures.
 - `experimental_useQuestionFormHost`
 - `useBbNavigate`
 - `experimental_useCanOpenFileExternally`
+- `experimental_useTabVisible`
 - `experimental_useAppPanel`
 - `experimental_useFixedTabTarget`
 - `useComposer`
@@ -90,10 +91,13 @@ Read the installed SDK declarations for the exact current signatures.
 - `useSidebarThreadShortcut`
 - `ThreadTitle`
 - `experimental_ThreadStatusGlyph`
+- `experimental_ThreadRowMetadata`
 - `useEnvironmentProviders`
 - `useSdk`
 - `experimental_useProviders`
 - `experimental_useCodeTheme`
+- `experimental_getApplicationLinkApprovals`
+- `experimental_revokeApplicationLinkApproval`
 - `experimental_copyToClipboard`
 - `experimental_saveFile`
 
@@ -133,12 +137,13 @@ Read the installed SDK declarations for the exact current signatures.
 - `PluginSidebarFooterActionProps`
 - `ExperimentalSidebarFooterDisclosureProps`
 - `PluginThreadListProps`
-- `PluginThreadHeaderActionProps`
 - `ExperimentalThreadInfoProps`
 - `ExperimentalThreadEnvironment`
 - `ExperimentalThreadContextSegmentInput`
 - `ExperimentalThreadContextSegmentProps`
 - `ExperimentalThreadContextSegmentReference`
+- `ExperimentalThreadRowMetadataProps`
+- `ExperimentalThreadRowMetadataLineProps`
 - `ExperimentalInfoSectionProps`
 - `ExperimentalDetailRowProps`
 - `ExperimentalInfoListProps`
@@ -206,9 +211,9 @@ Read the installed SDK declarations for the exact current signatures.
 - `PluginEnvironmentProvidersState`
 - `PluginBoundThreadsArea`
 - `PluginBrowserBbSdk`
-- `PluginThreadHeaderActionRegistration`
 - `ExperimentalThreadContextSegmentRegistration`
 - `ExperimentalThreadInfoRowRegistration`
+- `ExperimentalThreadRowMetadataRegistration`
 - `ExperimentalThreadInfoSectionRegistration`
 - `PluginThreadActionTarget`
 - `PluginThreadActionChoice`
@@ -219,6 +224,7 @@ Read the installed SDK declarations for the exact current signatures.
 - `PluginThreadActionItemInput`
 - `PluginThreadActionBulkItemInput`
 - `PluginThreadActionRegistration`
+- `PluginThreadActionPlacement`
 - `PluginBoundThreadAction`
 - `PluginThreadActionEntry`
 - `PluginThreadActionRegistrationInfo`
@@ -377,6 +383,7 @@ Read the installed SDK declarations for the exact current signatures.
 - `ExperimentalOpenTabOptions`
 - `ExperimentalTabTargetReference`
 - `ExperimentalThreadActionTabProps`
+- `ExperimentalThreadTabProps`
 - `ExperimentalThreadTabActionContext`
 - `ExperimentalPanelController`
 - `BbContext`

@@ -256,14 +256,14 @@ export const APP_COMMAND_GROUPS: readonly AppCommandGroup[] = [
         "Search workspace files in a new panel tab.",
       ),
       command(
-        "diff.toggle",
-        "Toggle diff",
-        "Open or close the environment diff.",
-      ),
-      command(
         "terminal.open",
         "Open terminal",
         "Open a terminal in the secondary panel.",
+      ),
+      command(
+        "terminal.find",
+        "Find in terminal",
+        "Search the focused terminal scrollback.",
       ),
       command(
         "workspace.openPreferred",

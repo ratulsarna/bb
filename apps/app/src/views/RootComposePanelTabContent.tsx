@@ -13,6 +13,7 @@ import type { SecondaryPanelPaneRenderContext } from "@/components/secondary-pan
 import {
   LazyFilePreview,
   LazyHostFilePreviewTabContent,
+  LazyHostScopedFilePreviewTabContent,
   LazyNewTabPage,
   LazyProjectFilePreviewTabContent,
   LazyThreadStorageFilePreviewTabContent,
@@ -35,7 +36,7 @@ import { useThreadStorageLocation } from "@/hooks/queries/thread-panel-queries";
 import { useCanOpenFileExternally } from "@/hooks/useCanOpenFileExternally";
 import { useAppNavigationHost } from "@/lib/app-navigation-host";
 import { getFilePreviewLineRangeStart } from "@bb/client-core";
-import { resolveAbsoluteFilePath } from "@/lib/absolute-file-path";
+import { resolveAbsoluteFilePath } from "@bb/shared-ui/lib/absolute-file-path";
 import { useAppCommandHandler } from "@/components/commands/AppCommandProvider";
 import type { MarkdownPreviewLinkHandler } from "@/components/ui/markdown-link";
 
@@ -455,7 +456,15 @@ function RootComposeFilePreviewTabContent({
           ? (tab.threadId ?? rootPanelThreadId)
           : fileOpenerSource.threadId;
       original =
-        threadId && environmentId ? (
+        tab.hostId !== null ? (
+          <LazyHostScopedFilePreviewTabContent
+            activePath={tab.path}
+            hostId={tab.hostId}
+            isPanelOpen={isPanelOpen}
+            lineRange={tab.lineRange}
+            onOpenInEditor={onOpenInEditor}
+          />
+        ) : threadId && environmentId ? (
           <LazyHostFilePreviewTabContent
             activePath={tab.path}
             copyPath={tab.path}

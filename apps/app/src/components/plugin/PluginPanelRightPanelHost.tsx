@@ -34,6 +34,7 @@ import { useAppCommandHandler } from "@/components/commands/AppCommandProvider";
 import { PluginIcon, PluginItemIcon } from "@/components/plugin/PluginIcon";
 import { RIGHT_PANEL_TOGGLE_ICON_NAME } from "@/components/secondary-panel/panelToggleControlState";
 import { SecondaryPanelLayout } from "@/components/secondary-panel/SecondaryPanelLayout";
+import { getPluginPageSecondaryPanelWidthPercentAtom } from "@/components/secondary-panel/threadSecondaryPanelAtoms";
 import {
   LazyBrowserTabDeck,
   LazyHostScopedFilePreviewTabContent,
@@ -1097,7 +1098,6 @@ export function PluginPanelRightPanelHost({
         <LazyThreadSecondaryPanel
           drawerFallback={drawerFallback}
           activeTab={activeTab}
-          canUseGitUi={false}
           metadataContent={null}
           tabs={tabs}
           splitPanelStateId={
@@ -1175,6 +1175,10 @@ export function PluginPanelRightPanelHost({
         main={children}
         composerHost={null}
         renderPanel={renderPanel}
+        widthPercentAtom={getPluginPageSecondaryPanelWidthPercentAtom({
+          panelPath,
+          pluginId,
+        })}
       />
     </div>
   );

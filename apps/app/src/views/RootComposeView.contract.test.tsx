@@ -219,7 +219,7 @@ afterEach(() => {
 
 describePanelControllerContract(
   "New thread screen",
-  { fixedTabs: false, diffToggle: false },
+  { fixedTabs: false },
   async () => {
     const sink: ContractStateSink = { current: null };
     const router = createMemoryRouter(
@@ -228,6 +228,7 @@ describePanelControllerContract(
           path: "/",
           element: (
             <DefaultPaneContextProvider
+              paneId="main"
               onRequestClose={null}
               navigateInPane={() => {}}
             >
@@ -264,6 +265,7 @@ describePanelControllerContract(
       panel: () => panel,
       snapshot: () => snapshotFromState(sink),
       renderedTarget: () => null,
+      renderedTabVisible: () => null,
       command: (id) => appCommandHandlers.get(id)?.() !== false,
       action: { tab: actionTab, panelTabId: contractActionPanelTabId("chat") },
       fixed: null,
@@ -272,7 +274,6 @@ describePanelControllerContract(
         context: { kind: "nav-panel", panelId: "board" },
         availability: "action",
       },
-      diff: null,
       toggleRestoresActiveTab: false,
     };
   },

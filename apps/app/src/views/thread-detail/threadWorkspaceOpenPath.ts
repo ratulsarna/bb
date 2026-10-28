@@ -1,9 +1,7 @@
 import type { Environment } from "@bb/domain";
 import type { OpenInTargetContext } from "@bb/host-daemon-contract";
-import type { WorkspaceChangedFilesSection } from "@/components/workspace/workspace-change-summary";
 import type { ExperimentalFileOpenOptions } from "@get-bb/plugin-sdk";
 import type { LiveFileRoot } from "@/hooks/useResolvedLiveFileTarget";
-import type { WorkspaceFileStatus } from "bb-plugin-bb--git/contract";
 
 interface ResolveThreadWorkspaceOpenPathArgs {
   canOpenWorkspace: boolean;
@@ -40,34 +38,6 @@ export function buildOpenFileExternallyHandler(
           : { kind: "line", line: lineNumber, column: null },
     });
   };
-}
-
-type WorkspaceChangedFileOpenTarget =
-  | { kind: "diff" }
-  | { kind: "preview"; ref: string | undefined };
-
-interface ResolveWorkspaceChangedFileOpenTargetArgs {
-  file: WorkspaceFileStatus;
-  section: WorkspaceChangedFilesSection;
-}
-
-export function resolveWorkspaceChangedFileOpenTarget(
-  args: ResolveWorkspaceChangedFileOpenTargetArgs,
-): WorkspaceChangedFileOpenTarget {
-  if (args.file.status === "A" || args.file.status === "??") {
-    return { kind: "preview", ref: undefined };
-  }
-
-  if (args.file.status === "D") {
-    if (args.section.kind === "committed") {
-      return args.section.mergeBaseRef
-        ? { kind: "preview", ref: args.section.mergeBaseRef }
-        : { kind: "diff" };
-    }
-    return { kind: "preview", ref: "HEAD" };
-  }
-
-  return { kind: "diff" };
 }
 
 export function resolveEnvironmentOpenContext(

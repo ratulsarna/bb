@@ -32,6 +32,7 @@ Read the installed declarations for exact current signatures.
 - `ExperimentalOpenTabOptions`
 - `ExperimentalTabTargetReference`
 - `ExperimentalThreadActionTabProps`
+- `ExperimentalThreadTabProps`
 - `ExperimentalThreadTabActionContext`
 - `ExperimentalPanelController`
 - `ExperimentalDesktopBrowserAcquireInput`
@@ -335,8 +336,6 @@ Read the installed declarations for exact current signatures.
 - `PluginThreadEventHandler`
 - `PluginThreadEventName`
 - `PluginThreadEventPayloads`
-- `PluginThreadHeaderActionProps`
-- `PluginThreadHeaderActionRegistration`
 - `ExperimentalThreadInfoProps`
 - `ExperimentalThreadInfoRowRegistration`
 - `ExperimentalThreadInfoSectionRegistration`

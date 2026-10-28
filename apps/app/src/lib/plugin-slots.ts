@@ -21,9 +21,9 @@ import type {
   PluginSettingsSectionRegistration,
   PluginSidebarFooterActionRegistration,
   PluginSourceCodeRendererRegistration,
-  PluginThreadHeaderActionRegistration,
   ExperimentalThreadContextSegmentRegistration,
   ExperimentalThreadInfoRowRegistration,
+  ExperimentalThreadRowMetadataRegistration,
   ExperimentalThreadInfoSectionRegistration,
   PluginThreadActionRegistration,
   ExperimentalPluginBrowserToolbarActionRegistration,
@@ -33,6 +33,7 @@ import type {
 import {
   type CollectedPluginCommandRegistration,
   type LegacyThreadPanelActionRegistration,
+  type LegacyThreadHeaderActionRegistration,
   type LegacyNavPanelRegistration,
   adaptSidebarFooterAction,
   getCollectedSidebarFooterItems,
@@ -57,9 +58,10 @@ export interface PluginRegistrationSet {
   experimentalSidebarFooterItems?: readonly CollectedExperimentalSidebarFooterItem[];
   threadLists?: readonly PluginThreadListRegistration[];
   experimentalSidebarNavigations?: readonly CollectedSidebarNavigationRegistration[];
-  threadHeaderActions?: readonly PluginThreadHeaderActionRegistration[];
+  threadHeaderActions?: readonly LegacyThreadHeaderActionRegistration[];
   threadContextSegments?: readonly ExperimentalThreadContextSegmentRegistration[];
   threadInfoRows?: readonly ExperimentalThreadInfoRowRegistration[];
+  threadRowMetadata?: readonly ExperimentalThreadRowMetadataRegistration<unknown>[];
   threadInfoSections?: readonly ExperimentalThreadInfoSectionRegistration[];
   threadActions?: readonly PluginThreadActionRegistration<unknown>[];
   browserToolbarActions?: readonly ExperimentalPluginBrowserToolbarActionRegistration[];
@@ -125,11 +127,14 @@ export interface PluginThreadListSlot
 export interface ExperimentalSidebarNavigationSlot
   extends CollectedSidebarNavigationRegistration, PluginSlotBase {}
 interface PluginThreadHeaderActionSlot
-  extends PluginThreadHeaderActionRegistration, PluginSlotBase {}
+  extends LegacyThreadHeaderActionRegistration, PluginSlotBase {}
 export interface PluginThreadContextSegmentSlot
   extends ExperimentalThreadContextSegmentRegistration, PluginSlotBase {}
 export interface PluginThreadInfoRowSlot
   extends ExperimentalThreadInfoRowRegistration, PluginSlotBase {}
+export interface PluginThreadRowMetadataSlot
+  extends ExperimentalThreadRowMetadataRegistration<unknown>,
+    PluginSlotBase {}
 export interface PluginThreadInfoSectionSlot
   extends ExperimentalThreadInfoSectionRegistration, PluginSlotBase {}
 export interface PluginThreadActionSlot
@@ -178,6 +183,7 @@ export interface PluginSlotSnapshot {
   threadHeaderActions: readonly PluginThreadHeaderActionSlot[];
   threadContextSegments: readonly PluginThreadContextSegmentSlot[];
   threadInfoRows: readonly PluginThreadInfoRowSlot[];
+  threadRowMetadata: readonly PluginThreadRowMetadataSlot[];
   threadInfoSections: readonly PluginThreadInfoSectionSlot[];
   threadActions: readonly PluginThreadActionSlot[];
   browserToolbarActions: readonly PluginBrowserToolbarActionSlot[];
@@ -212,6 +218,7 @@ export const EMPTY_PLUGIN_SLOT_SNAPSHOT: PluginSlotSnapshot = {
   threadHeaderActions: [],
   threadContextSegments: [],
   threadInfoRows: [],
+  threadRowMetadata: [],
   threadInfoSections: [],
   threadActions: [],
   browserToolbarActions: [],
@@ -253,6 +260,7 @@ const SLOT_KINDS: readonly SlotKind[] = [
   "threadHeaderActions",
   "threadContextSegments",
   "threadInfoRows",
+  "threadRowMetadata",
   "threadInfoSections",
   "threadActions",
   "browserToolbarActions",
@@ -342,6 +350,7 @@ function flattenRegistrations(
     threadHeaderActions: stamp(set.threadHeaderActions),
     threadContextSegments: stamp(set.threadContextSegments),
     threadInfoRows: stamp(set.threadInfoRows),
+    threadRowMetadata: stamp(set.threadRowMetadata),
     threadInfoSections: stamp(set.threadInfoSections),
     threadActions: stamp(set.threadActions),
     browserToolbarActions: stamp(set.browserToolbarActions),
@@ -568,6 +577,12 @@ export function getPluginSlotSnapshot(): PluginSlotSnapshot {
 
 export function usePluginSlots(): PluginSlotSnapshot {
   return useSyncExternalStore(subscribePluginSlots, getPluginSlotSnapshot);
+}
+
+export function usePluginFrontendRegistered(pluginId: string): boolean {
+  return useSyncExternalStore(subscribePluginSlots, () =>
+    registrationsByPluginId.has(pluginId),
+  );
 }
 
 let builtinPluginIds: ReadonlySet<string> = new Set();

@@ -104,7 +104,6 @@ import {
   type PluginProvidersState,
   type PluginSidebarThreadsState,
   type PluginSourceCodeRendererRegistration,
-  type PluginThreadHeaderActionRegistration,
   type ExperimentalThreadContextSegmentRegistration,
   type ExperimentalThreadInfoRowRegistration,
   type ExperimentalThreadInfoSectionRegistration,
@@ -118,6 +117,8 @@ import {
   type PluginThreadActionsContextMenuProps,
   type PluginThreadActionsMenuProps,
   type PluginThreadStatusGlyphProps,
+  type ExperimentalThreadRowMetadataLineProps,
+  type ExperimentalThreadRowMetadataRegistration,
   type PluginThreadActionsOptions,
   type PluginThreadActionTarget,
   type ExperimentalPluginBrowserToolbarActionRegistration,
@@ -370,6 +371,7 @@ interface SlotEnv {
   providers: PluginProvidersState;
   codeTheme: PluginCodeThemeState;
   canOpenFileExternally: (target: ExperimentalLiveFileTarget) => boolean;
+  tabVisible: boolean;
   branchesState: BranchesState;
   checkoutState: CheckoutState;
 }
@@ -553,6 +555,14 @@ function TestThreadStatusGlyph({
       data-size={size}
     />
   );
+}
+
+/**
+ * `experimental_ThreadRowMetadata` marks where a row renders other plugins' row
+ * items; the test runtime knows no other plugins, so it renders a marker.
+ */
+function TestThreadRowMetadata({ thread }: ExperimentalThreadRowMetadataLineProps) {
+  return <span data-thread-row-metadata={thread.id} />;
 }
 
 function SlotLifecycleGuard({
@@ -1567,6 +1577,10 @@ function captureClipboardWrites(
 }
 
 const testPluginSdkApp = {
+  experimental_getApplicationLinkApprovals: async (): Promise<string[]> => [],
+  experimental_revokeApplicationLinkApproval: async (
+    _scheme: string | null,
+  ): Promise<string[]> => [],
   definePluginApp,
   ...createRpcQueryHooks(() => useSlotEnv("rpc query").rpcQueryHost),
   useRpc<
@@ -1766,6 +1780,9 @@ const testPluginSdkApp = {
       "experimental_useCanOpenFileExternally",
     ).canOpenFileExternally(target);
   },
+  experimental_useTabVisible(): boolean {
+    return useSlotEnv("experimental_useTabVisible").tabVisible;
+  },
   experimental_copyToClipboard(
     content: ExperimentalClipboardContent,
   ): Promise<boolean> {
@@ -1885,6 +1902,7 @@ const testPluginSdkApp = {
   },
   ThreadTitle: TestThreadTitle,
   experimental_ThreadStatusGlyph: TestThreadStatusGlyph,
+  experimental_ThreadRowMetadata: TestThreadRowMetadata,
   useEnvironmentProviders(): PluginEnvironmentProvidersState {
     return useSlotEnv("useEnvironmentProviders").environmentProviders;
   },
@@ -1981,9 +1999,10 @@ export interface CapturedPluginApp {
   experimentalSidebarFooterItems: CollectedExperimentalSidebarFooterItem[];
   threadLists: PluginThreadListRegistration[];
   experimentalSidebarNavigations: ExperimentalSidebarNavigationRegistration[];
-  threadHeaderActions: PluginThreadHeaderActionRegistration[];
+  threadHeaderActions: import("../internal/plugin-app-registration-collector.js").LegacyThreadHeaderActionRegistration[];
   threadContextSegments: ExperimentalThreadContextSegmentRegistration[];
   threadInfoRows: ExperimentalThreadInfoRowRegistration[];
+  threadRowMetadata: ExperimentalThreadRowMetadataRegistration<unknown>[];
   threadInfoSections: ExperimentalThreadInfoSectionRegistration[];
   threadActions: PluginThreadActionRegistration<unknown>[];
   browserToolbarActions: ExperimentalPluginBrowserToolbarActionRegistration[];
@@ -2330,6 +2349,11 @@ export interface RenderSlotOptions<
    * false for every target.
    */
   canOpenFileExternally?: (target: ExperimentalLiveFileTarget) => boolean;
+  /**
+   * Answer for `experimental_useTabVisible()`. Omitted → true, as for a tab
+   * that is selected in an open panel.
+   */
+  tabVisible?: boolean;
   /** Host acceptance for `useBbNavigate().experimental_openTerminal`. */
   openTerminal?: (
     options: Parameters<BbNavigate["experimental_openTerminal"]>[0],
@@ -3235,6 +3259,7 @@ export function renderSlot<
     providers,
     codeTheme,
     canOpenFileExternally: options.canOpenFileExternally ?? (() => false),
+    tabVisible: options.tabVisible ?? true,
     branchesState: {
       branches: options.branchesState?.branches ?? [],
       remoteBranches: options.branchesState?.remoteBranches ?? [],

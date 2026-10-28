@@ -858,7 +858,7 @@ describe("workflow thread panel", () => {
     let stopped = false;
     const slot = renderSlot(
       app.threadPanelActions[0]!,
-      { threadId: "thr_origin", params: { runId: run.id } },
+      { threadId: "thr_origin", environment: null, params: { runId: run.id } },
       {
         rpc: {
           workflowRunView: () => ({
@@ -908,7 +908,7 @@ describe("workflow thread panel", () => {
   ])("keeps local spacing while showing %s", async (_name, workflowRunView) => {
     const slot = renderSlot(
       app.threadPanelActions[0]!,
-      { threadId: "thr_origin", params: { runId: run.id } },
+      { threadId: "thr_origin", environment: null, params: { runId: run.id } },
       { rpc: { workflowRunView } },
     );
 
@@ -928,6 +928,7 @@ describe("workflow thread panel", () => {
       app.threadPanelActions[0]!,
       {
         threadId: "thr_origin",
+        environment: null,
         params: { runId: run.id, unexpected: true },
       },
       { rpc: {} },

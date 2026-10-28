@@ -35,9 +35,9 @@ import {
   type PluginSettingsSectionProps,
   type PluginSidebarFooterActionProps,
   type PluginSourceCodeRendererProps,
-  type PluginThreadHeaderActionProps,
   type ExperimentalThreadContextSegmentProps,
   type ExperimentalThreadInfoProps,
+  type ExperimentalThreadRowMetadataProps,
   type PluginThreadActionItemInput,
   type ExperimentalPluginBrowserToolbarActionProps,
   type PluginThreadListProps,
@@ -284,8 +284,8 @@ type SlotPropsByName = {
   sidebarFooterAction: PluginSidebarFooterActionProps;
   experimental_threadList: PluginThreadListProps;
   experimental_sidebarNavigation: ExperimentalSidebarNavigationProps;
-  experimental_threadHeaderAction: PluginThreadHeaderActionProps;
   experimental_threadContextSegment: ExperimentalThreadContextSegmentProps;
+  experimental_threadRowMetadata: ExperimentalThreadRowMetadataProps;
   experimental_threadInfoRow: ExperimentalThreadInfoProps;
   experimental_threadInfoSection: ExperimentalThreadInfoProps;
   experimental_threadAction: PluginThreadActionItemInput<unknown>;
@@ -363,7 +363,7 @@ const FRONTEND_SLOT_PROP_FIELDS = {
   settingsSection: [],
   experimental_appOverlay: [],
   navPanel: ["subPath"],
-  experimental_tab: ["threadId", "subPath", "params"],
+  experimental_tab: ["threadId", "environment", "subPath", "params"],
   experimental_newThreadPanelAction: ["projectId", "params"],
   pendingInteraction: ["interaction", "submit", "cancel"],
   sidebarFooterAction: [],
@@ -373,11 +373,6 @@ const FRONTEND_SLOT_PROP_FIELDS = {
     "isCompactViewport",
     "onNavigate",
     "searchQuery",
-  ],
-  experimental_threadHeaderAction: [
-    "threadId",
-    "projectId",
-    "isCompactViewport",
   ],
   experimental_threadContextSegment: [
     "threadId",
@@ -389,6 +384,7 @@ const FRONTEND_SLOT_PROP_FIELDS = {
   ],
   experimental_threadInfoRow: ["threadId", "projectId", "environment"],
   experimental_threadInfoSection: ["threadId", "projectId", "environment"],
+  experimental_threadRowMetadata: ["thread", "data"],
   experimental_threadAction: [
     "thread",
     "data",

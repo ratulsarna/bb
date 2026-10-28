@@ -276,6 +276,9 @@ importers:
       '@xterm/addon-fit':
         specifier: 0.12.0-beta.292
         version: 0.12.0-beta.292(@xterm/xterm@6.1.0-beta.292)
+      '@xterm/addon-search':
+        specifier: 0.17.0-beta.292
+        version: 0.17.0-beta.292(@xterm/xterm@6.1.0-beta.292)
       '@xterm/addon-unicode11':
         specifier: ^0.9.0
         version: 0.9.0
@@ -391,6 +394,9 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@bb/plugin-build':
+        specifier: workspace:*
+        version: link:../../packages/plugin-build
       '@bb/plugin-registry':
         specifier: workspace:*
         version: link:../../packages/plugin-registry
@@ -1598,9 +1604,6 @@ importers:
 
   packages/agent-runtime:
     dependencies:
-      '@bb/config':
-        specifier: workspace:*
-        version: link:../config
       '@bb/domain':
         specifier: workspace:*
         version: link:../domain
@@ -3029,12 +3032,27 @@ importers:
 
   packages/shared-ui:
     dependencies:
+      '@bb/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@bb/fuzzy-match':
+        specifier: workspace:*
+        version: link:../fuzzy-match
+      '@bb/thread-view':
+        specifier: workspace:*
+        version: link:../thread-view
+      '@get-bb/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
       '@hugeicons/core-free-icons':
         specifier: ^4.3.4
         version: 4.3.4
       '@hugeicons/react':
         specifier: ^1.1.6
         version: 1.1.6(react@19.3.0)
+      '@pierre/diffs':
+        specifier: ^1.2.9
+        version: 1.2.9(patch_hash=wdjikkl65wfpocm6wrflymrtdq)(@shikijs/themes@3.23.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -3044,7 +3062,13 @@ importers:
       tailwind-merge:
         specifier: ^3.4.0
         version: 3.4.0
+      usehooks-ts:
+        specifier: ^3.1.1
+        version: 3.1.1(react@19.3.0)
     devDependencies:
+      '@bb/test-helpers':
+        specifier: workspace:*
+        version: link:../test-helpers
       '@bb/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
@@ -3132,6 +3156,9 @@ importers:
       '@radix-ui/react-tooltip':
         specifier: ^1.2.12
         version: 1.2.12(@types/react-dom@19.2.7(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@testing-library/react':
+        specifier: ^16.3.2
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.7(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.10
@@ -3150,6 +3177,9 @@ importers:
       input-otp:
         specifier: ^1.4.2
         version: 1.4.2(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      jsdom:
+        specifier: ^29.0.1
+        version: 29.0.1(@noble/hashes@2.4.0)
       react:
         specifier: ^19.0.0
         version: 19.3.0
@@ -3168,6 +3198,9 @@ importers:
       recharts:
         specifier: ^2.15.4
         version: 2.15.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      sonner:
+        specifier: ^1.7.4
+        version: 1.7.4(patch_hash=ywi4zh4oqnjpviiknloue4elvi)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       tsrs:
         specifier: 0.18.0-ts7.1.0-dev.20260929
         version: 0.18.0-ts7.1.0-dev.20260929
@@ -3177,6 +3210,9 @@ importers:
       vaul:
         specifier: ^1.1.2
         version: 1.1.2(@types/react-dom@19.2.7(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      vitest:
+        specifier: ^4.1.1
+        version: 4.1.1(@opentelemetry/api@1.9.1)(@types/node@22.19.10)(jsdom@29.0.1(@noble/hashes@2.4.0))(msw@2.12.14(@types/node@22.19.10)(@typescript/typescript6@6.0.2))(vite@8.0.12(@types/node@22.19.10)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.1)(yaml@2.9.1))
 
   packages/skill-index:
     dependencies:
@@ -4479,9 +4515,24 @@ importers:
       '@bb/server-contract':
         specifier: workspace:*
         version: link:../../packages/server-contract
+      '@bb/shared-ui':
+        specifier: workspace:*
+        version: link:../../packages/shared-ui
+      '@tanstack/react-virtual':
+        specifier: 3.14.20
+        version: 3.14.20(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       bb-environment-provider-host:
         specifier: workspace:*
         version: link:../../packages/environment-provider-host
+      mime-types:
+        specifier: ^3.0.2
+        version: 3.0.2
+      picomatch:
+        specifier: ^4.0.5
+        version: 4.0.5
+      usehooks-ts:
+        specifier: ^3.1.1
+        version: 3.1.1(react@19.3.0)
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -4498,9 +4549,36 @@ importers:
       '@get-bb/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@testing-library/react':
+        specifier: ^16.3.2
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.7(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@types/mime-types':
+        specifier: ^3.0.1
+        version: 3.0.1
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.10
+      '@types/picomatch':
+        specifier: ^4.0.3
+        version: 4.0.3
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.0.0
+        version: 19.2.7(@types/react@19.3.0)
+      jsdom:
+        specifier: ^29.0.1
+        version: 29.0.1(@noble/hashes@2.4.0)
+      react:
+        specifier: ^19.0.0
+        version: 19.3.0
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.3.0(react@19.3.0)
+      sonner:
+        specifier: ^1.7.4
+        version: 1.7.4(patch_hash=ywi4zh4oqnjpviiknloue4elvi)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       tsrs:
         specifier: 0.18.0-ts7.1.0-dev.20260929
         version: 0.18.0-ts7.1.0-dev.20260929
@@ -4593,6 +4671,9 @@ importers:
       '@get-bb/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@testing-library/dom':
+        specifier: ^10.4.1
+        version: 10.4.1
       '@testing-library/react':
         specifier: ^16.3.2
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.7(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -5568,6 +5649,9 @@ importers:
       react-dom:
         specifier: ^19.0.0
         version: 19.3.0(react@19.3.0)
+      sonner:
+        specifier: ^1.7.4
+        version: 1.7.4(patch_hash=ywi4zh4oqnjpviiknloue4elvi)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       tsrs:
         specifier: 0.18.0-ts7.1.0-dev.20260929
         version: 0.18.0-ts7.1.0-dev.20260929
@@ -11457,6 +11541,11 @@ packages:
 
   '@xterm/addon-fit@0.12.0-beta.292':
     resolution: {integrity: sha512-SIuWR0KM2IpmumVqL4L43aOUeTEUeN82ItyrUFHGFtfj3veoAIbPapxJPj7O0tYngfiiHZqqm1+XsZp/Fc8LLA==}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.292
+
+  '@xterm/addon-search@0.17.0-beta.292':
+    resolution: {integrity: sha512-F12brJvBETblxh7NGu9RmHwcavcJJvd9RWjPID+WZg9mJcFucDjZTOSrWZyWRPCn/+8NWadsFAQynFFmBMo2Ng==}
     peerDependencies:
       '@xterm/xterm': ^6.1.0-beta.292
 
@@ -22050,9 +22139,7 @@ snapshots:
       metro-runtime: 0.87.1
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.6': {}
 
@@ -23805,6 +23892,10 @@ snapshots:
     dependencies:
       '@xterm/xterm': 6.1.0-beta.292
 
+  '@xterm/addon-search@0.17.0-beta.292(@xterm/xterm@6.1.0-beta.292)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.292
+
   '@xterm/addon-unicode11@0.9.0': {}
 
   '@xterm/addon-web-links@0.13.0-beta.292(@xterm/xterm@6.1.0-beta.292)':
@@ -24829,7 +24920,7 @@ snapshots:
   css-tree@3.2.1:
     dependencies:
       mdn-data: 2.27.1
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   css-what@6.2.2: {}
 

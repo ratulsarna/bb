@@ -938,9 +938,6 @@ function RootComposeSurface({
     drawerVisibility: secondaryPanelDrawerVisibility,
     isCompactViewport,
     isPersistedOpen: isPersistedSecondaryPanelOpen,
-    openPersistedCommitDiff: () => undefined,
-    openPersistedDiffFile: () => undefined,
-    openPersistedDiffPanel: () => undefined,
     openPersistedHostFile: panelFiles.openHostFile,
     openPersistedPanel: setRootSecondaryPanel,
     openPersistedStorageFile: panelFiles.openStorageFile,
@@ -1569,7 +1566,6 @@ function RootComposeSurface({
                 onToggleSecondaryPanel={handleToggleSecondaryPanel}
                 secondaryPanel={{
                   activeTab: activeFixedSecondaryTab,
-                  canUseGitUi: false,
                   environmentId: rootPanelEnvironmentId ?? undefined,
                   metadataContent: rootPanelMetadataContent,
                   workspaceRootPath:

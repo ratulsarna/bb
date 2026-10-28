@@ -13,7 +13,11 @@ saved servers, This device settings (appearance, haptics, notifications,
 reload the page, clear website data), push registration and notification
 taps, deep links, quick actions, share intents and the connection banner.
 External links use the web app's `shellOpenExternal` helper and the native
-bridge to open through the OS URL handler. The `Mobile E2E` GitHub workflow
+bridge to open through the OS URL handler. Application links use the version-3
+`open-application` request: the shared web UI handles confirmation and saved
+approvals in site-local localStorage; the native client validates the destination,
+launches it, and reports opening errors back to the page. Older web pages keep the existing bridge
+capabilities; no new capability enum value is advertised. The `Mobile E2E` GitHub workflow
 drives the shell flows.
 
 ## Structure

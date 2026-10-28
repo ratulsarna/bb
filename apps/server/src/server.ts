@@ -17,7 +17,12 @@ import {
   INSTALL_MACHINE_SCRIPT_PATH,
   INSTALL_MACHINE_WINDOWS_SCRIPT_PATH,
 } from "./install-machine-asset.js";
+import { getExperiments } from "@bb/db";
 import { createNodeWebSocket } from "@hono/node-ws";
+import {
+  declineWebSocketCompression,
+  WEB_SOCKET_COMPRESSION,
+} from "./ws/compression.js";
 import { createGateKeyStore } from "./services/connect-next/gate-keys.js";
 import {
   createTunnelIngressManager,
@@ -476,6 +481,7 @@ export function createApp(
   const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({
     app,
   });
+  wss.options.perMessageDeflate = WEB_SOCKET_COMPRESSION;
   const tunnelIngressNow = options?.tunnelIngressNow ?? Date.now;
   const tunnelIngress = createTunnelIngressManager({
     app,
@@ -988,6 +994,9 @@ export function createApp(
     "/ws",
     upgradeWebSocket((context) => {
       assertBrowserWebSocketAllowed(context);
+      if (!getExperiments(deps.db).websocketCompression) {
+        declineWebSocketCompression(context);
+      }
       return {
         onOpen: (_event, socket) => onClientSocketOpen(deps.hub, socket),
         onMessage: (event, socket) =>
@@ -1001,6 +1010,7 @@ export function createApp(
     "/ws/terminals/:terminalId",
     upgradeWebSocket((context) => {
       assertBrowserWebSocketAllowed(context);
+      declineWebSocketCompression(context);
       const terminalId = context.req.param("terminalId");
       const query = terminalWebSocketQuerySchema.safeParse({
         outputAcks: context.req.query("outputAcks"),
@@ -1039,6 +1049,7 @@ export function createApp(
   app.get(
     "/internal/ws",
     upgradeWebSocket(async (context) => {
+      declineWebSocketCompression(context);
       const websocketContext = await validateDaemonWebSocket(deps, {
         authorizationHeader: context.req.header("authorization"),
         protocolHeader: context.req.header("sec-websocket-protocol"),

@@ -1581,7 +1581,7 @@ describe("Docs nav panel", () => {
     const openTab = vi.fn(() => true);
     const slot = renderSlot(
       app.threadPanelActions[0]!,
-      { threadId: "thr_1", params: null },
+      { threadId: "thr_1", environment: null, params: null },
       {
         experimental_panel: { openTab },
         rpc: {
@@ -1621,6 +1621,7 @@ describe("Docs nav panel", () => {
       app.threadPanelActions[0]!,
       {
         threadId: "thr_1",
+        environment: null,
         params: {
           vaultId: "personal",
           path: "plans/panel-release.md",
@@ -1746,6 +1747,7 @@ describe("Docs nav panel", () => {
               app.threadPanelActions[0]!,
               {
                 threadId: "thr_1",
+                environment: null,
                 params: { vaultId: "personal", path, title: "Metrics" },
               },
               options,

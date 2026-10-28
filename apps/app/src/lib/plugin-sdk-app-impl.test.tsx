@@ -1,17 +1,35 @@
 // @vitest-environment jsdom
 
+import {
+  createApplicationLinkApprovals,
+  APPLICATION_LINK_APPROVALS_STORAGE_KEY,
+} from "@bb/domain/application-link-approvals";
+import { ApplicationLinkApprovalsSettings } from "@/components/settings/ApplicationLinkApprovalsSettings";
+import { appQueryClient as approvalQueryClient } from "./app-query-client";
+
+import { LazyPluginMarkdown } from "@/components/plugin/lazy-plugin-renderers";
 import { LazyMarkdownHtml } from "@/components/ui/lazy-markdown-html";
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
+import { twMerge } from "tailwind-merge";
 import { beforeAll, afterEach, describe, expect, it, vi } from "vitest";
 import { PluginSlotMount } from "@/components/plugin/PluginSlotMount";
 import { ThreadTimelineNavigationProvider } from "@/components/thread/timeline/ThreadTimelineNavigationContext";
 import { pluginSdkAppImplementation } from "./plugin-sdk-app-impl";
 import { AppNavigationHostProvider } from "./app-navigation-host";
 
-beforeAll(() => LazyMarkdownHtml.preload());
+beforeAll(() =>
+  Promise.all([LazyMarkdownHtml.preload(), LazyPluginMarkdown.preload()]),
+);
 
 afterEach(cleanup);
 
@@ -249,4 +267,117 @@ describe("plugin SDK navigation components", () => {
       location: null,
     });
   });
+});
+
+function splitVariants(className: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < className.length; index += 1) {
+    const char = className[index];
+    if (char === "[" || char === "(") depth += 1;
+    else if (char === "]" || char === ")") depth -= 1;
+    else if (char === ":" && depth === 0) {
+      parts.push(className.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(className.slice(start));
+  return parts;
+}
+
+function utilitiesOverriddenByVariants(root: Element): string[] {
+  return [root, ...root.querySelectorAll("*")].flatMap((element) => {
+    const classes = [...element.classList];
+    const unconditional = classes.filter(
+      (name) => splitVariants(name).length === 1,
+    );
+    return classes.flatMap((variantClass) => {
+      const parts = splitVariants(variantClass);
+      if (parts.length === 1) return [];
+      const utility = parts[parts.length - 1];
+      return unconditional
+        .filter(
+          (name) => !twMerge(`${name} ${utility}`).split(" ").includes(name),
+        )
+        .map((name) => `${name} + ${variantClass}`);
+    });
+  });
+}
+
+describe("plugin SDK detail rows", () => {
+  it("never pair a base utility with a variant a plugin's later copy of that utility would override", () => {
+    const DetailRow = pluginSdkAppImplementation.experimental_DetailRow;
+    const { container } = render(
+      <dl>
+        <DetailRow icon="GitBranch" label="Branch">
+          main
+        </DetailRow>
+        <DetailRow label="Git status" align="start">
+          Even with main
+        </DetailRow>
+      </dl>,
+    );
+
+    expect(container.querySelector("dt svg")).not.toBeNull();
+    expect(utilitiesOverriddenByVariants(container)).toEqual([]);
+  });
+});
+
+describe("application approval management", () => {
+  afterEach(() => {
+    localStorage.removeItem(APPLICATION_LINK_APPROVALS_STORAGE_KEY);
+    approvalQueryClient.clear();
+  });
+
+  it.each(["settings", "plugin"] as const)(
+    "revokes through %s and updates the shared settings list",
+    async (surface) => {
+      const store = createApplicationLinkApprovals({
+        read: () =>
+          localStorage.getItem(APPLICATION_LINK_APPROVALS_STORAGE_KEY),
+        write: (value) =>
+          localStorage.setItem(APPLICATION_LINK_APPROVALS_STORAGE_KEY, value),
+      });
+      store.allow("linear", store.revision());
+      store.allow("reflect", store.revision());
+      render(
+        <QueryClientProvider client={approvalQueryClient}>
+          <ApplicationLinkApprovalsSettings />
+        </QueryClientProvider>,
+      );
+      await screen.findByRole("button", { name: "Remove linear approval" });
+      if (surface === "settings") {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Remove linear approval" }),
+        );
+      } else {
+        await act(() =>
+          pluginSdkAppImplementation.experimental_revokeApplicationLinkApproval(
+            "linear",
+          ),
+        );
+      }
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", { name: "Remove linear approval" }),
+        ).toBeNull(),
+      );
+      expect(
+        await pluginSdkAppImplementation.experimental_getApplicationLinkApprovals(),
+      ).toEqual(["reflect"]);
+      if (surface === "settings")
+        fireEvent.click(
+          screen.getByRole("button", { name: "Remove reflect approval" }),
+        );
+      else
+        await act(() =>
+          pluginSdkAppImplementation.experimental_revokeApplicationLinkApproval(
+            null,
+          ),
+        );
+      await screen.findByText(/^No apps are always allowed\./u);
+      expect(store.list()).toEqual([]);
+    },
+  );
 });

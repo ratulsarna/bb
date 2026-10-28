@@ -230,10 +230,10 @@ experimental_Original }` — draws the sidebar navigation. Registration:
   navigation is active. Read items and host actions
   with `experimental_useSidebarNavigation()`. Exclusive; see
   frontend-sidebar-navigation.md. Experimental: see `docs/api_to_audit.md`.
-- `experimental_threadList`, `experimental_threadHeaderAction`,
+- `experimental_threadList`, `experimental_threadRowMetadata`,
   `experimental_threadInfoRow`, `experimental_threadInfoSection`,
-  `experimental_threadAction`, and `experimental_browserToolbarAction` are
-  covered in frontend-registration.md.
+  `experimental_threadAction` (menu entries and header buttons), and
+  `experimental_browserToolbarAction` are covered in frontend-registration.md.
 - `fileOpener` → `{ path: string, source, experimental_lineRange?, Original }` — register as a viewer/editor
   for file extensions: `{ id, title, extensions: ["md"], component }`.
   Matching files use the first applicable opener in deterministic slot order
@@ -289,8 +289,11 @@ and testable outside the plugin runtime.
 ## Tab API migration
 
 Use `app.slots.experimental_tab` for tabs on thread and plugin navigation pages.
-Declare `context: { kind: "thread" }` for `{ threadId }`, or
+Declare `context: { kind: "thread" }` for `{ threadId, environment }`, or
 `context: { kind: "nav-panel", panelId: "board" }` for `{ subPath }`.
+`environment` is `{ id }` taken straight from the thread, null only when the
+thread has no environment; read anything else about it (status, path) yourself
+and show the tab's own loading, failure and Retry.
 Choose `availability: "fixed"` for one non-closable destination or `"action"`
 for a launcher opening closable instances with persisted JSON `params`.
 Only actions accept `run`, default `params`, and per-open `params`/`title`.
