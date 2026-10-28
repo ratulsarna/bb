@@ -102,8 +102,8 @@ import {
   type AppInstall,
 } from "@bb/config/app-install";
 import {
-  BB_CLI_REEXEC_ENV,
   CLI_LAUNCHER_ENV_NAME,
+  CLI_REEXEC_ENV_NAME,
 } from "@bb/config/cli-command";
 import { z } from "zod";
 import { resolveAppInstall } from "./app-install.js";
@@ -2751,7 +2751,7 @@ export async function runBundledCliCommand(
   args: RunBundledCliCommandArgs,
 ): Promise<number> {
   const cliOverride =
-    args.env[BB_CLI_REEXEC_ENV] === "1"
+    args.env[CLI_REEXEC_ENV_NAME] === "1"
       ? null
       : (toOptionalString(args.env.BB_CLI) ?? null);
   const launch = resolveBundledCliLaunch({
@@ -2763,7 +2763,7 @@ export async function runBundledCliCommand(
   });
   const env = createCliEnv({ context: args.context, env: args.env });
   if (cliOverride !== null) {
-    env[BB_CLI_REEXEC_ENV] = "1";
+    env[CLI_REEXEC_ENV_NAME] = "1";
   }
   const childProcess = spawn(launch.command, launch.args, {
     cwd: process.cwd(),
