@@ -24,6 +24,7 @@ import type {
   ServiceTier,
   SessionOptionSelections,
   EnvironmentWorkspaceDisplayKind,
+  ThreadParentNotifications,
   ThreadQueuedWork,
   ThreadRuntimeDisplayStatus,
   ThreadStatus,
@@ -166,9 +167,21 @@ export interface ExperimentalQuestionShortcut {
 }
 
 /**
+ * A form-level action bb binds while a pending interaction is open: `submit`
+ * presses the form's primary button (Next, or Submit on the last question),
+ * `previous` and `next` show another question without submitting, and
+ * `cancel` presses the form's Cancel button.
+ */
+export type ExperimentalQuestionFormAction =
+  | "submit"
+  | "previous"
+  | "next"
+  | "cancel";
+
+/**
  * The keyboard shortcuts bb binds while a pending interaction is open. The
  * host owns the bindings (users can remap them); a form shows them and decides
- * what choosing an option means.
+ * what choosing an option or an action means.
  */
 export interface ExperimentalQuestionFormHost {
   /**
@@ -176,6 +189,11 @@ export interface ExperimentalQuestionFormHost {
    * option). Missing entries have no binding.
    */
   shortcuts: ReadonlyMap<string, ExperimentalQuestionShortcut>;
+  /** Shortcut per form action. Missing entries have no binding. */
+  actionShortcuts: ReadonlyMap<
+    ExperimentalQuestionFormAction,
+    ExperimentalQuestionShortcut
+  >;
   /**
    * Receive the index of the option the person chose with a shortcut while
    * the thread's pane is focused. Return true when the index names an option
@@ -183,6 +201,16 @@ export interface ExperimentalQuestionFormHost {
    * function to unregister.
    */
   registerChoiceHandler(handler: (index: number) => boolean): () => void;
+  /**
+   * Receive the action the person chose with a shortcut while the thread's
+   * pane is focused, or while focus is inside an element marked
+   * `data-question-form`, including its text fields. Return true when the form
+   * performed the action. The last registered handler wins; call the returned
+   * function to unregister.
+   */
+  registerActionHandler(
+    handler: (action: ExperimentalQuestionFormAction) => boolean,
+  ): () => void;
 }
 
 /**
@@ -1293,6 +1321,11 @@ export interface PluginSidebarThread {
    * when its owner stops); null when the thread owns its own lifecycle.
    */
   lifecycleOwnerThreadId: string | null;
+  /**
+   * Which of this child's outcomes wake its parent: "auto" (every outcome),
+   * "stuck" (failures, interruptions, and blockers), or "off".
+   */
+  parentNotifications: ThreadParentNotifications;
   /** The thread this one was forked from; null unless `originKind` is "fork". */
   sourceThreadId: string | null;
   sectionId: string | null;
@@ -1895,6 +1928,105 @@ export interface ExperimentalThreadInfoSectionRegistration {
 }
 
 /**
+ * Props passed to an `experimental_threadContextCardRow` or
+ * `experimental_threadContextCardSection` component.
+ */
+export interface ExperimentalThreadContextCardProps {
+  /**
+   * The thread shown in the pane. Every thread pane of a split layout has its
+   * own thread context card, so the component mounts once per visible thread;
+   * keep per-thread state in the component, never in a module-level singleton.
+   */
+  threadId: string;
+  projectId: string;
+  /**
+   * The thread's environment, taken from the thread; null only when the
+   * thread has no environment. Read its state (host, checkout, git) yourself.
+   */
+  environment: ExperimentalThreadEnvironment | null;
+}
+
+/**
+ * How a thread pane shows its thread context: `banner` in the context row
+ * above the composer, `card` in the thread context card at the pane's
+ * upper-right. bb picks one per pane.
+ */
+export type ExperimentalThreadContextKind = "banner" | "card";
+
+/**
+ * A row in the thread context card at a thread pane's upper-right, below the
+ * header, beside bb's own rows; the card's counterpart of
+ * `experimental_threadInfoRow`. Render one or more
+ * `experimental_ThreadContextCardRow` elements, or null to show nothing for
+ * this thread. bb draws the card and places it, and mounts rows only in panes
+ * whose thread context kind is `card`. A crash removes only this row for that
+ * thread.
+ */
+export interface ExperimentalThreadContextCardRowRegistration {
+  /** Unique within the plugin; letters, digits, `-`, `_`. */
+  id: string;
+  /**
+   * Rows sort by `group` (string compare), then by `order` within a group
+   * (unset sorts last), then by registration order, with bb's own rows first
+   * on a tie. Rows use the Info tab's groups,
+   * {@link PluginSdkApp.experimental_THREAD_INFO_ROW_GROUPS}; any other
+   * string is a group of its own, placed where it sorts.
+   */
+  group: string;
+  order?: number;
+  component: ComponentType<ExperimentalThreadContextCardProps>;
+}
+
+/**
+ * A titled section of the thread context card, below its rows; the card's
+ * counterpart of `experimental_threadInfoSection`. bb draws the title and a
+ * divider above it, and hides the section while its component renders
+ * nothing. A crash removes only this section for that thread.
+ */
+export interface ExperimentalThreadContextCardSectionRegistration {
+  /** Unique within the plugin; letters, digits, `-`, `_`. */
+  id: string;
+  /** Heading bb draws above the section's rows. */
+  title: string;
+  /**
+   * Sections sort by `group` (string compare), then by `order` within a group
+   * (unset sorts last), then by registration order, with bb's own sections
+   * first on a tie. Sections use the Info tab's groups,
+   * {@link PluginSdkApp.experimental_THREAD_INFO_SECTION_GROUPS}; any other
+   * string is a group of its own, placed where it sorts.
+   */
+  group: string;
+  order?: number;
+  component: ComponentType<ExperimentalThreadContextCardProps>;
+}
+
+/**
+ * Props of the host-owned `experimental_ThreadContextCardRow` component, the row
+ * bb's own card rows use: an icon, a label, an optional trailing value, and an
+ * optional second control. With `onClick` the label is a button.
+ */
+export interface ExperimentalThreadContextCardRowProps {
+  /** Icon drawn before the label, any name `experimental_Icon` accepts. */
+  icon?: BbIconName;
+  /** Drawn in the icon's place, such as an app or site icon; wins over `icon`. */
+  leading?: ReactNode;
+  label: ReactNode;
+  /** Drawn at the row's end, such as a count or `+4 −1`. */
+  trailing?: ReactNode;
+  /** Tooltip, and the accessible description when the label is truncated. */
+  title?: string;
+  disabled?: boolean;
+  /**
+   * A second control, such as a button that opens a menu. It takes the
+   * place of `trailing` while the row is hovered or focused or the control's
+   * menu is open, and always shows on touch screens.
+   */
+  action?: ReactNode;
+  /** Makes the label a button. */
+  onClick?(): void;
+}
+
+/**
  * Props of the host-owned `experimental_InfoSection` component — the heading,
  * count, and collapse control every Info tab section uses.
  */
@@ -1972,6 +2104,8 @@ export interface PluginThreadActionTarget {
   id: string;
   projectId: string;
   parentThreadId: string | null;
+  /** Which of this child's outcomes wake its parent; see `PluginSidebarThread`. */
+  parentNotifications: ThreadParentNotifications;
   archivedAt: number | null;
   pinnedAt: number | null;
   sectionId: string | null;
@@ -3194,6 +3328,42 @@ export interface ThreadChatMessageReference {
   experimental_messageSeq: number;
 }
 
+/** Stable identity and creation time of one rendered conversation message. */
+export type ExperimentalMessageMetadataContext = Pick<
+  ThreadChatMessageReference,
+  "id" | "threadId"
+> & {
+  /** Unix time in milliseconds, supplied by BB's timeline. */
+  createdAt: number;
+  /** The containing turn, or null for a message outside a turn. */
+  turnId: string | null;
+} & (
+    | { role: "user"; initiator: "user" | "agent" | "system" }
+    | { role: "assistant" }
+  );
+
+/** Props for a metadata component mounted only beside realized messages. */
+export interface ExperimentalMessageMetadataProps {
+  message: ExperimentalMessageMetadataContext;
+}
+
+/**
+ * Where message metadata renders. `"above"` sits over the message, aligned to
+ * its side. `"actionRow"` sits in the message's action row and shows and hides
+ * with the actions, before them on user messages and after the overflow menu
+ * on assistant messages. It extends into the space beside the message rather
+ * than narrowing the actions.
+ */
+export type ExperimentalMessageMetadataPlacement = "above" | "actionRow";
+
+/** A React contribution beside a conversation message. */
+export interface ExperimentalMessageMetadataRegistration {
+  id: string;
+  /** Omitted means above. */
+  placement?: ExperimentalMessageMetadataPlacement;
+  component: ComponentType<ExperimentalMessageMetadataProps>;
+}
+
 /** Context handed to a `messageAction`'s `run`. */
 export interface PluginMessageActionContext {
   /** The thread whose timeline surfaced the action. */
@@ -3578,6 +3748,22 @@ export interface PluginAppSlots {
     registration: ExperimentalThreadInfoSectionRegistration,
   ): void;
   /**
+   * Add a row to the thread context card of every thread pane (see
+   * {@link ExperimentalThreadContextCardRowRegistration}). Experimental: see
+   * docs/api_to_audit.md.
+   */
+  experimental_threadContextCardRow(
+    registration: ExperimentalThreadContextCardRowRegistration,
+  ): void;
+  /**
+   * Add a titled section to the thread context card of every thread pane (see
+   * {@link ExperimentalThreadContextCardSectionRegistration}). Experimental:
+   * see docs/api_to_audit.md.
+   */
+  experimental_threadContextCardSection(
+    registration: ExperimentalThreadContextCardSectionRegistration,
+  ): void;
+  /**
    * Add an action to every thread actions menu (see
    * {@link PluginThreadActionRegistration}). Experimental: see
    * docs/api_to_audit.md.
@@ -3620,6 +3806,10 @@ export interface PluginAppSlots {
     registration: ExperimentalCodeFenceRendererRegistration,
   ): void;
   messageAction(registration: PluginMessageActionRegistration): void;
+  /** Register React message metadata. Experimental: see docs/api_to_audit.md. */
+  experimental_messageMetadata(
+    registration: ExperimentalMessageMetadataRegistration,
+  ): void;
   /**
    * @deprecated Use `app.commands.register` with the same registration.
    * Both entry points share the same command registry and ID namespace.
@@ -4873,6 +5063,24 @@ export interface ExperimentalPanelController {
   /** Select the tab and reveal the side panel. */
   openTab(options: ExperimentalOpenTabOptions): boolean;
   /**
+   * The tabs open in this controller's side panel right now, the list
+   * `experimental_usePanelTabs()` follows: for commands and other code that is
+   * not a component. Closed and empty without a side panel.
+   */
+  getTabs(): ExperimentalPanelTabs;
+  /**
+   * Select any open tab, bb's or a plugin's, by its
+   * {@link ExperimentalPanelTab.key} and reveal the side panel; false for a
+   * key that is not open.
+   */
+  selectTab(key: string): boolean;
+  /**
+   * Close any open tab by its key, as its close button does; false for a key
+   * that is not open or a tab that cannot be closed. Closing a terminal's tab
+   * ends the terminal.
+   */
+  closeTab(key: string): boolean;
+  /**
    * Close the side panel if this tab is showing — a fixed tab selected with
    * the panel open (`target` is ignored), or the action tab instance with the
    * same `params` selected — otherwise `openTab(options)`.
@@ -4880,6 +5088,54 @@ export interface ExperimentalPanelController {
   toggleTab(options: ExperimentalOpenTabOptions): boolean;
   /** Close the side panel. */
   close(): boolean;
+}
+
+/** What an open side panel tab shows. */
+export type ExperimentalPanelTabDetail =
+  | { kind: "info" }
+  | { kind: "file"; path: string }
+  | { kind: "browser"; url: string }
+  | { kind: "terminal"; terminalId: string }
+  | { kind: "new-tab" }
+  | {
+      kind: "plugin";
+      pluginId: string;
+      tab: ExperimentalTabReference;
+      /** The action tab's params; null for fixed tabs and action tabs without. */
+      params: JsonValue | null;
+    }
+  | { kind: "plugin-details"; pluginId: string };
+
+/** One tab open in a surface's side panel. */
+export interface ExperimentalPanelTab {
+  /**
+   * Identifies the tab while it stays open; pass it to `selectTab`,
+   * `closeTab`, or `experimental_PanelTabIcon`. Do not store it: a reopened
+   * tab may get another key.
+   */
+  key: string;
+  /** The label bb's tab strip shows. */
+  title: string;
+  /** The strip's secondary label, such as a terminal's exit status. */
+  status: string | null;
+  /** False for tabs without a close button, such as Info and fixed tabs. */
+  closable: boolean;
+  detail: ExperimentalPanelTabDetail;
+}
+
+/** The tabs of one surface's side panel, in the order bb's tab strip shows them. */
+export interface ExperimentalPanelTabs {
+  /** Whether the side panel is showing. */
+  open: boolean;
+  /** The selected tab's key, or null when none is selected. */
+  selectedKey: string | null;
+  tabs: readonly ExperimentalPanelTab[];
+}
+
+/** Props of `experimental_PanelTabIcon`. */
+export interface ExperimentalPanelTabIconProps {
+  /** An {@link ExperimentalPanelTab.key}; renders nothing for a closed tab. */
+  tabKey: string;
 }
 
 /** Current app selection, derived from the route. */
@@ -5066,10 +5322,10 @@ export interface ExperimentalRpcMutationOptions<
 }
 
 /**
- * One mutation hook's state. `mutate` calls the RPC, invalidates the
- * response's `invalidated` tags on this client immediately, and resolves when
- * the server acknowledges the write. Matched reads refresh in the background. `error` holds the last failure
- * until the next `mutate` or `reset`.
+ * One mutation hook's state. `mutate` calls the RPC and resolves when the
+ * server acknowledges the write. Reads refresh in the background when the
+ * server marks their tags stale with `bb.rpc.experimental_invalidate`.
+ * `error` holds the last failure until the next `mutate` or `reset`.
  */
 export interface ExperimentalRpcMutationState<
   Method extends PluginRpcMethodContract,
@@ -5081,6 +5337,32 @@ export interface ExperimentalRpcMutationState<
   pendingInputs: readonly StandardSchemaV1InferInput<Method["input"]>[];
   error: experimental_PluginRpcCallError | null;
   reset(): void;
+}
+
+/**
+ * A bb server this client can switch to (see
+ * {@link PluginSdkApp.experimental_useServers}).
+ */
+export interface ExperimentalServer {
+  /** Stable while the user keeps the server. Editing a custom server's URL gives it a new id. */
+  id: string;
+  name: string;
+  /** Scheme, host and port only, never login details or a path. */
+  origin: string;
+  /** `local` is bb Desktop's built-in server, `account` comes from the user's bb account, and `custom` is an address the user added. */
+  kind: "local" | "account" | "custom";
+  /** True for the server this page is loaded from. */
+  active: boolean;
+}
+
+/** The viewing client's servers (see {@link PluginSdkApp.experimental_useServers}). */
+export interface ExperimentalServers {
+  /** `loading` until bb Desktop answers, briefly after the page loads. The mobile app's list is ready at once. */
+  status: "loading" | "ready";
+  /** In the client's own order; empty while loading. Changes as the user adds, renames or removes servers. */
+  servers: readonly ExperimentalServer[];
+  /** Switch this client to the server and reload the page on it, unloading every plugin. Ignores the active server and unknown ids. */
+  switchTo(id: string): void;
 }
 
 /**
@@ -5160,6 +5442,15 @@ export interface PluginSdkApp {
    * docs/api_to_audit.md.
    */
   experimental_useExperiment(key: string): boolean;
+  /**
+   * How the thread pane the calling component renders in shows its thread
+   * context (see {@link ExperimentalThreadContextKind}); `banner` outside a
+   * thread pane. A context segment whose content is also a thread context card
+   * row or section hides itself in `useVisible` while this is `card`; other
+   * segments keep showing above the composer.
+   * Experimental: see docs/api_to_audit.md.
+   */
+  experimental_useThreadContextKind(): ExperimentalThreadContextKind;
   useBbContext(): BbContext;
   /**
    * The id of the plugin that owns the calling component: the same id
@@ -5198,10 +5489,23 @@ export interface PluginSdkApp {
    */
   experimental_useTabVisible(): boolean;
   /**
+   * The servers this client can switch between, the list bb's command palette
+   * offers. Null when the client keeps no server list: any web browser.
+   */
+  experimental_useServers(): ExperimentalServers | null;
+  /**
    * The side panel of the surface the calling component renders in: the
    * thread view, the plugin page, or the New thread screen.
    */
   experimental_useAppPanel(): ExperimentalPanelController;
+  /**
+   * The tabs open in the side panel of the surface the calling component
+   * renders in, following live changes: the same list bb's tab strip shows.
+   * Closed and empty on a surface without a side panel. Act on a tab with
+   * `experimental_useAppPanel().selectTab` or `closeTab`. Experimental: see
+   * docs/api_to_audit.md.
+   */
+  experimental_usePanelTabs(): ExperimentalPanelTabs;
   /** Read or clear the owning tab's validated, session-scoped target. */
   experimental_useFixedTabTarget<Target extends JsonValue>(
     tab:
@@ -5606,6 +5910,19 @@ export interface PluginSdkApp {
    * Experimental: see docs/api_to_audit.md.
    */
   experimental_DetailRow: ComponentType<ExperimentalDetailRowProps>;
+  /**
+   * The thread context card's row (see
+   * {@link ExperimentalThreadContextCardRowProps}), the one bb's own entries
+   * use.
+   * Experimental: see docs/api_to_audit.md.
+   */
+  experimental_ThreadContextCardRow: ComponentType<ExperimentalThreadContextCardRowProps>;
+  /**
+   * The icon bb's tab strip draws for an open side panel tab (see
+   * {@link ExperimentalPanelTabIconProps}). Experimental: see
+   * docs/api_to_audit.md.
+   */
+  experimental_PanelTabIcon: ComponentType<ExperimentalPanelTabIconProps>;
   /**
    * The thread Info tab's list (see {@link ExperimentalInfoListProps}), the
    * one bb's own sections use. Experimental: see docs/api_to_audit.md.

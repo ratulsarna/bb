@@ -1,4 +1,5 @@
 import { coreTabs } from "@/components/secondary-panel/thread-info-registration";
+import { coreMessageMetadata } from "@/components/thread/timeline/core-message-metadata";
 import { setAppIcons } from "@bb/shared-ui/icon-registry";
 import { useSyncExternalStore } from "react";
 import type {
@@ -14,6 +15,7 @@ import type {
   PluginFileOpenerRegistration,
   PluginHomepageSectionRegistration,
   PluginMessageActionRegistration,
+  ExperimentalMessageMetadataRegistration,
   PluginMessageDirectiveRegistration,
   PluginNavPanelRegistration,
   PluginNewThreadPanelActionRegistration,
@@ -25,6 +27,8 @@ import type {
   ExperimentalThreadInfoRowRegistration,
   ExperimentalThreadRowMetadataRegistration,
   ExperimentalThreadInfoSectionRegistration,
+  ExperimentalThreadContextCardRowRegistration,
+  ExperimentalThreadContextCardSectionRegistration,
   PluginThreadActionRegistration,
   ExperimentalPluginBrowserToolbarActionRegistration,
   PluginThreadListRegistration,
@@ -63,6 +67,8 @@ export interface PluginRegistrationSet {
   threadInfoRows?: readonly ExperimentalThreadInfoRowRegistration[];
   threadRowMetadata?: readonly ExperimentalThreadRowMetadataRegistration<unknown>[];
   threadInfoSections?: readonly ExperimentalThreadInfoSectionRegistration[];
+  threadContextCardRows?: readonly ExperimentalThreadContextCardRowRegistration[];
+  threadContextCardSections?: readonly ExperimentalThreadContextCardSectionRegistration[];
   threadActions?: readonly PluginThreadActionRegistration<unknown>[];
   browserToolbarActions?: readonly ExperimentalPluginBrowserToolbarActionRegistration[];
   fileOpeners: readonly PluginFileOpenerRegistration[];
@@ -72,6 +78,7 @@ export interface PluginRegistrationSet {
   messageDirectives: readonly PluginMessageDirectiveRegistration[];
   codeFenceRenderers?: readonly ExperimentalCodeFenceRendererRegistration[];
   messageActions?: readonly PluginMessageActionRegistration[];
+  messageMetadata?: readonly ExperimentalMessageMetadataRegistration[];
   commandPaletteActions?: readonly CollectedPluginCommandRegistration[];
   providerIcons?: readonly CollectedPluginProviderIconRegistration[];
   icons?: readonly ExperimentalIconRegistration[];
@@ -137,6 +144,10 @@ export interface PluginThreadRowMetadataSlot
     PluginSlotBase {}
 export interface PluginThreadInfoSectionSlot
   extends ExperimentalThreadInfoSectionRegistration, PluginSlotBase {}
+export interface PluginThreadContextCardRowSlot
+  extends ExperimentalThreadContextCardRowRegistration, PluginSlotBase {}
+export interface PluginThreadContextCardSectionSlot
+  extends ExperimentalThreadContextCardSectionRegistration, PluginSlotBase {}
 export interface PluginThreadActionSlot
   extends PluginThreadActionRegistration<unknown>, PluginSlotBase {}
 export interface PluginBrowserToolbarActionSlot
@@ -155,6 +166,8 @@ export interface PluginCodeFenceRendererSlot
   extends ExperimentalCodeFenceRendererRegistration, PluginSlotBase {}
 export interface PluginMessageActionSlot
   extends PluginMessageActionRegistration, PluginSlotBase {}
+export interface PluginMessageMetadataSlot
+  extends ExperimentalMessageMetadataRegistration, PluginSlotBase {}
 export type PluginCommandPaletteActionSlot =
   CollectedPluginCommandRegistration & PluginSlotBase;
 interface PluginIconSlot extends ExperimentalIconRegistration, PluginSlotBase {}
@@ -185,6 +198,8 @@ export interface PluginSlotSnapshot {
   threadInfoRows: readonly PluginThreadInfoRowSlot[];
   threadRowMetadata: readonly PluginThreadRowMetadataSlot[];
   threadInfoSections: readonly PluginThreadInfoSectionSlot[];
+  threadContextCardRows: readonly PluginThreadContextCardRowSlot[];
+  threadContextCardSections: readonly PluginThreadContextCardSectionSlot[];
   threadActions: readonly PluginThreadActionSlot[];
   browserToolbarActions: readonly PluginBrowserToolbarActionSlot[];
   fileOpeners: readonly PluginFileOpenerSlot[];
@@ -194,6 +209,7 @@ export interface PluginSlotSnapshot {
   messageDirectives: readonly PluginMessageDirectiveSlot[];
   codeFenceRenderers: readonly PluginCodeFenceRendererSlot[];
   messageActions: readonly PluginMessageActionSlot[];
+  messageMetadata: readonly PluginMessageMetadataSlot[];
   commandPaletteActions: readonly PluginCommandPaletteActionSlot[];
   providerIcons: readonly PluginProviderIconSlot[];
   icons: readonly PluginIconSlot[];
@@ -220,6 +236,8 @@ export const EMPTY_PLUGIN_SLOT_SNAPSHOT: PluginSlotSnapshot = {
   threadInfoRows: [],
   threadRowMetadata: [],
   threadInfoSections: [],
+  threadContextCardRows: [],
+  threadContextCardSections: [],
   threadActions: [],
   browserToolbarActions: [],
   fileOpeners: [],
@@ -229,6 +247,7 @@ export const EMPTY_PLUGIN_SLOT_SNAPSHOT: PluginSlotSnapshot = {
   messageDirectives: [],
   codeFenceRenderers: [],
   messageActions: [],
+  messageMetadata: coreMessageMetadata,
   commandPaletteActions: [],
   providerIcons: [],
   icons: [],
@@ -262,6 +281,8 @@ const SLOT_KINDS: readonly SlotKind[] = [
   "threadInfoRows",
   "threadRowMetadata",
   "threadInfoSections",
+  "threadContextCardRows",
+  "threadContextCardSections",
   "threadActions",
   "browserToolbarActions",
   "fileOpeners",
@@ -271,6 +292,7 @@ const SLOT_KINDS: readonly SlotKind[] = [
   "messageDirectives",
   "codeFenceRenderers",
   "messageActions",
+  "messageMetadata",
   "commandPaletteActions",
   "providerIcons",
   "icons",
@@ -352,6 +374,8 @@ function flattenRegistrations(
     threadInfoRows: stamp(set.threadInfoRows),
     threadRowMetadata: stamp(set.threadRowMetadata),
     threadInfoSections: stamp(set.threadInfoSections),
+    threadContextCardRows: stamp(set.threadContextCardRows),
+    threadContextCardSections: stamp(set.threadContextCardSections),
     threadActions: stamp(set.threadActions),
     browserToolbarActions: stamp(set.browserToolbarActions),
     fileOpeners: stamp(set.fileOpeners),
@@ -361,6 +385,7 @@ function flattenRegistrations(
     messageDirectives: stamp(set.messageDirectives),
     codeFenceRenderers: stamp(set.codeFenceRenderers),
     messageActions: stamp(set.messageActions),
+    messageMetadata: stamp(set.messageMetadata),
     commandPaletteActions: stamp(set.commandPaletteActions),
     providerIcons: stamp(set.providerIcons),
     icons: stamp(set.icons),
@@ -388,6 +413,9 @@ function collectKind<K extends SlotKind>(
   const collected: PluginSlotSnapshot[K][number][] = [];
   if (kind === "tabs") {
     for (const slot of coreTabs) collected.push(slot);
+  }
+  if (kind === "messageMetadata") {
+    for (const slot of coreMessageMetadata) collected.push(slot);
   }
   for (const pluginId of pluginIds) {
     const flattened = flattenedByPluginId.get(pluginId);
@@ -541,6 +569,10 @@ export function beginPluginSlotBatch(options: {
     openBatchDepth = Math.max(0, openBatchDepth - 1);
     if (openBatchDepth === 0) flushChange();
   };
+}
+
+export function flushPluginSlotChanges(): void {
+  flushChange();
 }
 
 export function setPluginSlotRegistrations(

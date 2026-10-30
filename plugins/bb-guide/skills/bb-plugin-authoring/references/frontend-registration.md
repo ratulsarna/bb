@@ -211,7 +211,10 @@ below it. Props carry `threadId`, `projectId`, `environment` (null without a
 usable environment), the visible `segments`
 as `{ key, pluginId }` in row order (`key` is `<pluginId>/<id>`; bb's own use
 `bb--core`), and `isExpanded`/`onToggle` (one segment is expanded at a time).
-`useVisible(input)` false leaves it out.
+`useVisible(input)` false leaves it out. A segment whose content is also a
+thread context card row or section hides itself while
+`experimental_useThreadContextKind()` is `card`; see
+frontend-thread-context-card.md.
 
 ### An action in every thread menu
 
@@ -384,7 +387,8 @@ await sdk.threads.update({ id: thread.id, sectionId });
 
 // threads: PluginSidebarThread[] — id, projectId, href (put it on the row's
 // anchor; the host routes clicks in place), title, titleFallback,
-// displayTitle, parentThreadId, lifecycleOwnerThreadId, sourceThreadId, sectionId,
+// displayTitle, parentThreadId, parentNotifications ("auto" | "stuck" | "off"),
+// lifecycleOwnerThreadId, sourceThreadId, sectionId,
 // originKind, originPluginId, providerId, status (execution status; busy
 // threads sort first in bb's list), runtimeStatus (status refined by host
 // readiness), queuedWork ("none" | "waiting" | "failed"), hasPendingInteraction,

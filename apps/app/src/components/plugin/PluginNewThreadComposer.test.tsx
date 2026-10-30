@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { useContext, useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Provider } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -62,7 +62,7 @@ import {
 } from "@/lib/fixed-panel-tabs-state";
 import { buildPluginPaletteActions } from "@/lib/command-palette/palette-plugin-actions";
 import { getFocusedAppPanelController } from "@/lib/app-fixed-tab-navigation";
-import { PluginDetailPanelContext } from "./plugin-detail-navigation";
+import { useFixedPanelTabsState } from "@/lib/fixed-panel-tabs";
 import { openPluginDetailsInWorkspace } from "./plugin-detail-opener";
 import { PluginNewThreadComposer } from "./PluginNewThreadComposer";
 
@@ -90,6 +90,7 @@ function render(element: ReactNode) {
 }
 
 const mocks = vi.hoisted(() => ({
+  unknownReasoning: false,
   promptBoxProps: [] as Array<Record<string, any>>,
   copyAttachments: vi.fn(),
   uploadAttachment: vi.fn(),
@@ -114,10 +115,15 @@ vi.mock("@/views/RootComposePanelCommandHandlers", () => ({
   }: {
     onClose: () => boolean;
   }) => {
-    const details = useContext(PluginDetailPanelContext);
+    const { secondary } = useFixedPanelTabsState("root-compose", null);
+    const active = secondary.tabs.find(
+      (tab) => tab.id === secondary.activeTabId,
+    );
     return (
       <button
-        data-active-detail={details?.activePluginId ?? ""}
+        data-active-detail={
+          active?.kind === "plugin-detail" ? active.detailKey : ""
+        }
         onClick={onClose}
       >
         Close panel command
@@ -336,21 +342,27 @@ vi.mock("@/hooks/queries/system-queries", () => ({
                 displayName: "GPT-5.6",
                 isDefault: true,
                 sessionOptions: mocks.modelSessionOptions,
-                supportedReasoningEfforts: [
-                  { reasoningEffort: "low" },
-                  { reasoningEffort: "medium" },
-                  { reasoningEffort: "high" },
-                ],
+                reasoningDiscovery: "known" as const,
+                supportedReasoningEfforts: mocks.unknownReasoning
+                  ? []
+                  : [
+                      { reasoningEffort: "low" },
+                      { reasoningEffort: "medium" },
+                      { reasoningEffort: "high" },
+                    ],
               },
               {
                 model: "gpt-5.6-sol",
                 displayName: "GPT-5.6 Sol",
                 isDefault: false,
                 sessionOptions: mocks.modelSessionOptions,
-                supportedReasoningEfforts: [
-                  { reasoningEffort: "medium" },
-                  { reasoningEffort: "high" },
-                ],
+                reasoningDiscovery: "known" as const,
+                supportedReasoningEfforts: mocks.unknownReasoning
+                  ? []
+                  : [
+                      { reasoningEffort: "medium" },
+                      { reasoningEffort: "high" },
+                    ],
               },
             ],
             selectedOnlyModels: [],
@@ -690,6 +702,7 @@ describe("PluginNewThreadComposer seeding", () => {
     resetFixedPanelTabsStateForTest();
     mocks.closeTerminal.mockClear();
     mocks.modelSessionOptions = undefined;
+    mocks.unknownReasoning = false;
     mocks.promptBoxProps.length = 0;
     mocks.promptHistoryQueryOptions.length = 0;
     mocks.copyAttachments.mockReset();
@@ -930,6 +943,27 @@ describe("PluginNewThreadComposer seeding", () => {
     });
     expect(window.localStorage.getItem("bb.promptbox.machine-proj_1-1")).toBe(
       "host_2",
+    );
+  });
+
+  it("preserves the seeded reasoning preference when the model's levels are unknown", async () => {
+    mocks.unknownReasoning = true;
+    const submitted: NewThreadRequest[] = [];
+    renderComposer(
+      STORED_REQUEST,
+      (request) => {
+        submitted.push(request);
+      },
+      "unknown-reasoning",
+    );
+    await waitFor(() => {
+      expect(latestPromptBoxProps().disabled).toBe(false);
+    });
+    await submit();
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]?.reasoningLevel).toBe(STORED_REQUEST.reasoningLevel);
+    expect(submitted[0]?.executionInputSources?.reasoningLevel).toBe(
+      STORED_REQUEST.executionInputSources?.reasoningLevel,
     );
   });
 

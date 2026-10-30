@@ -516,6 +516,15 @@ like the matching thread menu item.
 | Composer  | Cycle reasoning effort forward / backward    | `Alt+T` / `Alt+Shift+T`     | All clients              |
 | Browser   | Focus location / reload / find in page       | `Mod+L` / `Mod+R` / `Mod+F` | Desktop embedded browser |
 | Questions | Choose visible answer 1–9                    | `1` … `9`                   | While a question is open |
+| Questions | Next question or submit answers              | `Mod+Enter`                 | While a question is open |
+| Questions | Previous / next question                     | `ArrowLeft` / `ArrowRight`  | Focus in a question card |
+| Questions | Cancel question                              | `Mod+.`                     | While a question is open |
+
+Question shortcuts act on the open question card in the focused pane. They
+skip text fields outside the card, so the composer keeps its own keys;
+`Mod+Enter` and `Mod+.` also work from the card's own answer field, where
+`Enter` goes to the next question or submits and `Shift+Enter` adds a line.
+Previous / next need focus in the card, outside its answer field.
 
 Cycle shortcuts act only from the active composer or an open picker; other
 editable controls keep their Option-composed input. Reasoning cycles through
@@ -809,6 +818,7 @@ list|get|set|reset` or `sdk.system.uiPreferences` (see
 | `sidebar.visiblePluginPanels` | Navigation destinations shown, or `null` for every destination                                                                                         |
 | `sidebar.footerOrder`         | Footer action order                                                                                                                                    |
 | `sidebar.hiddenFooterItems`   | Footer actions moved into More                                                                                                                         |
+| `threadContextCard.pinned`   | `true` (default) keeps a thread pane's thread context card open beside the transcript when the pane is wide enough; `false` opens it only from the header |
 | `infoPanel.collapsedSections` | Collapsed thread Info panel sections (`commits`, `uncommittedChanges`, `childThreads`, `forks`, `threadStorage`, or `<pluginId>/<sectionId>`)          |
 
 A legacy `__builtin__` thread list selection resolves to the bundled plugin.
@@ -864,7 +874,8 @@ The `earlyAdopter` general setting (the Become an early adopter banner on
 Settings → Experiments, `bb settings general earlyAdopter on`) switches the
 shipped default to the early adopter default: experiments marked Early adopter
 (currently `applicationLinks`, `timelinePush`, `compactExpiredCache`,
-`sidebarMultiSelect`, `unreadDividerAtAnswer`, and `websocketCompression`) turn on, and the rest stay
+`pluginUpdates`, `sidebarMultiSelect`, `skipFocusedThreadNotifications`,
+`unreadDividerAtAnswer`, and `websocketCompression`) turn on, and the rest stay
 off. An experiment you set yourself keeps your value either way.
 `/system/config` and `sdk.system.config()` return the resolved values in
 `experiments`.
@@ -898,6 +909,14 @@ off. An experiment you set yourself keeps your value either way.
   collection. The experiment itself applies live; turning it off restores
   normal logging and flushes the in-flight profile, keeping saved files. See
   [diagnostics](debugging-and-qa.md#opt-in-server-performance-diagnostics).
+- `pluginUpdates` (on for early adopters) adds a Plugins section to
+  Settings → Updates: one row per tracking plugin with an update (installed →
+  candidate version and an Update button), Update all for compatible updates,
+  and candidates blocked by `engines.bb` or `engines.bbPluginSdk` with the
+  reason. Opening the page re-checks tracking sources, and the sidebar updates
+  badge counts plugin updates. While it is off, the six-hourly background check,
+  `bb plugin outdated`, `bb plugin update`, and Settings → Installed plugins
+  work as before.
 - `sidebarMultiSelect` (on for early adopters) lets the built-in thread list
   select several threads: Cmd/Ctrl+Shift-click toggles a row (starting from the
   open thread), Shift-click selects the visible range from the last clicked row,
@@ -913,11 +932,32 @@ off. An experiment you set yourself keeps your value either way.
   them onto a composer as one mention per thread. Cmd/Ctrl-click still opens a
   thread in a split. Plugins read it with
   `experimental_useExperiment("sidebarMultiSelect")`.
+- `threadContextCard` moves a running thread's
+  details into the thread context card at the upper-right of its pane: bb's parent
+  thread and child threads, the Git plugin's changes, which open the Diff tab,
+  and GitHub PR Status's pull request. The context row above the
+  composer drops those segments and keeps other plugins' segments; the
+  project, environment, and branch stay below the composer, side chats keep
+  their context row, and a new thread's composer is unchanged.
+  A header button opens the card or pins it: a pinned card sits beside the
+  transcript in a wide pane and moves the transcript aside in a medium one,
+  and a narrow pane or window opens it over the transcript. Phones keep the
+  context row above the composer and show no card. Plugins read how a pane
+  shows thread context with `experimental_useThreadContextKind()`.
 - `threadRowMetadata` adds Metadata to the built-in thread list's Organize →
   Rows menu. With it checked (`showRowMetadata`), plugins draw details such as
   GitHub PR Status's pull request number on a line under each thread title.
   While the experiment is off the sidebar ignores `showRowMetadata`. Plugins
   read it with `experimental_useExperiment("threadRowMetadata")`.
+- `skipFocusedThreadNotifications` (on for early adopters) makes the
+  push-notifications plugin skip the web and desktop system notification for a
+  thread that is open in a visible, focused bb window or browser tab of the same
+  origin. Each such window holds a shared Web Lock for its thread, so the window
+  that claims a notification also sees threads focused in other windows. Other
+  threads, notifications without a thread, and mobile push are unaffected. The
+  plugin reads it with
+  `experimental_useExperiment("skipFocusedThreadNotifications")` and follows a
+  toggle live.
 - `timelinePush` makes an open thread view subscribe to its latest timeline
   window over the WebSocket (`thread-timeline` subscription target); the server
   pushes the full window once, then row deltas after new events, instead of the
@@ -1026,6 +1066,7 @@ skills.
 
 | Setting                      | Default | Effect                                                                                                                                                                                                                                                                |
 | ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subagentsDisabled`          | `false` | Removes native Agent, Task, and ListAgents tools from the model context. Changes restart Claude before the next turn, preserving the conversation.                                                                                                                    |
 | `disable1MContext`           | `false` | Sets `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` (`0` when off).                                                                                                                                                                                                               |
 | `chromeEnabled`              | `false` | Starts Claude Code with `--chrome` for Claude in Chrome tools, which bb otherwise leaves off even when the interactive `claude` CLI enables them; the host needs the extension and a claude.ai login (API-key sessions stay off).                                     |
 | `artifactsEnabled`           | `false` | Sets `CLAUDE_CODE_ARTIFACT=1` so Claude Code loads its Artifact tools (read, publish, and edit claude.ai artifacts), which it withholds from SDK sessions by default; when off, bb leaves any inherited value alone. Claude may publish private pages without asking. |

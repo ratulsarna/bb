@@ -58,6 +58,7 @@ import {
 } from "@bb/server-contract";
 import { z } from "zod";
 import { registerDesktopClipboardIpc } from "./desktop-clipboard.js";
+import { registerDesktopAttentionIpc } from "./desktop-attention.js";
 import { registerDesktopWindowFocusIpc } from "./desktop-window-focus.js";
 import {
   assertPathExists,
@@ -769,13 +770,19 @@ function listMenuConnectServers(): ConnectServerRef[] {
 }
 
 function listServerChoices() {
-  return buildDesktopServerChoices(serverTargetStore, listMenuConnectServers());
+  return buildDesktopServerChoices(
+    serverTargetStore,
+    listMenuConnectServers(),
+    builtinServerUrl,
+  );
 }
 
 function buildMenuServerItems(connectServers: ConnectServerRef[]) {
-  return buildDesktopServerChoices(serverTargetStore, connectServers).map(
-    ({ active, id, name }) => ({ checked: active, id, name }),
-  );
+  return buildDesktopServerChoices(
+    serverTargetStore,
+    connectServers,
+    builtinServerUrl,
+  ).map(({ active, id, name }) => ({ checked: active, id, name }));
 }
 
 function buildServerMenuArgs(): ServerMenuArgs {
@@ -2276,7 +2283,6 @@ async function createApplicationWindow(
     initialUrl: args.initialUrl,
     stateKey: args.stateKey,
   });
-  registerApplicationWindow(browserWindow);
   if (bbAppLoaded && shouldOpenDevTools()) {
     browserWindow.webContents.openDevTools({ mode: "detach" });
   }
@@ -2344,6 +2350,9 @@ async function finishQuit(): Promise<void> {
         `Could not save desktop window state: ${String(error)}`,
       ),
     );
+  for (const browserWindow of BrowserWindow.getAllWindows()) {
+    browserWindow.hide();
+  }
   await stopOwnedRuntime();
 }
 
@@ -2381,6 +2390,7 @@ function registerDesktopUpdateIpc(): void {
       desktopLogger.error(`Could not switch server: ${String(error)}`),
   });
   registerDesktopWindowFocusIpc(applicationWindowWebContentsIds);
+  registerDesktopAttentionIpc(applicationWindowWebContentsIds);
   registerDesktopClipboardIpc(applicationWindowWebContentsIds);
   ipcMain.on(BB_DESKTOP_ZOOM_COMMAND_CHANNEL, (event, payload: unknown) => {
     const parsed = bbDesktopZoomCommandSchema.safeParse(payload);
@@ -2906,6 +2916,11 @@ async function runDesktopApp(): Promise<void> {
     },
   });
 
+  app.setAppUserModelId(
+    DESKTOP_RELEASE_CHANNEL === "nightly"
+      ? "dev.bb.desktop.nightly"
+      : "dev.bb.desktop",
+  );
   if (app.isPackaged) {
     await hostToolchain.refresh();
     Object.assign(process.env, hostToolchain.environment());
@@ -3329,6 +3344,7 @@ async function runDesktopApp(): Promise<void> {
     openExternalUrl(openArgs) {
       void shell.openExternal(openArgs.url);
     },
+    onWindowCreated: registerApplicationWindow,
     preloadPath,
     userDataPath,
   });
@@ -3336,12 +3352,9 @@ async function runDesktopApp(): Promise<void> {
 
   refreshApplicationMenu();
   await loadLoadingView();
-  const restoredWindows = await desktopWindowFactory.restoreSavedWindows({
+  await desktopWindowFactory.restoreSavedWindows({
     initialUrl: currentWindowUrl,
   });
-  for (const browserWindow of restoredWindows) {
-    registerApplicationWindow(browserWindow);
-  }
   await activateLocalServerMoveIfLocked();
   if (
     serverTargetStore.getTarget().kind === "builtin" &&
