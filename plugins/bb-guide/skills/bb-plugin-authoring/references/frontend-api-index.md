@@ -22,8 +22,10 @@ Read the installed SDK declarations for the exact current signatures.
 - `experimental_useBranches`
 - `experimental_useCheckoutState`
 - `experimental_SourceCode`
+- `experimental_FilePreview`
 - `experimental_Diff`
 - `experimental_InfoSection`
+- `experimental_CollapsibleStackCard`
 - `experimental_DetailRow`
 - `experimental_InfoList`
 - `experimental_InfoListRow`
@@ -38,6 +40,7 @@ Read the installed SDK declarations for the exact current signatures.
 - `useSettings`
 - `experimental_useExperiment`
 - `experimental_useThreadContextKind`
+- `experimental_useThreadExtensionState`
 - `useBbContext`
 - `experimental_usePluginId`
 - `experimental_useQuestionFormHost`
@@ -95,6 +98,7 @@ Read the installed SDK declarations for the exact current signatures.
 - `useSidebarThreadShortcut`
 - `ThreadTitle`
 - `experimental_ThreadStatusGlyph`
+- `experimental_resolveThreadStatus`
 - `experimental_ThreadRowMetadata`
 - `useEnvironmentProviders`
 - `useSdk`
@@ -148,6 +152,8 @@ Read the installed SDK declarations for the exact current signatures.
 - `ExperimentalThreadContextSegmentInput`
 - `ExperimentalThreadContextSegmentProps`
 - `ExperimentalThreadContextSegmentReference`
+- `ExperimentalCollapsibleStackCardProps`
+- `ExperimentalCollapsibleStackCardDismiss`
 - `ExperimentalThreadRowMetadataProps`
 - `ExperimentalThreadRowMetadataLineProps`
 - `ExperimentalInfoSectionProps`
@@ -215,6 +221,9 @@ Read the installed SDK declarations for the exact current signatures.
 - `PluginSidebarThreadShortcut`
 - `PluginThreadTitleProps`
 - `PluginThreadStatusGlyphProps`
+- `PluginThreadStatusInput`
+- `PluginThreadStatusThread`
+- `PluginThreadStatus`
 - `PluginEnvironmentProvider`
 - `PluginEnvironmentProvidersState`
 - `PluginBoundThreadsArea`
@@ -335,7 +344,6 @@ Read the installed SDK declarations for the exact current signatures.
 - `ExperimentalComposerInput`
 - `ExperimentalComposerThreadLinks`
 - `ExperimentalComposerClipboard`
-- `ExperimentalComposerView`
 - `ExperimentalComposerContribution`
 - `ExperimentalComposerPlusMenuContribution`
 - `ExperimentalComposerSendMenuContribution`

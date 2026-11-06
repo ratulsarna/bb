@@ -58,6 +58,8 @@ function readyProviderStates(providerId: string): SystemProviderStatesResponse {
         canUpdate: false,
         loginCommand: null,
         localLoginCommand: null,
+        internal_DO_NOT_USE_guidedSignIn: false,
+        internal_DO_NOT_USE_setupGuidePlanLabel: null,
       },
     ],
   };
@@ -1823,6 +1825,43 @@ describe("useThreadCreationOptions", () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it("sends the fallback provider it shows when the stored provider is no longer offered", async () => {
+    window.localStorage.setItem("bb.promptbox.provider", "removed-provider");
+    window.localStorage.setItem(
+      `bb.promptbox.model-${GLOBAL_PROVIDER_ID}-1`,
+      "global-remembered",
+    );
+    vi.mocked(sdk.system.executionOptions).mockImplementation(async (args) =>
+      args?.providerId === "removed-provider"
+        ? {
+            ...executionOptionsResponse(),
+            models: [],
+            selectedOnlyModels: [],
+          }
+        : providerExecutionOptionsResponse(args?.providerId),
+    );
+    const { wrapper } = createQueryClientTestHarness();
+
+    const { result } = renderHook(
+      () =>
+        useThreadCreationOptions({
+          scope: "new-thread",
+          initialProviderId: PROJECT_PROVIDER_ID,
+          initialModel: "project-remembered",
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.selectedProviderId).toBe(GLOBAL_PROVIDER_ID);
+      expect(result.current.selectedModel).toBe("global-remembered");
+      expect(result.current.executionInputSources).toMatchObject({
+        providerId: "client-preference",
+        model: "client-preference",
+      });
+    });
   });
 
   it("routes reusable root-composer worktrees through their environment", async () => {

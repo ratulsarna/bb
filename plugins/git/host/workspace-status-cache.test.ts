@@ -44,6 +44,29 @@ afterAll(async () => {
 
 afterEach(() => vi.clearAllMocks());
 
+async function copyInitialRepository(repo: string) {
+  await fs.cp(initialRepository, repo, { recursive: true });
+  return repo;
+}
+
+function commitInput(
+  mark: number,
+  branch: string,
+  subject: string,
+  parent: string,
+  files: Record<string, string | null>,
+) {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const changes = Object.entries(files)
+    .map(([file, text]) =>
+      text === null
+        ? `D ${JSON.stringify(file)}\n`
+        : `M 100644 inline ${JSON.stringify(file)}\ndata ${Buffer.byteLength(text)}\n${text}\n`,
+    )
+    .join("");
+  return `commit refs/heads/${branch}\nmark :${mark}\ncommitter BB Tests <bb@example.com> ${timestamp} +0000\ndata ${Buffer.byteLength(subject) + 1}\n${subject}\n\nfrom ${parent}\n${changes}\n`;
+}
+
 async function readUntilSquashChecked(repo: string) {
   let status = await new WorkspaceReads(repo, tmpdir()).getStatus({
     freshness: fresh(),
@@ -63,7 +86,9 @@ async function readUntilSquashChecked(repo: string) {
 }
 
 it("reuses committed comparisons across readers while refreshing edits and moved refs", async () => {
-  const repo = await initRepo(await makeTempDir("bb-status-cache-"));
+  const repo = await copyInitialRepository(
+    await makeTempDir("bb-status-cache-"),
+  );
   await runGit(["checkout", "-b", "feature"], { cwd: repo });
   await fs.writeFile(path.join(repo, "feature.txt"), "feature\n");
   await fs.writeFile(path.join(repo, "other.txt"), "other\n");
@@ -118,7 +143,9 @@ it("reuses committed comparisons across readers while refreshing edits and moved
 });
 
 it("returns degraded comparisons on Git failures without caching them", async () => {
-  const repo = await initRepo(await makeTempDir("bb-status-cache-failure-"));
+  const repo = await copyInitialRepository(
+    await makeTempDir("bb-status-cache-failure-"),
+  );
   await runGit(["checkout", "-b", "feature"], { cwd: repo });
   await fs.writeFile(path.join(repo, "feature.txt"), "feature\n");
   await runGit(["add", "."], { cwd: repo });
@@ -168,25 +195,24 @@ async function createDivergedRepo({
   basePath = "main.txt",
   baseText = "main\n",
 } = {}) {
-  const repo = await makeTempDir("bb-squash-budget-");
-  await fs.cp(initialRepository, repo, { recursive: true });
-  const timestamp = Math.floor(Date.now() / 1000);
-  const commit = (
-    branch: string,
-    subject: string,
-    file: string,
-    text: string,
-  ) =>
-    `commit refs/heads/${branch}\ncommitter BB Tests <bb@example.com> ${timestamp} +0000\ndata ${Buffer.byteLength(subject) + 1}\n${subject}\n\nfrom ${initialCommit}\nM 100644 inline ${JSON.stringify(file)}\ndata ${Buffer.byteLength(text)}\n${text}\n`;
+  const repo = await copyInitialRepository(
+    await makeTempDir("bb-squash-budget-"),
+  );
   await runGit(["fast-import", "--quiet"], {
     cwd: repo,
     input:
-      commit(
+      commitInput(
+        1,
         "feature",
         `Feature ${path.basename(repo)}`,
-        featurePath,
-        featureText,
-      ) + commit("main", `Main ${path.basename(repo)}`, basePath, baseText),
+        initialCommit,
+        {
+          [featurePath]: featureText,
+        },
+      ) +
+      commitInput(2, "main", `Main ${path.basename(repo)}`, initialCommit, {
+        [basePath]: baseText,
+      }),
   });
   await runGit(["checkout", "--force", "feature"], { cwd: repo });
   return repo;
@@ -317,16 +343,23 @@ it.each([
   "recognizes squash patches with different blobs for %j",
   async (featurePath) => {
     const repo = await createDivergedRepo({ featurePath });
-    await fs.writeFile(path.join(repo, featurePath), "feature\nsecond\n");
-    await runGit(["add", "."], { cwd: repo });
-    await runGit(["commit", "-m", "Second feature"], { cwd: repo });
-    await runGit(["checkout", "main"], { cwd: repo });
-    await fs.writeFile(path.join(repo, featurePath), "feature  \nsecond  \n");
-    await runGit(["add", "."], { cwd: repo });
-    await runGit(["commit", "-m", "Squashed with whitespace changes"], {
+    await runGit(["fast-import", "--quiet"], {
       cwd: repo,
+      input:
+        commitInput(1, "feature", "Second feature", "refs/heads/feature^0", {
+          [featurePath]: "feature\nsecond\n",
+        }) +
+        commitInput(
+          2,
+          "main",
+          "Squashed with whitespace changes",
+          "refs/heads/main^0",
+          {
+            [featurePath]: "feature  \nsecond  \n",
+          },
+        ),
     });
-    await runGit(["checkout", "feature"], { cwd: repo });
+    await runGit(["reset", "--hard", "feature"], { cwd: repo });
     const status = await readUntilSquashChecked(repo);
     expect(status.mergeBase).toMatchObject({
       squashMergeCheckComplete: true,
@@ -393,17 +426,20 @@ it.each([
 
 it("finishes a timed-out squash check on the next refresh without rehashing commits", async () => {
   const repo = await createDivergedRepo();
-  await fs.writeFile(path.join(repo, "feature.txt"), "feature\nsecond\n");
-  await runGit(["add", "."], { cwd: repo });
-  await runGit(["commit", "-m", "Second feature"], { cwd: repo });
-  await runGit(["checkout", "main"], { cwd: repo });
-  await fs.writeFile(path.join(repo, "feature.txt"), "feature  \nsecond  \n");
-  await runGit(["add", "."], { cwd: repo });
-  await runGit(["commit", "-m", "Squashed feature"], { cwd: repo });
-  await fs.writeFile(path.join(repo, "feature.txt"), "later change\n");
-  await runGit(["add", "."], { cwd: repo });
-  await runGit(["commit", "-m", "Later main change"], { cwd: repo });
-  await runGit(["checkout", "feature"], { cwd: repo });
+  await runGit(["fast-import", "--quiet"], {
+    cwd: repo,
+    input:
+      commitInput(1, "feature", "Second feature", "refs/heads/feature^0", {
+        "feature.txt": "feature\nsecond\n",
+      }) +
+      commitInput(2, "main", "Squashed feature", "refs/heads/main^0", {
+        "feature.txt": "feature  \nsecond  \n",
+      }) +
+      commitInput(3, "main", "Later main change", ":2", {
+        "feature.txt": "later change\n",
+      }),
+  });
+  await runGit(["reset", "--hard", "feature"], { cwd: repo });
   const actual = await vi.importActual<
     typeof import("bb-environment-provider-host/workspace-git")
   >("bb-environment-provider-host/workspace-git");
@@ -466,7 +502,9 @@ it("finishes a timed-out squash check on the next refresh without rehashing comm
 }, 15_000);
 
 it("excludes cherry-picked commits on both sides but keeps same-file changes", async () => {
-  const repo = await initRepo(await makeTempDir("bb-status-cherry-pick-"));
+  const repo = await copyInitialRepository(
+    await makeTempDir("bb-status-cherry-pick-"),
+  );
   await runGit(["checkout", "-b", "feature"], { cwd: repo });
   await fs.writeFile(path.join(repo, "picked.txt"), "picked\n");
   await runGit(["add", "."], { cwd: repo });
@@ -495,31 +533,86 @@ it("excludes cherry-picked commits on both sides but keeps same-file changes", a
   ]);
 });
 
-it("keeps renamed files compact when comparing squash patches", async () => {
-  const repo = await initRepo(await makeTempDir("bb-status-squash-rename-"));
-  const lines = Array.from({ length: 600_000 }, (_, i) => `line ${i}`);
-  await fs.writeFile(path.join(repo, "big.txt"), `${lines.join("\n")}\n`);
-  await runGit(["add", "."], { cwd: repo });
-  await runGit(["commit", "-m", "Big file"], { cwd: repo });
-  await runGit(["checkout", "-b", "feature"], { cwd: repo });
-  await runGit(["mv", "big.txt", "moved.txt"], { cwd: repo });
-  await runGit(["commit", "-m", "Move"], { cwd: repo });
-  lines[500] = "edited";
-  await fs.writeFile(path.join(repo, "moved.txt"), `${lines.join("\n")}\n`);
-  await runGit(["add", "."], { cwd: repo });
-  await runGit(["commit", "-m", "Edit"], { cwd: repo });
-  await runGit(["checkout", "main"], { cwd: repo });
-  await runGit(["mv", "big.txt", "moved.txt"], { cwd: repo });
-  lines[500] = "edited  ";
-  await fs.writeFile(path.join(repo, "moved.txt"), `${lines.join("\n")}\n`);
-  await runGit(["add", "."], { cwd: repo });
-  await runGit(["commit", "-m", "Squashed with whitespace changes"], {
+it("reads changes only for base commits that touch the branch's paths", async () => {
+  const repo = await copyInitialRepository(
+    await makeTempDir("bb-status-path-limited-"),
+  );
+  const picked = "picked dir/[1] picked.txt";
+  const unrelated = Array.from({ length: 20 }, (_, i) =>
+    commitInput(
+      10 + i,
+      "main",
+      `Main ${i}`,
+      i === 0 ? initialCommit : `:${9 + i}`,
+      {
+        [`main-${i}.txt`]: `${i}\n`,
+      },
+    ),
+  ).join("");
+  await runGit(["fast-import", "--quiet"], {
     cwd: repo,
+    input:
+      commitInput(1, "feature", "Picked", initialCommit, { [picked]: "x\n" }) +
+      commitInput(2, "feature", "Unique", ":1", { "unique.txt": "y\n" }) +
+      unrelated +
+      commitInput(3, "main", "Picked on main", ":29", { [picked]: "x\n" }),
   });
-  await fs.writeFile(path.join(repo, "later.txt"), "later\n");
-  await runGit(["add", "."], { cwd: repo });
-  await runGit(["commit", "-m", "Later main change"], { cwd: repo });
-  await runGit(["checkout", "feature"], { cwd: repo });
+  await runGit(["checkout", "--force", "feature"], { cwd: repo });
+
+  const status = await readUntilSquashChecked(repo);
+
+  expect(status.mergeBase).toMatchObject({
+    aheadCount: 1,
+    behindCount: 20,
+    squashMergeCheckComplete: true,
+  });
+  expect(status.mergeBase?.commits.map((commit) => commit.subject)).toEqual([
+    "Unique",
+  ]);
+  const rawReads = vi
+    .mocked(runGit)
+    .mock.calls.filter(
+      ([args, options]) =>
+        options.cwd === repo &&
+        args.includes("--raw") &&
+        args.includes("--stdin"),
+    )
+    .flatMap(([, options]) =>
+      (options.input ?? "").split("\n").filter(Boolean),
+    );
+  expect(new Set(rawReads).size).toBe(3);
+});
+
+it("keeps renamed files compact when comparing squash patches", async () => {
+  const repo = await copyInitialRepository(
+    await makeTempDir("bb-status-squash-rename-"),
+  );
+  const lines = Array.from({ length: 600_000 }, (_, i) => `line ${i}`);
+  const original = `${lines.join("\n")}\n`;
+  lines[500] = "edited";
+  const edited = `${lines.join("\n")}\n`;
+  lines[500] = "edited  ";
+  const squashed = `${lines.join("\n")}\n`;
+  await runGit(["fast-import", "--quiet"], {
+    cwd: repo,
+    input:
+      commitInput(1, "main", "Big file", initialCommit, {
+        "big.txt": original,
+      }) +
+      commitInput(2, "feature", "Move", ":1", {
+        "big.txt": null,
+        "moved.txt": original,
+      }) +
+      commitInput(3, "feature", "Edit", ":2", { "moved.txt": edited }) +
+      commitInput(4, "main", "Squashed with whitespace changes", ":1", {
+        "big.txt": null,
+        "moved.txt": squashed,
+      }) +
+      commitInput(5, "main", "Later main change", ":4", {
+        "later.txt": "later\n",
+      }),
+  });
+  await runGit(["checkout", "--force", "feature"], { cwd: repo });
 
   const status = await readUntilSquashChecked(repo);
 

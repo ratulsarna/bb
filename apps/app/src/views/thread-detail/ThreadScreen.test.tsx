@@ -77,7 +77,6 @@ const TIMELINE = {
   activeWorkflows: [],
   contextBoundarySeq: null,
   contextWindowUsage: null,
-  goal: null,
   hasOlderTimelineRows: false,
   isCatchingUpTimeline: false,
   isLoadingOlderTimelineRows: false,
@@ -121,7 +120,6 @@ function renderScreen(presentation: ThreadScreenPresentation) {
           unreadDividerAutoScroll: false,
           unreadDividerPlacement: null,
         }}
-        workspaceRootPath={undefined}
       />
     </Wrapper>,
   );

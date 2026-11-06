@@ -17,16 +17,13 @@ import { and, eq, isNull, isNotNull, inArray } from "drizzle-orm";
 import { sweepMachineLifecycles } from "../machines/provider-orchestration.js";
 import {
   CLOSED_SESSION_ROW_RETENTION_MS,
-  compactDatabase,
-  DATABASE_COMPACTION_MIN_RECLAIMABLE_BYTES,
-  DATABASE_COMPACTION_MIN_RECLAIMABLE_RATIO,
   DATABASE_INCREMENTAL_VACUUM_MAX_PAGES,
   DATABASE_INCREMENTAL_VACUUM_MIN_FREELIST_PAGES,
   DEFAULT_CLOSED_SESSION_PRUNE_BATCH_SIZE,
   deleteExpiredRetainedEventOutputs,
+  EXITED_TERMINAL_SESSION_ROW_RETENTION_MS,
   dropDeferredLegacyTables,
   getDatabaseAutoVacuumMode,
-  getDatabaseCompactionStats,
   getDatabaseFreelistStats,
   getDatabaseMaintenanceActivity,
   getEnvironment,
@@ -37,9 +34,9 @@ import {
   migrateNextLegacyImageGenerationOutput,
   environments,
   pruneClosedSessions,
+  pruneExitedTerminalSessions,
   RETAINED_EVENT_OUTPUT_TARGETS,
   runIncrementalVacuum,
-  shouldCompactDatabase,
   shouldRunIncrementalVacuum,
   threads,
   DEFAULT_COMPLETED_EVENT_OUTPUT_MIGRATION_SCAN_LIMIT,
@@ -59,6 +56,7 @@ import {
   hasLiveThreadStartInFlight,
   requestThreadStopForCurrentState,
   requestThreadStorageDeletion,
+  stopRunsWhoseTurnNeverStarted,
 } from "../threads/thread-lifecycle.js";
 import {
   archiveUndoGraceKeepsTerminals,
@@ -72,6 +70,8 @@ import {
 import { deliverLegacyDeferredThreadMessages } from "../threads/legacy-deferred-messages.js";
 import { releaseOrphanedQueuedMessageDispatchClaims } from "../threads/queued-messages.js";
 import { runEventLoopWork, runEventLoopWorkSync } from "./event-loop-work.js";
+import type { OpenPluginDatabase } from "../plugins/plugin-service.js";
+import type Database from "better-sqlite3";
 
 type DatabaseMaintenanceSweepDeps = Pick<AppDeps, "db" | "logger">;
 
@@ -82,11 +82,16 @@ interface PluginScheduleSweeper {
 type PeriodicSweepDeps = LoggedPendingInteractionWorkSessionDeps & {
   pluginSchedules: PluginScheduleSweeper;
   /** Liveness directory for `plugin:<id>` wait holders. */
-  plugins: QueueWaitPluginDirectory;
+  plugins: QueueWaitPluginDirectory & PluginDatabaseDirectory;
 };
+
+interface PluginDatabaseDirectory {
+  listOpenPluginDatabases(): OpenPluginDatabase[];
+}
 
 const DATABASE_MAINTENANCE_CHECK_INTERVAL_MS = 60 * 60_000;
 const DATABASE_INCREMENTAL_VACUUM_CHUNK_PAGES = 256;
+const EXITED_TERMINAL_SESSION_PRUNE_BATCH_SIZE = 1_000;
 const COMPLETED_EVENT_OUTPUT_MIGRATION_MAX_ADVANCES_PER_SWEEP = 64;
 const RETAINED_EVENT_OUTPUT_EXPIRY_MAX_ADVANCES_PER_SWEEP = 256;
 const RETAINED_EVENT_OUTPUT_EXPIRY_BATCH_SIZE = 1;
@@ -176,7 +181,7 @@ export async function runPeriodicSweepJobs(
 }
 
 async function runChunkedIncrementalVacuum(
-  db: DatabaseMaintenanceSweepDeps["db"],
+  client: Database.Database,
 ): Promise<ReturnType<typeof runIncrementalVacuum>> {
   let first: ReturnType<typeof runIncrementalVacuum> | null = null;
   let last: ReturnType<typeof runIncrementalVacuum> | null = null;
@@ -188,7 +193,7 @@ async function runChunkedIncrementalVacuum(
     if (last !== null) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
-    last = runIncrementalVacuum(db, {
+    last = runIncrementalVacuum(client, {
       maxPages: Math.min(
         DATABASE_INCREMENTAL_VACUUM_CHUNK_PAGES,
         DATABASE_INCREMENTAL_VACUUM_MAX_PAGES - vacuumedPages,
@@ -203,6 +208,60 @@ async function runChunkedIncrementalVacuum(
     throw new Error("Incremental vacuum ran no chunks");
   }
   return { before: first.before, after: last.after };
+}
+
+interface IncrementalVacuumLogArgs {
+  logFields: { pluginId?: string };
+  logger: AppDeps["logger"];
+}
+
+async function runIncrementalVacuumAboveFreelistThreshold(
+  client: Database.Database,
+  args: IncrementalVacuumLogArgs,
+): Promise<void> {
+  const freelistStats = getDatabaseFreelistStats(client);
+  if (
+    !shouldRunIncrementalVacuum({
+      minFreelistPages: DATABASE_INCREMENTAL_VACUUM_MIN_FREELIST_PAGES,
+      stats: freelistStats,
+    })
+  ) {
+    args.logger.debug(
+      { ...args.logFields, freelistStats },
+      "Incremental database vacuum skipped below freelist threshold",
+    );
+    return;
+  }
+  try {
+    const result = await runChunkedIncrementalVacuum(client);
+    args.logger.info(
+      { ...args.logFields, result },
+      "Incremental database vacuum completed",
+    );
+  } catch (error) {
+    args.logger.warn(
+      { ...args.logFields, err: error },
+      "Incremental database vacuum failed",
+    );
+  }
+}
+
+export async function runPluginDatabaseMaintenanceSweep(
+  deps: Pick<AppDeps, "logger"> & { plugins: PluginDatabaseDirectory },
+): Promise<void> {
+  for (const { database, pluginId } of deps.plugins.listOpenPluginDatabases()) {
+    if (
+      !database.open ||
+      database.inTransaction ||
+      getDatabaseAutoVacuumMode(database) !== "incremental"
+    ) {
+      continue;
+    }
+    await runIncrementalVacuumAboveFreelistThreshold(database, {
+      logFields: { pluginId },
+      logger: deps.logger,
+    });
+  }
 }
 
 export async function runDatabaseMaintenanceSweep(
@@ -234,61 +293,13 @@ export async function runDatabaseMaintenanceSweep(
     return;
   }
 
-  const autoVacuumMode = getDatabaseAutoVacuumMode(deps.db);
-
-  if (autoVacuumMode === "incremental") {
-    const freelistStats = getDatabaseFreelistStats(deps.db);
-    if (
-      !shouldRunIncrementalVacuum({
-        minFreelistPages: DATABASE_INCREMENTAL_VACUUM_MIN_FREELIST_PAGES,
-        stats: freelistStats,
-      })
-    ) {
-      deps.logger.debug(
-        { freelistStats },
-        "Incremental database vacuum skipped below freelist threshold",
-      );
-      return;
-    }
-    try {
-      const result = await runChunkedIncrementalVacuum(deps.db);
-      deps.logger.info({ result }, "Incremental database vacuum completed");
-    } catch (error) {
-      deps.logger.warn({ err: error }, "Incremental database vacuum failed");
-    }
+  if (getDatabaseAutoVacuumMode(deps.db.$client) !== "incremental") {
     return;
   }
-
-  const activity = getDatabaseMaintenanceActivity(deps.db);
-  if (!isDatabaseMaintenanceIdle(activity)) {
-    deps.logger.debug(
-      { activity },
-      "Database maintenance skipped while app work is active",
-    );
-    return;
-  }
-
-  const stats = getDatabaseCompactionStats(deps.db);
-  if (
-    !shouldCompactDatabase({
-      minReclaimableBytes: DATABASE_COMPACTION_MIN_RECLAIMABLE_BYTES,
-      minReclaimableRatio: DATABASE_COMPACTION_MIN_RECLAIMABLE_RATIO,
-      stats,
-    })
-  ) {
-    deps.logger.debug(
-      { stats },
-      "Database maintenance skipped below compaction threshold",
-    );
-    return;
-  }
-
-  try {
-    const result = compactDatabase(deps.db);
-    deps.logger.info({ result }, "Database compaction completed");
-  } catch (error) {
-    deps.logger.warn({ err: error }, "Database compaction failed");
-  }
+  await runIncrementalVacuumAboveFreelistThreshold(deps.db.$client, {
+    logFields: {},
+    logger: deps.logger,
+  });
 }
 
 async function runProjectDeletionSweep(
@@ -505,6 +516,16 @@ async function runRetainedEventOutputExpirySweep(
   }
 }
 
+function runExitedTerminalSessionPruneSweep(
+  deps: LoggedPendingInteractionWorkSessionDeps,
+  now: number,
+): void {
+  pruneExitedTerminalSessions(deps.db, {
+    exitedBefore: now - EXITED_TERMINAL_SESSION_ROW_RETENTION_MS,
+    limit: EXITED_TERMINAL_SESSION_PRUNE_BATCH_SIZE,
+  });
+}
+
 function runClosedSessionPruneSweep(
   deps: LoggedPendingInteractionWorkSessionDeps,
   now: number,
@@ -565,6 +586,12 @@ const PERIODIC_SWEEP_JOBS: PeriodicSweepJob[] = [
   },
   {
     cadenceMs: 0,
+    category: "retention",
+    name: "exited-terminal-session-prune",
+    run: runExitedTerminalSessionPruneSweep,
+  },
+  {
+    cadenceMs: 0,
     category: "orphan-cleanup",
     name: "environment-provisioning-orphan-cleanup",
     run: runEnvironmentProvisioningSweep,
@@ -574,6 +601,12 @@ const PERIODIC_SWEEP_JOBS: PeriodicSweepJob[] = [
     category: "orphan-cleanup",
     name: "thread-provisioning-orphan-cleanup",
     run: runThreadProvisioningOrphanCleanupSweep,
+  },
+  {
+    cadenceMs: 0,
+    category: "orphan-cleanup",
+    name: "turn-start-deadline",
+    run: stopRunsWhoseTurnNeverStarted,
   },
   {
     cadenceMs: 0,
@@ -627,6 +660,12 @@ const PERIODIC_SWEEP_JOBS: PeriodicSweepJob[] = [
     category: "maintenance",
     name: "database-maintenance",
     run: runDatabaseMaintenanceSweep,
+  },
+  {
+    cadenceMs: DATABASE_MAINTENANCE_CHECK_INTERVAL_MS,
+    category: "maintenance",
+    name: "plugin-database-maintenance",
+    run: runPluginDatabaseMaintenanceSweep,
   },
   {
     cadenceMs: 0,

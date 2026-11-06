@@ -186,10 +186,12 @@ export interface PluginStorage {
   kv: PluginKvStorage;
   /**
    * The plugin's own SQLite database at <dataDir>/plugins/<id>/data.db — the
-   * server's better-sqlite3, WAL mode, busy_timeout 5000. Returns the same
-   * open handle for the whole plugin load, so calling it per request is
-   * cheap; a new handle is opened only on the first call or after the
-   * plugin closed the previous one. The host closes handles on
+   * server's better-sqlite3, WAL mode, busy_timeout 5000. A file the host
+   * creates uses incremental auto_vacuum, so the plugin can return freed
+   * pages with `PRAGMA incremental_vacuum`; bb never runs a full VACUUM on
+   * it. Returns the same open handle for the whole plugin load, so calling it
+   * per request is cheap; a new handle is opened only on the first call or
+   * after the plugin closed the previous one. The host closes handles on
    * dispose/reload; a closed handle throws on use.
    */
   database(): Database.Database;
@@ -254,6 +256,14 @@ export interface PluginTurnFailedEvent {
    * A policy caps its own retries by comparing against this.
    */
   attemptNumber: number;
+  /**
+   * The plugin that sent the failed turn's message through
+   * `bb.sdk.threads.send` or `bb.sdk.threads.spawn`, or null when a user, an
+   * agent, or core sent it. A retry is sent by core, so a retry's failure
+   * reports null. A retry policy uses this to ask the sender whether it
+   * wants the turn re-run.
+   */
+  originPluginId: string | null;
 }
 
 /**
@@ -285,6 +295,13 @@ export interface PluginThreadEventPayloads {
     thread: ThreadResponse;
     previousParentThreadId: string | null;
   };
+  /**
+   * Fired after a thread's read state changes and the thread is now read
+   * (`lastReadAt >= latestAttentionAt`): a client opened it or marked it
+   * read, or the user sent it a turn. Marking a thread unread does not fire
+   * it. Experimental: see docs/api_to_audit.md.
+   */
+  "experimental_thread.read": { thread: ThreadResponse };
   /** Real accepted terminal input; excludes output, keepalives and input contents. */
   "experimental_terminal.input": { terminal: TerminalSession };
   /**
@@ -618,14 +635,17 @@ export type PluginDispatchAttemptKind = "start-turn" | "join-turn";
 /**
  * What core hands a `message.dispatch` hook: the one checkpoint, run before a
  * message reaches a provider. Send now bypasses ordinary registrations.
+ * Ordinary hooks inspect messages and parent/child system notifications.
  * Registrations with experimental_enforcement: "strict" also gate Send now,
- * manual compaction, edited resends, and parent system notifications.
+ * manual compaction, edited resends, and the /clear conversation operation.
  *
  * It runs identically whether the attempt is inline (someone just sent) or
  * from a drain (a queued row became eligible again), and whether the message
- * is a thread's first, a follow-up, a steer, or a retry of a failed turn. A
- * handler must therefore be idempotent for one logical dispatch: passes re-run
- * on every drain, on restart, and on retry.
+ * is a thread's first, a follow-up, a steer, a retry of a failed turn, or one
+ * of core's own notices to a thread (a child finished, needs attention, or
+ * changed owner), which arrives with `initiator: "system"`. Conversation
+ * operations skip ordinary hooks. A handler must be idempotent for one logical
+ * dispatch: passes re-run on every drain, on restart, and on retry.
  */
 export interface MessageDispatchHookContext {
   /**
@@ -777,8 +797,8 @@ export interface PluginHooks {
     options?: {
       /**
        * Enforce admission for Send now, manual compaction, edited resends, and
-       * parent system notifications. A wait queues messages and retries;
-       * compaction and edits return 409 before provider effects. Ordinary
+       * /clear. A wait queues messages, retries, and system notifications;
+       * operations return 409 before provider or history effects. Ordinary
        * registrations retain their Send now override and operation exemptions.
        * Count with sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true })
        * to include admissions awaiting command preparation and tracked work.
@@ -1276,7 +1296,7 @@ export interface PluginAgentConfiguration {
   /** Skill frontmatter names from this plugin's manifest skill roots.
    * Duplicate or unknown names reject this plugin's complete selection. */
   skills: string[];
-  /** Optional dynamic instructions. Output is truncated to 4096 characters. */
+  /** Optional dynamic instructions. Output is truncated to 32768 characters. */
   instructions?: string;
 }
 
@@ -1662,6 +1682,14 @@ export interface PluginProviderDeclaration {
    */
   experimental_resolvesNativeRoots?: boolean;
   /**
+   * Internal to bb's own provider plugins; not part of the plugin API, and it
+   * may change or disappear in any release. When true, the first-run setup
+   * guide runs this provider's sign-in in its guided panel, which reads the
+   * sign-in link and code from the provider's login output. Otherwise the
+   * guide opens the provider's sign-in terminal in the row. Defaults to false.
+   */
+  internal_DO_NOT_USE_guidedSignIn?: boolean;
+  /**
    * Derive this provider's opaque per-command options. Called synchronously
    * by the server for every session and turn command on a thread of this
    * provider, with the command's {@link PluginProviderOptionsContext}; the
@@ -1742,7 +1770,7 @@ export interface PluginAgents {
    * provider session is next constructed (thread start or resume after a
    * daemon restart, environment switch, or provider restart), never
    * mid-session. Must be synchronous and fast — it sits on the
-   * thread-start path. Output longer than 4096 characters is truncated; a
+   * thread-start path. Output longer than 32768 characters is truncated; a
    * throwing provider is logged against the plugin and contributes nothing.
    * A repeated registration within one factory execution is rejected.
    */
@@ -2249,6 +2277,8 @@ export type PluginBbSdk = Omit<BbSdk, "threads"> & {
  * against.
  */
 export interface BbPluginApi {
+  /** Internal: counts one meaningful use of a first-party plugin's UI. */
+  internal_DO_NOT_USE_recordPluginUse(): void;
   /** The plugin's own id (namespaces storage, routes, commands). */
   readonly pluginId: string;
   /** Leveled, plugin-scoped logger. */

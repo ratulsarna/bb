@@ -14,6 +14,37 @@ question.
 [provider-bridge-protocol.md](provider-bridge-protocol.md). An entry without
 a "Docs:" line has no owning doc, so it keeps the essential contract itself.
 
+## Host paths (`@get-bb/plugin-sdk`)
+
+`experimental_normalizeHostPath(path)`,
+`experimental_resolveHostPath({ rootPath, path })`, and
+`experimental_isHostPathWithin({ rootPath, candidatePath })` use the shared
+`packages/domain/src/host-path.ts` parser. Normalization returns null for
+non-absolute paths; resolution accepts absolute paths or joins relative paths
+against an absolute root, rejecting empty/NUL paths, rootless backslashes and
+drive-relative forms such as `C:foo`. Bare `C:` means the drive root. Windows
+paths accept either separator and containment is case-insensitive; POSIX
+backslashes within relative names stay literal. Resolution permits `..` escapes;
+containment is a separate lexical check, not a symlink or filesystem check.
+`experimental_joinHostPath({ rootPath, relativePath })` appends relative segments;
+`experimental_getHostPathDirname(path)` / `experimental_getHostPathBasename(path)`
+extract components; `experimental_getRelativeHostPath({ rootPath, candidatePath })`
+returns slash-separated descendants (null outside the root); and
+`experimental_getHostPathComparisonKey(path)` normalizes keys with Windows case
+folding. These re-export the same domain functions used by core workspace paths,
+file-link resolution, and database host-path SQL. None accesses the filesystem.
+Workflows and Inline Vis apply containment; Secrets permits outside destinations.
+Docs and Monaco use joins and components for host-backed files; Tasks, Automations,
+and Browser Automation resolve CLI file paths. Storage Retention uses comparison
+keys and relative paths to protect live workspaces across Windows spellings.
+
+Core callers of the same parser include project-path normalization,
+`normalizeAbsoluteFilePath` / `isAbsoluteFilePathWithinRoot` in shared-ui,
+`isBbManagedWorkspacePath` on the server, and database host-path SQL functions.
+Docs: Plugin Guide, The bb SDK (`plugins/plugin-api-docs/src/surfaces.ts`).
+Before stabilization, audit drive/UNC ambiguity, separator and case rules,
+relative escapes, and whether more callers need resolution rather than joining.
+
 ## Application link approvals (`@get-bb/plugin-sdk/app`)
 
 `experimental_getApplicationLinkApprovals()` lists approved URL schemes on the
@@ -87,8 +118,10 @@ highlight rule into `decorationSources`.
 `experimental_useComposerRenderer()` carries `input` (the surface, submission,
 typeahead, attachments, history, voice, sizing and collapse state, and bb's
 execution controls, handoff banner and compact-before-send chip, named so the
-composer chooses where they go), the composer `view`, and host services
-(`threadLinks`, `clipboard`, `attachmentSrc`, app key dispatch, toasts).
+composer chooses where they go) and host services (`threadLinks`,
+`clipboard`, `attachmentSrc`, app key dispatch, toasts). The composer's
+scope and draft key come from `useComposer().scope` and `.key`, which inside
+the box are bound to the box's host.
 `input.submission.enter` and `.modifier` are the box's two actions, worked
 out by the host from the surface and the user's "Enter steers" setting: each
 says what it does now (`send`, `queue` or `steer`), whether it needs a
@@ -314,8 +347,10 @@ held back, and explicit send-now still claims it. Calling again renews the
 lease; an unrenewed hold lapses after `leaseMs` and the periodic sweep
 dispatches the row. It answers 409 once a dispatch claimed the row and 404
 for a missing row. Holding never changes `updatedAt`, so a pre-hold
-`expectedUpdatedAt` stays valid; a successful `queuedMessages.update` clears
-the hold. `experimental_releaseEditHold` (`DELETE`, same path) cancels
+`expectedUpdatedAt` stays valid; a successful `queuedMessages.update` that
+changes `input` clears the hold, while one that changes only `sendAt` or the
+execution options keeps it, so a plugin moving a row cannot release someone's
+edit. `experimental_releaseEditHold` (`DELETE`, same path) cancels
 without saving and is a no-op for an unheld row; releasing or saving
 re-attempts dispatch immediately. The app's inline editor holds on open,
 renews every quarter lease, and releases on close. Any client may renew or
@@ -617,11 +652,15 @@ Docs: `backend-events.md`.
 
 `bb.experimental_hooks.on("message.dispatch", handler, {
 experimental_enforcement: "strict" })` enforces a policy for first turns,
-follow-ups, retries, Send now, manual compaction, edited resends, and parent
-system notifications. Message and notification waits use the existing durable
-queue; compact/edit waits return 409 before provider or rewind effects. Other
-plugins can still wait or reject a dispatch. Ordinary registrations keep their
-Send now override and compaction/edit/system-notification exemptions.
+follow-ups, retries, Send now, manual compaction, edited resends, `/clear`,
+and parent/child system notifications. Ordinary hooks follow upstream's
+dispatcher behavior: they inspect messages and system notifications, Send now
+bypasses them, and conversation operations bypass their policy pass. Strict
+hooks also inspect conversation operations and cannot be bypassed by Send now.
+Message and notification waits use the existing durable queue; operation waits
+return 409 before provider, stop, rewind, or history effects. Mixed registrations
+share one hook pass per dispatch attempt; any participating plugin can wait or
+reject it.
 
 `sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true })`
 returns `{ id, hostId }` rows for admitted command preparations, starting/active
@@ -675,7 +714,10 @@ whether this event needs matching resolved, cancelled, or interrupted events.
 These are observe-only announcements. `message.queued` (on first queue and on
 every rewritten wait) and `message.dispatched` carry the `ThreadQueuedMessage`
 DTO. `message.cancelled` fires when a queued row is deleted before dispatch.
-`turn.failed` carries ids and failure facts after a thread lands in `error`.
+`turn.failed` carries ids and failure facts after a thread lands in `error`,
+including `originPluginId`, the plugin that sent the failed message. Provider
+retry uses it to ask only that plugin whether to re-run the turn
+(`provider-retry.v1.consent`); Automations is the one sender that answers.
 
 Docs: `backend-events.md`.
 
@@ -1082,8 +1124,9 @@ Docs: `backend-sdk.md`.
 `experimental_useExperiment(key)` returns whether the bb experiment `key` is
 on, from the same live system config core reads (Settings → Experiments,
 `bb settings experiment`). It is false while config loads and for unknown
-keys. First caller: the built-in thread list, which gates multi-row selection
-on `sidebarMultiSelect`.
+keys. Callers: the built-in thread list, which gates row metadata on
+`threadRowMetadata`, and push notifications, which reads
+`skipFocusedThreadNotifications`.
 
 **Audit before stabilizing.**
 
@@ -1234,6 +1277,17 @@ Docs: `backend-foundation.md`.
 connect URL should supply this value when `BB_APP_URL` is empty. Confirm that
 one public URL has clear behavior when a server has several access paths.
 
+## `bb.internal_DO_NOT_USE_recordPluginUse`
+
+Internal to bb's first-party plugins whose meaningful use happens in their own
+UI rather than through an agent tool or CLI command: `monaco-editor` (a saved
+file), `prompt-library` (an inserted prompt) and `agent-annotations` (a saved
+annotation). It takes no arguments. The server counts it as one `plugin_use`
+of the calling plugin, exactly like a successful tool call or CLI command, and
+sends nothing for non-public plugins or when usage data is off. Each plugin's
+use is sent at most once per day. Forks of these plugins inherit the call, so
+removing it later means leaving a no-op stub.
+
 ## `bb.server.internal_DO_NOT_USE_openTunnelIngress`
 
 Internal to bb's own connect plugins (`connect`, `bb--connect-next`): the `internal_DO_NOT_USE_` prefix marks members that are not part of the plugin API, are not offered to third-party plugins, and may change or disappear in any release.
@@ -1303,6 +1357,91 @@ instead of a listener, and whether the compatibility window for protocol 246
 can close (then `HOST_DAEMON_COMPATIBLE_PROTOCOL_VERSIONS` goes back to the
 current version only). Decide whether the Cloudflare machine tunnel should
 move onto the same frpc runner once next replaces it.
+
+## `app.slots.internal_DO_NOT_USE_setupGuideSection` (`@get-bb/plugin-sdk/app`)
+
+Internal to bb's bundled `connect` plugin: the `internal_DO_NOT_USE_` prefix marks members that are not part of the plugin API, are not offered to third-party plugins, and may change or disappear in any release.
+
+`internal_DO_NOT_USE_setupGuideSection({ id, component })` registers one row
+for the first-run setup guide's "Where you use bb" group. Core renders the
+group heading and the `<ul>`; the component renders the `<li>` (the connect
+plugin uses `SetupOptionRow` from `@bb/shared-ui/setup-option-row`). The
+component receives `InternalDoNotUseSetupGuideSectionProps`:
+`{ onPhone, onSetupStarted, onSetupFailed }`. `onPhone` is true when the guide
+is open on a phone, so the row hides install links and phone pairing. The row
+calls `onSetupStarted()` when the user starts setting it up and
+`onSetupFailed(stage)` (`InternalDoNotUseSetupFailureStage`: `sign_in`,
+`pairing`, or `turn_on`) when an attempt fails, so the guide can record the
+step. Core's `PluginSetupGuideSections` renders a plugin's rows through
+the ordinary plugin slot boundary.
+
+Callers: the bundled `connect` plugin only. Core caller: the onboarding
+Devices step, which renders `PluginSetupGuideSections` for `connect`.
+
+**Audit before stabilizing.** Decide whether other plugins should contribute
+setup guide rows, which groups they may target, and whether the guide should
+own the row chrome instead of the plugin rendering `SetupOptionRow`.
+
+## `PluginSettingsSectionProps.internal_DO_NOT_USE_onSetupStarted` and `internal_DO_NOT_USE_onSetupFailed` (`@get-bb/plugin-sdk/app`)
+
+Internal to bb's bundled `connect` plugin: the `internal_DO_NOT_USE_` prefix marks members that are not part of the plugin API, are not offered to third-party plugins, and may change or disappear in any release.
+
+`internal_DO_NOT_USE_onSetupStarted` is set only when the setup guide renders a
+plugin's settings section inline (the current guide's Devices step expands the
+bb connect settings under Set up). The section calls it when the user actually
+starts setting up: bb connect calls it when getbb.app sign-in starts, a pairing
+code is submitted, or Turn on is pressed, so the current guide records
+`remote_access` `started` at the same moment as the redesigned guide's
+`onSetupStarted`. `internal_DO_NOT_USE_onSetupFailed(stage)` is its failure
+counterpart, called with the same `InternalDoNotUseSetupFailureStage` the
+redesigned guide's `onSetupFailed` receives (`sign_in` when getbb.app sign-in
+can't start or ends denied, expired, or failed; `pairing` when a pairing code
+is rejected; `turn_on` when turning remote access on fails). Core's
+`PluginSettingsSections` passes them through its `onSetupStarted` and
+`onSetupFailed` props; Settings never sets them.
+
+Callers: the bundled `connect` plugin only. Core caller: the onboarding
+Devices step (current guide), which renders `PluginSettingsSections` for
+`connect`.
+
+**Audit before stabilizing.** Decide whether the setup guide should render
+setup guide rows in both variants instead, which would make this prop
+unnecessary.
+
+## `PluginProviderDeclaration.internal_DO_NOT_USE_guidedSignIn` and `SystemProviderState.internal_DO_NOT_USE_guidedSignIn`
+
+Internal to bb's own provider plugins: the `internal_DO_NOT_USE_` prefix marks members that are not part of the plugin API, are not offered to third-party plugins, and may change or disappear in any release.
+
+A provider declaration sets `internal_DO_NOT_USE_guidedSignIn: true` when the
+redesigned first-run setup guide should run its sign-in in the guided panel:
+the guide runs the provider's login command, keeps its terminal behind Show
+terminal, reads the sign-in link and code from the output, and shows them in
+the row. Every other provider is terminal-first: the guide opens the login
+terminal in the row. The validator fills `false` when the field is absent and
+refuses a non-boolean. The server keeps it on the provider registration and
+projects it onto every provider-states row (`GET /system/provider-states`) as
+a required boolean, so the Agent step's row and its sign-in mode come from the
+same response. It is not part of `ProviderInfo`. Today's guide ignores it.
+
+Callers: `provider-claude-code`, `provider-codex`, and `provider-acp` for its
+Cursor agent only. Core caller: the onboarding Agent step
+(`OnboardingFlow`), which reads `SystemProviderState.internal_DO_NOT_USE_guidedSignIn`
+instead of a list of provider ids.
+
+**Audit before stabilizing.** Decide whether the provider should describe its
+sign-in output itself (link and code patterns, or a structured sign-in
+request from the bridge) instead of core parsing terminal text, and whether
+Pi's terminal `/login` flow belongs in the same declaration.
+
+## `ProviderHealth.internal_DO_NOT_USE_setupGuidePlanLabel` and `SystemProviderState.internal_DO_NOT_USE_setupGuidePlanLabel`
+
+Internal to bb's own provider plugins: the `internal_DO_NOT_USE_` prefix marks members that are not part of the plugin API, are not offered to third-party plugins, and may change or disappear in any release.
+
+A provider bridge's health result may set `internal_DO_NOT_USE_setupGuidePlanLabel` to a plan name (for example "Plus") that only the redesigned first-run setup guide shows next to the account on a ready agent row. `planLabel` keeps its existing meaning, so today's guide and every other surface show what they showed before. The field is optional on the bridge result and passes through older daemons unchanged; the server fills `null` when it is absent, so provider-states rows always carry it.
+
+Callers: `provider-codex` only (its ChatGPT plan). Core caller: the new guide's Agent step (`OnboardingFlow`), which prefers it over `planLabel`.
+
+**Audit before stabilizing.** Decide whether the plan should become part of `planLabel` everywhere (Settings, today's guide) and the field be removed.
 
 ## Bridge record mode (`experimental_recordProviderChildIo` and `experimental_isProviderBridgeRecording`)
 
@@ -1446,7 +1585,14 @@ fires after a final unterminated line is emitted.
 
 `experimental_FileLink` and `experimental_openFilePreview` open explicit live
 workspace, host and thread-storage file targets through the current surface's
-shared file-tab controller. `experimental_openFileExternally` opens a target
+shared file-tab controller. `experimental_openFilePreview`'s optional
+`opener` (`ExperimentalFilePreviewOptions`) names one of the calling plugin's
+`fileOpener` registrations to show the file with for that open; it becomes
+the same one-off viewer override the file-link "Open with" menu passes, and an
+unregistered id falls back to BB's preview. A `fileOpener` with
+`extensions: []` is never chosen by extension or listed under "Open with", so
+it shows only files its plugin opens this way; Inline visualizations' expanded
+page is the first caller. `experimental_openFileExternally` opens a target
 in the client's preferred external app. The boolean results report host
 acceptance, and malformed targets stay inert.
 `experimental_useCanOpenFileExternally(target)` is a hook that reports
@@ -2650,6 +2796,39 @@ loader callback.
 6. **Size and virtualization.** Neither component caps input size or
    virtualizes. Audit against a plugin that renders a very large file or patch.
 
+## `experimental_FilePreview` (`@get-bb/plugin-sdk/app`)
+
+Host-owned side-panel preview of one live file target. bb loads the file and
+draws its usual preview header (path, Preview/Raw toggle, open in browser,
+Open in editor, download, and the file menu with copy and refresh) and its
+loading, empty, missing and error states. `renderPreview({ content, url })`
+draws the Preview body of an HTML, Markdown or CSV file in place of bb's;
+`url` is the absolute raw-file URL. Raw mode and every other file type keep
+bb's rendering, and a refresh passes the new text. Inside a panel tab it
+loads only while the tab is showing, the visibility `experimental_useTabVisible`
+reports; elsewhere it loads at once.
+
+**Core callers.** It renders the same workspace, thread-storage and host file
+tab contents the side panel renders, so the header, loading and refresh are
+core's own; core's previews reach `FilePreview` through those components with
+no body override. Open in editor uses `useLiveFileOpenTargets` and the
+`openFileExternally` intent, the path core's file previews use. The first
+plugin caller is the Inline visualizations `page` file opener, which draws the
+themed inline-vis frame as the body.
+
+Docs: `frontend-components.md`.
+
+**Audit before stabilizing.**
+
+1. Decide whether the body override should also cover files without a
+   Preview mode (plain text, images), and what the toggle shows for them.
+2. Confirm surface-specific header behaviour: core's thread view passes its
+   own Open in editor handlers and a line number for host files; the
+   component passes none, and Add to chat comes only from the surrounding
+   `SelectionAddToChatContext`.
+3. Decide whether `renderPreview` should receive the line range a file open
+   requested.
+
 ## `app.slots.experimental_sourceCodeRenderer` / `app.slots.experimental_diffRenderer` (`@get-bb/plugin-sdk/app`)
 
 **Kept experimental (2026-08-22).** There are no registrations, and "two slots
@@ -2855,11 +3034,13 @@ A thread pane shows its thread context one of two ways, its
 or `card`, the thread context card at the pane's upper-right.
 `experimental_useThreadContextKind()` returns the kind of the pane the calling
 component renders in, `banner` outside a thread pane. A pane is `card` while
-the `threadContextCard` experiment is on, for a thread opened as a page,
-except on phones (a compact viewport with a coarse pointer, the rule
-`MessageActionBar` uses). Threads shown inside a panel or as a transcript are
-`banner`: `ThreadScreen` wraps those presentations in
-`WithoutThreadContextCard`.
+the `threadContextCard` experiment is on, for a thread opened as a page whose
+pane is wide enough to fit the card beside the transcript (the `gutter` or
+`shift` layout `ThreadContextCard` measures), except on phones (a compact
+viewport with a coarse pointer, the rule `MessageActionBar` uses). A narrower
+pane is `banner` and its header button opens the card as a popover. Threads
+shown inside a panel or as a transcript are `banner`: `ThreadScreen` wraps
+those presentations in `WithoutThreadContextCard`.
 
 The card's counterparts of the Info tab's row and section slots. A row
 registration is `{ id, group, order?, component }` and draws in the card's top
@@ -2970,9 +3151,10 @@ off by default. The row grows to two lines only
 while an item draws something, the line is hidden while the row is renamed or
 customized, and clicks on it go through the row's own click handling. The
 GitHub PR Status plugin registers the first item: the current-branch pull
-request's `#number` in the state's color (a draft's in the subtle foreground), plus a yellow
-dot while an open or draft PR's checks run or a red cross when they fail or the
-PR has conflicts (passing checks show nothing), from one `useData` read of
+request's `#number` in the state's color (a draft's in the subtle foreground), plus a red
+cross when an open or draft PR needs action (failing checks, changes requested,
+conflicts, behind its base or blocked by rules) or else a yellow dot while its checks run,
+from one `useData` read of
 every listed environment. No core row indicator moved into the slot: the status
 glyph, split mini-map, shortcut pill and hover actions share the row's fixed
 trailing box, the cross-project icon depends on the row's position in the
@@ -3222,9 +3404,10 @@ hook on the initial attempt as an `experimental_submission` envelope carrying
 the submitting plugin's id. Core validates the data as JSON but neither
 persists nor interprets it.
 
-There is one implementation. `PromptBoxInternal` publishes `submit` on the
-composer editor bridge; it picks Enter's handler, the queue handler or the
-steer handler and gates it exactly as the matching shortcut is gated, then
+There is one implementation. The host's `ComposerBox` publishes `submit` on
+the composer editor bridge for every composer plugin; it picks Enter's handler,
+the queue handler or the steer handler and gates it exactly as the matching
+shortcut is gated, then
 calls the same `onSubmit` or `onModifierSubmit` the shortcuts and the send
 button call, passing `sendAt` and the plugin submission. Only hosts that set
 `sendsOnEnter` (the thread, embedded thread chat and New thread composers)
@@ -3360,43 +3543,6 @@ Before stabilization, audit path portability and session freshness after
 machine re-enrollment, and cleanup retry behavior across unavailable
 providers, concurrent attempts, and environments shared by archived and live
 threads.
-
-## Workspace diff Viewed state (`bb.sdk.environments.experimental_diffViewed`, `experimental_markDiffViewed`, `experimental_clearDiffViewed`)
-
-`GET /environments/:id/diff/viewed` (diff target in the query) lists
-`{ files: { path, revision }[] }` for one environment and diff target.
-`PUT` with `{ target, path, revision }` marks a file Viewed at a revision, and
-`DELETE` with `{ target, path? }` clears one file or the whole target; both
-return `{ ok: true }` and emit the `diff-viewed-changed` environment change.
-`POST` accepts the diff query fields and `paths` (up to 500) for a bounded
-lookup; an empty list returns no records. The SDK selects this path when
-`experimental_diffViewed` receives `paths`. Core uses the loaded diff paths,
-independent of display filters, so marking Viewed cannot hide its own query.
-Records live in `diff_viewed_files`, keyed by environment, target
-(`uncommitted`, `commit:<sha>`, `branch_committed:<branch>`, `all:<branch>`)
-and path. Revisions come from the `revision` field that the Git plugin's
-`files` RPC returns for every file: `<oldMode>:<oldBlob>:<newMode>:<newBlob>`
-from `git diff --raw`, with the worktree side hashed by `git hash-object`. A
-file counts as Viewed only while the stored revision equals the current one.
-The plugin's `files` and `patches` reads also take `ignoreWhitespace` (git
-`-w`).
-
-Callers: the workspace diff panel's Viewed checkbox
-(`DiffFilesPanel` through `useSetDiffFileViewed` and
-`useEnvironmentDiffViewed`) and the bundled Git plugin
-(`plugins/git/server/viewed.ts`), which serves
-`bb git viewed list|mark|unmark|clear` through its `viewed`, `markViewed` and
-`clearViewed` RPCs.
-
-**Audit before stabilizing.**
-
-1. **Revision cost.** Every file list hashes each changed worktree file; check
-   latency on large diffs and very large files, and whether git's index stat
-   cache can supply unchanged blobs.
-2. **Retention.** Records for destroyed environments stay until the row is
-   deleted; decide whether destroy should clear them.
-3. **Shape.** Decide whether the file list should carry `viewed` itself so
-   callers do not join two reads.
 
 ## Host process primitives (`@get-bb/plugin-sdk/host`)
 
@@ -3584,6 +3730,23 @@ Docs: `backend-sdk.md`.
 Stabilization requires deciding whether a general `thread.updated` event
 should replace it, and a second consumer.
 
+## Thread read notifications
+
+`experimental_thread.read` delivers `{ thread }` after a thread's read state
+changes and it is now read (`lastReadAt >= latestAttentionAt`): a client
+opened it or marked it read, or the user sent it a turn. Marking a thread
+unread does not fire it. Core's own read path is the trigger: every
+`lastReadAt` write raises the `read-state-changed` thread change, and the hub
+emits the event from there, so the payload is the same read state the
+sidebar's unread dot uses. Push-notifications uses it, behind the
+`dismissReadNotifications` experiment, to remove the thread's delivered
+notifications from phones and from open web and desktop clients.
+
+Docs: `backend-sdk.md`, `backend-events.md`.
+
+Stabilization requires deciding whether a general `thread.updated` event
+should replace it, and a second consumer.
+
 ## Host deletion notifications
 
 `experimental_host.deleted` delivers the removed host's public DTO once,
@@ -3724,19 +3887,50 @@ The SDK test fake exposes the props as `data-*` attributes.
 **Core callers.** `ThreadStatusGlyph`
 (`apps/app/src/components/thread/ThreadStatusGlyph.tsx`) is the SDK export
 and the glyph in the thread search palette, the related threads info section,
-and mobile recents. The thread-list plugin draws its rows and collapsed-group
-rollups with it.
+the thread context card's sub-threads, and mobile recents. The thread-list
+plugin draws its rows and collapsed-group rollups with it. Its labels and the
+rule for when `rowStatus` replaces the indicator come from
+`packages/plugin-sdk/src/internal/thread-status.ts`, the module behind
+`experimental_resolveThreadStatus`.
 
 Docs: `frontend-registration.md`.
 
 **Audit before stabilizing.**
 
-1. **Indicator resolution.** The caller resolves the indicator, so the
-   thread-list plugin keeps its own copy of the indicator precedence and labels
-   that `@bb/client-core` holds for bb's surfaces. Decide whether the SDK should
-   export the resolver and labels instead.
-2. **Archived rows.** No plugin passes `archived` yet; confirm the archived
+1. **Archived rows.** No plugin passes `archived` yet; confirm the archived
    glyph belongs on this component rather than in the archived list.
+
+## `experimental_resolveThreadStatus` (`@get-bb/plugin-sdk/app`)
+
+A pure function from `PluginThreadStatusInput` (the row's thread or null for a
+group row, the threads it hides while collapsed, whether any of them holds a
+draft, and another plugin's row status) to `PluginThreadStatus`: the
+indicator, the row status when it shows in place of the indicator, the
+accessible label, and whether anything is working. Hidden threads add their
+attention and work; their queued messages do not count. The host installs the
+function from `packages/plugin-sdk/src/internal/thread-status.ts`, so a plugin
+built against an older SDK still resolves with the running host's precedence.
+
+**Core callers.** It is the only status resolver.
+`toPluginSidebarThread` (`apps/app/src/lib/plugin-sidebar-threads.ts`) fills
+`PluginSidebarThread.indicator` with it. `useThreadListEntryStatus`
+(`apps/app/src/hooks/useThreadListEntryStatus.ts`) resolves mobile recents
+(including a collapsed parent's descendants), the thread search palette, the
+related threads info section, and the thread context card through it, reading
+the same draft and row status the sidebar reads. The thread-list plugin
+resolves its thread rows and its collapsed parent, section, project,
+environment, and hidden-group rollups through it. `apps/app/src/lib/thread-status.test.ts`
+runs one case table through both the core and the plugin inputs.
+
+**Audit before stabilizing.**
+
+1. **Rollup scope.** A collapsed parent row folds in hidden threads' attention
+   and work but only its own row status; a collapsed group uses the first
+   hidden thread's row status. Decide whether the input should take hidden
+   threads' row statuses too (see #5810).
+2. **Unread grouping.** The thread-list plugin's read-status grouping keeps
+   its own "unread and done" predicate. Decide whether that predicate belongs
+   in the SDK next to this function.
 
 ## `HostsArea.experimental_reconcile`
 
@@ -3854,10 +4048,41 @@ rollback delivery, missing jobs after restart, and CLI/SDK parity.
 Posts one anonymous product event to `POST /api/v1/system/telemetry/events`,
 which forwards it to usage telemetry under the install's anonymous id and
 drops it when usage data sharing is off. The schema is a strict allow-list of
-setup-guide and new-thread-submit events; anything else is a 400. Core
-callers, all through `recordTelemetryEvent` in
-`apps/app/src/components/onboarding/onboarding-telemetry.ts`: the setup guide
-(`OnboardingFlow`) and `NewThreadComposer`'s `new_thread_submit` outcomes.
+setup-guide, new-thread-submit, plugin-creation-started, and release notes
+events; anything else is a 400. App callers, all through `recordTelemetryEvent`
+in `apps/app/src/components/onboarding/onboarding-telemetry.ts`: the setup guide
+(`OnboardingFlow`, `useOnboardingProjectImport`, and agent installs it starts
+through `provider-cli-install-store`), `NewThreadComposer`'s `new_thread_submit` outcomes,
+`PluginCreateButton`'s `plugin_creation_started`, and Settings → Updates'
+changelog (`release_notes_opened`, inline or on the web). `bb plugin new` sends
+`plugin_creation_started` through the same SDK method. The setup guide's
+Plugins step reports `recommendation` `shown`, `selected` and `deselected`
+(a featured plugin switched back off) with a per-visit `recommendation_id`; `selected` also stores that id in server-owned settings
+until the plugin's next use, disable or uninstall. `NewThreadComposer` also
+reports `new_thread_blocker` once per blocker reason while a draft exists.
+`onboarding_agent_state` adds `agent_statuses`, each agent's provider status
+by id; the server keeps only shipped agent ids.
+`onboarding_operation` reports a guide action's started, succeeded or failed
+outcome with only a public agent or plugin id or counts and, for the Projects
+step, whether the scan ran out of time and how many folders it could not open.
+A failed operation or `onboarding_sign_in` adds a `failure_reason` from a fixed
+set (`no_host`, `host_unavailable`, `timed_out`, `not_found`, `permission`,
+`command_failed`, `unsupported`, or `other`); a failed `remote_access` adds a
+`failure_stage` (`sign_in`, `pairing`, or `turn_on`) instead.
+`onboarding_left` reports the step a guide was on when the page unloaded
+before the guide finished; it passes the optional second argument
+`{ keepalive: true }`, which sends the request with `fetch`'s `keepalive` so it
+outlives the page. A failed `new_thread_submit` may add `failure_reason` from
+the same fixed set.
+`onboarding_error` reports `kind` (`render`, `uncaught` or
+`unhandled_rejection`) with the guide's step, from `OnboardingErrorTelemetry`
+around the guide in `OnboardingGate`, which reports and rethrows render errors
+and listens for window errors only while the guide is open.
+`onboarding_exposed` (`entry`) marks the guide being shown; the server saves
+the assignment, adds `setup_guide_variant` and `setup_guide_source`, sets
+`setup_guide_variant` as a person property (`$set`), and sends
+`$feature_flag_called` when the variant came from the PostHog flag. Every
+setup-guide event gets `setup_guide_variant` from the server.
 
 Stabilize after deciding whether third-party plugins may emit product events
 at all and, if so, how they are namespaced and rate limited.
@@ -3879,13 +4104,58 @@ machine through the host daemon (enrolled machines get `~/.local/bin/bb` from
 `install-machine.sh` today), and after exercising real Windows and macOS
 installs.
 
+## `PluginBbSdk.system.experimental_scheduleAppUpdate`, `experimental_cancelScheduledAppUpdate`, and `experimental_setAppUpdateAuto`
+
+`experimental_scheduleAppUpdate()` updates bb once no thread is running
+(`starting` or `active`). With none running it starts the update at once, like
+`applyAppUpdate`; otherwise it returns the status with `scheduled:
+{ requestedAt }` and the server starts the update after running threads have
+stayed at zero for five seconds. A thread that starts while the update downloads
+puts it back to waiting instead of recording a failure: the server sends the
+launcher a `defer` decision, and the desktop service hands the download back.
+`scheduled` stays set while that update downloads; clients tell waiting from
+downloading by `activity.phase`. Scheduling again while one is pending returns
+it unchanged. Both refuse like `applyAppUpdate` when the update is unsupported,
+blocked, unavailable, or already running, and 403 for machine credentials.
+Both return 403 `update_when_idle_experiment_disabled` while the
+`updateWhenIdle` experiment is off, and turning it off drops a waiting update.
+While it is on, the server sends `app-update-changed` whenever the running
+thread count changes, so `runningThreadCount` stays current for clients.
+`experimental_cancelScheduledAppUpdate()` clears the schedule, and a scheduled
+update that is already downloading defers instead of restarting; it is a no-op
+without one. Cancelling also records the available version as skipped
+(`availableSkipped: true` in the status), so the server's automatic check does
+not schedule it again until a newer one appears; that check also skips a
+version whose last update attempt failed.
+`experimental_setAppUpdateAuto({ enabled })` saves the automatic update setting
+(`autoUpdate` in the status) and returns the status. While it and the
+experiment are on, the server checks right away, 30 s after boot, and every
+hour, and schedules what it finds; turning it off stops the checks and
+drops a waiting update. It returns 403 like the schedule routes. Applying by
+hand also clears a schedule, and schedule, apply, and the
+scheduled start run one at a time. A scheduled start the server refuses ends the
+schedule with only a log line; the status's `blocked`, `support`, or `activity`
+shows why. The schedule lives in server memory and is lost when the server
+restarts. Core callers: Settings → Updates (the "Restart and update bb
+automatically" switch, and Skip this version on a waiting update) and
+`bb updates app apply --when-idle` / `bb updates app cancel` /
+`bb updates app auto`.
+
+Stabilize after deciding whether the schedule should persist across server
+restarts, whether threads waiting on a user decision should count as running,
+and whether the settle window should be configurable, and once the
+`updateWhenIdle` experiment ships on for everyone; then rename project-wide and
+remove this entry.
+
 ## `PluginBbSdk.hosts.experimental_discoverRepos`
 
 `hosts.experimental_discoverRepos({ hostId })` lists up to 10 git
 repositories under the machine's home directory with local activity in the
 last 30 days, newest first, each with `path`, `name`, `lastActivityAt`,
 `originUrl`, and the bound `projectId` or null; `truncated` reports an
-exhausted three-second walk budget. The walk skips dot, build, and scratch
+exhausted three-second walk budget, and `unreadableCount` counts folders the
+scan was not allowed to open (`EACCES`/`EPERM`, such as macOS
+privacy-protected folders). The walk skips dot, build, and scratch
 directories, linked worktrees, and submodules. Core callers: the setup guide
 (`OnboardingFlow`) and `bb project discover`; it rides the
 `host.discover_repos` daemon command.
@@ -4051,8 +4321,9 @@ plugin whose CLI commands, agent tools or background work change the same
 data also had to call `bb.rpc.experimental_invalidate` there, and an app-made
 write then refreshed twice. The replacement is that one call, made in the
 server code that changes the data. The first-party callers already did: the
-Git plugin's `markViewed`, `clearViewed` and `setMergeBase` refresh through
-core's `diff-viewed-changed` and `metadata-changed` environment events, the
+Git plugin's `markViewed` and `clearViewed` invalidate its `viewed` tag when
+they write, `setMergeBase` refreshes through core's `metadata-changed`
+environment event, the
 GitHub PR Status plugin's `refresh`, `markReady`, `markDraft` and `merge`
 through its pull request store's `publish` when the row changes, and the push
 notification plugin's `threadNotifications.set` through `publishSubtree`, and
@@ -4076,13 +4347,17 @@ kalindudc/bb-marketplace's loom (`src/rpc-tags.ts`), shuttle and vantage
 field from `ContractTagDeclarations` consumers in the plugin SDK only after
 those plugins have migrated.
 
+## Retired composer renderer `view` and `key` runtime members
+
+`ExperimentalComposerRendererApi.view`, `.key` and the `ExperimentalComposerView` type are gone from `@get-bb/plugin-sdk/app`, the Plugin Guide and the authoring docs: inside a composer box `useComposer().scope` and `.key` are bound to the box's host and carry the same values, and the bundled composer reads them there. `ComposerBox` still puts `view` and `key` on the renderer object (`RetiredComposerRendererMembers`), and `composer-contract.test.tsx` checks that they match `useComposer()` on every surface. Callers are forks of bb's composer written against the old SDK (smsunarto/bb-plugins' t3-composer reads `renderer.key` and `renderer.view.scope`). Remove the runtime members after those forks migrate.
+
 ## Retired `experimental_useSidebarThreadPullRequest` runtime member
 
 `experimental_useSidebarThreadPullRequest(threadId)` and its `PluginSidebarPullRequest` and `PluginSidebarThreadPullRequestState` types are gone from `@get-bb/plugin-sdk/app`, the Plugin Guide and the authoring docs. Published bundles resolve `@get-bb/plugin-sdk/app` exports by name on `globalThis.__bbPluginRuntime.pluginSdkApp`, so the app installs `retiredPluginSdkAppMembers` (`apps/app/src/lib/plugin-sdk-app-impl.tsx`) next to the implementation. The member keeps its old shape, reads the GitHub PR Status plugin's `pullRequests` row for the thread's environment through `useRetiredSidebarEnvironmentPullRequest` (`apps/app/src/lib/retired-sidebar-pull-request.ts`), main's hook kept for it: a cached row refetches on mount and on page show, and the plugin's server decides whether that needs GitHub. It returns `{ isLoading: false, pullRequest: null }` when the plugin is disabled or the read fails. The GitHub PR Status plugin's own segment and Info row use the plugin's copy of that hook. Both copies use `useRefetchOnShowAndFocus` (`plugins/github-pr-status/ui/refetch-on-show.ts`), which refetches a row once when its first view mounts. The name leaves only the typings. `bb-plugin-build` keeps it in the `@get-bb/plugin-sdk/app` runtime shim's export list (`RETIRED_PLUGIN_SDK_APP_EXPORTS` in `packages/plugin-build/src/build-plugin-app.ts`), so plugins that still import it build and run, because git-sourced marketplace plugins are built by bb at install and update and path and builtin plugins rebuild when the SDK version changes. An import of it is a build warning carrying the replacement call: `bb plugin build` and `bb plugin dev` print it, and the server writes it to the plugin's log and the server log when it builds the plugin. Callers are marketplace plugins written against the old SDK (t3sidebar, dockside, gtd-sidebar, thread-inbox, radar-sidebar, bb-sidebar, sidebar-plus, cursor-sidebar, switchboard, vantage, jb-flow, tinted-threads among them). Their migration path is `experimental_ThreadRowMetadata` in the row, which draws the GitHub PR Status badge as bb's sidebar does; the build warning names it. Remove the runtime member and the shim entry only after those plugins have migrated.
 
-## Retired environment git reads (`bb.sdk.environments.status`, `diff`, `diffFiles`, `diffPatch`, `diffFile`, `diffBranches`)
+## Retired environment git reads (`bb.sdk.environments.status`, `diff`, `diffFiles`, `diffPatch`, `diffFile`, `diffBranches`, `experimental_diffViewed`, `experimental_markDiffViewed`, `experimental_clearDiffViewed`)
 
-These six `PluginBbSdk.environments` methods are gone from the public typings, the Plugin Guide and the authoring docs; the Git plugin's RPC contract (`bb--git`: `status`, `diff`, `files`, `patches`, `fileSide`, `branches`) replaces them, and core's HTTP read routes are deleted. Published and git-sourced plugins keep working: `packages/sdk/src/areas/retired-environment-reads.ts` adds runtime adapters with the old shapes that call `POST /api/v1/plugins/bb--git/rpc/<method>`, so they fail with the RPC error when the Git plugin is disabled. `bb-plugin-build` scans app and server bundles for calls to them (`packages/plugin-build/src/retired-sdk-members.ts`) and prints a warning with the replacement RPC call; `bb plugin build`, `bb plugin dev` and server-side builds at install and update log it, and never fail. Callers are marketplace plugins written against the old SDK (vantage, diff-tree, firstmate, diff-viewed among them). Remove the adapters after those plugins migrate.
+These nine `PluginBbSdk.environments` methods are gone from the public typings, the Plugin Guide and the authoring docs; the Git plugin's RPC contract (`bb--git`: `status`, `diff`, `files`, `patches`, `fileSide`, `branches`, `viewed`, `markViewed`, `clearViewed`) replaces them, and core's HTTP routes are deleted. Viewed marks live in the Git plugin's own database (`plugins/git/server/viewed.ts`), keyed by environment, target (`uncommitted`, `commit:<sha>`, `branch_committed:<branch>`, `all:<branch>`) and path. Migration `0151_hand_diff_viewed_files_to_git_plugin` copies core's `diff_viewed_files` rows into the plugin's KV entry `viewedMarksFromCore` and drops the table; the plugin moves them into its database on its next load and deletes the entry. Marks of environments that no longer exist are deleted when the plugin loads, replacing the old foreign-key cascade. Published and git-sourced plugins keep working: `packages/sdk/src/areas/retired-environment-reads.ts` adds runtime adapters with the old shapes that call `POST /api/v1/plugins/bb--git/rpc/<method>`, so they fail with the RPC error when the Git plugin is disabled. `bb-plugin-build` scans app and server bundles for calls to them (`packages/plugin-build/src/retired-sdk-members.ts`) and prints a warning with the replacement RPC call; `bb plugin build`, `bb plugin dev` and server-side builds at install and update log it, and never fail. Callers are marketplace plugins written against the old SDK (vantage, diff-tree, firstmate, diff-viewed among them; danielbachhuber/bb-plugins' diff-viewed also calls the three Viewed methods). Remove the adapters, and `viewedMarksFromCore` handling in the Git plugin, after those plugins migrate.
 
 `PLUGIN_CLI_OUTPUT_MAX_BYTES` is 32 MiB (was 1 MiB) so `bb git diff` and
 `bb git file` print what `bb environment diff` and `diff-file` printed: a diff
@@ -4138,6 +4413,24 @@ own value, so plugins built against the old constant keep working.
 - **Behavior:** a registration is `{ id, title, group, order?, summary, action?, details?, useVisible? }`. Segments share the context row above an existing thread's composer, and the host mounts each component in its own crash boundary: `summary` in the row (wrapped in a group named by `title`), `action` at the row's end after every summary, and `details` below the row. Segments sort like Info rows and thread actions: by `group` (string compare), then `order` within it (unset last), then registration order, core first on a tie. Core's groups are `experimental_THREAD_CONTEXT_SEGMENT_GROUPS`: `thread` (`1_thread`: parent thread) and `git` (`3_git`: changed files). The constant names only groups core renders; a plugin names its own group, placed where its string sorts. Each entry of `segments` is `{ key, pluginId }` with `key` `<pluginId>/<id>`, the key shape thread actions use; core's segments use `bb--core`. `useVisible(input)` runs in plugin scope per thread; false, or a crash, leaves the segment out of the row and of `segments`. Props carry `threadId`, `projectId`, `environment`, the visible `segments` in row order, and the shared disclosure state: one segment of the row is expanded at a time, keyed by `key`. `environment` is `{ id }`, or null when the thread has no environment, its host is not active, or the environment is not a usable checkout. The row is withheld while core's workspace status loads and while a question is pending, and read-only history (archived thread or gone environment) shows core's parent thread only. The banner renders under every composer plugin, because the host draws it above `ComposerBox`.
 - **Core callers:** `ThreadPromptContextBanner` (`apps/app/src/components/promptbox/banner/ThreadPromptContextBanner.tsx`) registers the parent thread (summary and details, including read-only history) and changed files (summary, merge-base action, details) through `definePluginApp` and the same collector, and renders them with plugin registrations through `useThreadContextSegments` and `ThreadContextSegmentMount` (`apps/app/src/components/plugin/PluginThreadContextSegments.tsx`). Core segments read pane-local data from a React context and render without a plugin crash boundary, as core Info rows do. The GitHub PR Status plugin registers the pull request segment in its own group `2_pullRequest`, between core's two and its Mark ready and merge actions. Active child threads are a separate core row above the context row (`ThreadChildThreadsBanner`), not a segment. Contract tests: `ThreadPromptContextBanner.segments.test.tsx`.
 - **Stabilization:** audit per-component mounts and crash recovery across reloads and plugin disable, `segments` stability while visibility settles, focus handoff between a plugin's summary and details, independent panes, and compact widths with several plugin segments. Then rename project-wide and remove this entry.
+
+## Collapsible stack card (`experimental_CollapsibleStackCard`)
+
+- **Surface:** `PluginSdkApp.experimental_CollapsibleStackCard`, `ExperimentalCollapsibleStackCardProps` and `ExperimentalCollapsibleStackCardDismiss`.
+- **Behavior:** bb's collapsible card for the stack above a thread's composer. Props are `{ label, title, icon, isActive, dismiss?, children }`. The card and its toggle are named by `label`; the header shows `icon` and `title`, in bb's working style when `isActive` and muted otherwise, and toggles `children`. The card starts collapsed and keeps its expansion while mounted. `dismiss` is `{ label, failureMessage, onDismiss }`: a header button named by `label` that bb disables, with a spinner, until `onDismiss()` settles, and on rejection bb shows its mutation error toast with `failureMessage` as the fallback. A plugin renders it from a thread-scoped composer banner with `chrome: "bare"`, which places it with the other plugin banners above bb's own stacked cards.
+- **Core callers:** bb's Plan mode card (`apps/app/src/components/promptbox/banner/ThreadPromptModeCard.tsx`) renders through the same `CollapsibleStackCard` (`apps/app/src/components/promptbox/banner/CollapsibleStackCard.tsx`). The Codex provider plugin's Goal banner renders it. Tests: `ThreadPromptModeCard.test.tsx` (expansion, pending dismiss, failure toast) and the Codex plugin's `goal-card.test.tsx`.
+- **Stabilization:** decide whether bb's workflow, background command and todo cards should use it too, whether banners need a placement among bb's cards, and whether `dismiss` should support a confirmation. Then rename project-wide and remove this entry.
+
+## Thread extension state (`experimental_useThreadExtensionState`)
+
+- **Surface:** `PluginSdkApp.experimental_useThreadExtensionState(threadId, kind)` and the timeline response's `extensionStates` window field (`@bb/server-contract`).
+- **Behavior:** returns the latest `extension.state` payload the calling plugin's provider bridge emitted for its declared kind `kind` (the local name; the host prefixes the calling plugin's id, so a plugin reads only its own kinds), or null when there is none or the last payload was null. The server fills `extensionStates` on the latest timeline page with the latest state of each kind the thread's provider declares with a `state` schema, keyed by the namespaced kind; older pages carry `{}`. Payloads are JSON that already passed the kind's schema, typed `unknown` for the caller to parse. The hook reads the thread's cached timeline query without refetching on mount, so it follows the timeline's live updates while bb shows the thread and is not a general-purpose read for threads bb is not showing.
+- **Core callers:** none. bb's own state kinds (provider commands, session options, todos) keep their typed timeline fields; the Codex Goal banner is the first caller.
+- **Stabilization:** decide whether the hook needs a batched form for thread lists, and whether kinds declared by another installed provider should be readable. Then rename project-wide and remove this entry.
+
+## Retired Goal activity (`PluginSidebarThreadActivity.goals`, the `goal` sidebar indicator)
+
+bb no longer tracks provider Goals in core: the Codex plugin draws its own Goal card, and the sidebar no longer shows a Goal glyph, so a Goal thread shows bb's ordinary working indicator. `ThreadActivityState.activeGoalCount` is gone from the thread list API. `goals` is gone from the `PluginSidebarThreadActivity` typings, but the host still sends `goals: 0` in every thread's `activity` at runtime (`apps/app/src/lib/plugin-sidebar-threads.ts`), so already-built plugins that read it keep running; `"goal"` is gone from `PluginSidebarThreadIndicator` and is never reported. A provider plugin reads its own Goal state with `experimental_useThreadExtensionState`. Stop sending `goals` at the next major.
 
 ## Provider skills index
 

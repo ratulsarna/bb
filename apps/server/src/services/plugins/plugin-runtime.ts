@@ -1,3 +1,4 @@
+import { capturePluginUse } from "./plugin-use-telemetry.js";
 import {
   realtimeSubscriptionTargetKey,
   type PluginReadSubscriptionTarget,
@@ -1363,6 +1364,7 @@ export function createPluginRuntime(context: PluginRuntimeContext) {
             row.rootDir,
             deps.appVersion,
             await getPluginBuildToolchain(deps),
+            { minify: true, hostProvidedZod: true },
           );
           logPluginBuildWarnings({
             dataDir: deps.dataDir,
@@ -1692,11 +1694,12 @@ export function createPluginRuntime(context: PluginRuntimeContext) {
       return null;
     }
     const previous = loaded.get(row.id);
+    const isReload = previous !== undefined;
     function failBeforeFactory(
       status: PluginRuntimeStatus,
       detail: string,
     ): string {
-      if (previous !== undefined) {
+      if (isReload) {
         setStatus(row.id, "running", `reload failed: ${detail}`);
         logger.warn(
           `plugin ${row.id} reload failed (kept previous instance): ${detail}`,
@@ -1761,6 +1764,7 @@ export function createPluginRuntime(context: PluginRuntimeContext) {
     };
     const stopping = new AbortController();
     const handle = createPluginApi({
+      recordPluginUse: () => capturePluginUse(deps, row.id),
       pluginId: row.id,
       logger: deps.logger,
       db: deps.db,

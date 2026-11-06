@@ -1,7 +1,8 @@
-import { environments, threads, type DbConnection } from "@bb/db";
-import { and, eq, inArray, isNull, ne } from "drizzle-orm";
+import { environments, liveThread, threads, type DbConnection } from "@bb/db";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import {
   realtimeSubscriptionTargetKey,
+  resolveEnvironmentMergeBaseBranch,
   type EnvironmentChangeKind,
   type ThreadChangeKind,
   type ThreadEventType,
@@ -321,6 +322,9 @@ export class WatchInterestCoordinator {
           id: environments.id,
           hostId: environments.hostId,
           path: environments.path,
+          mergeBaseBranch: environments.mergeBaseBranch,
+          baseBranch: environments.baseBranch,
+          defaultBranch: environments.defaultBranch,
         })
         .from(environments)
         .where(
@@ -350,6 +354,8 @@ export class WatchInterestCoordinator {
               workspaceContext: workspaceContextFromPath({
                 path: environment.path,
               }),
+              mergeBaseBranch:
+                resolveEnvironmentMergeBaseBranch(environment) ?? null,
             },
           },
         );
@@ -363,7 +369,6 @@ export class WatchInterestCoordinator {
       const rows = this.deps.db
         .select({
           id: threads.id,
-          environmentId: environments.id,
           hostId: environments.hostId,
         })
         .from(threads)
@@ -374,8 +379,7 @@ export class WatchInterestCoordinator {
               threads.id,
               threadIds.slice(offset, offset + WATCH_TARGET_QUERY_BATCH_SIZE),
             ),
-            isNull(threads.deletedAt),
-            isNull(threads.archivedAt),
+            liveThread,
             ne(environments.status, "destroyed"),
           ),
         )
@@ -389,7 +393,6 @@ export class WatchInterestCoordinator {
           {
             hostId: thread.hostId,
             threadStorageTarget: {
-              environmentId: thread.environmentId,
               threadId: thread.id,
             },
           },

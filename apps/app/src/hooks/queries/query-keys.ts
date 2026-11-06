@@ -62,6 +62,7 @@ const SYSTEM_THEME_QUERY_KEY = "systemTheme";
 export const SYSTEM_EXECUTION_OPTIONS_QUERY_KEY = "systemExecutionOptions";
 const SYSTEM_CLI_SKILLS_QUERY_KEY = "systemCliSkills";
 const SYSTEM_CLI_COMMAND_QUERY_KEY = "systemCliCommand";
+const SYSTEM_SETUP_GUIDE_QUERY_KEY = "systemSetupGuide";
 const SYSTEM_VERSION_QUERY_KEY = "systemVersion";
 const SYSTEM_APP_UPDATE_QUERY_KEY = "systemAppUpdate";
 const SERVER_MOVE_STATUS_QUERY_KEY = "serverMoveStatus";
@@ -416,12 +417,16 @@ type SystemThemeQueryKey = readonly [typeof SYSTEM_THEME_QUERY_KEY, string];
 type AllSystemThemesQueryKeyPrefix = readonly [typeof SYSTEM_THEME_QUERY_KEY];
 type SystemCliSkillsQueryKey = readonly [typeof SYSTEM_CLI_SKILLS_QUERY_KEY];
 type SystemCliCommandQueryKey = readonly [typeof SYSTEM_CLI_COMMAND_QUERY_KEY];
+type SystemSetupGuideQueryKey = readonly [typeof SYSTEM_SETUP_GUIDE_QUERY_KEY];
 type SystemVersionQueryKey = readonly [typeof SYSTEM_VERSION_QUERY_KEY];
 type SystemAppUpdateQueryKey = readonly [typeof SYSTEM_APP_UPDATE_QUERY_KEY];
 type ServerMoveStatusQueryKey = readonly [typeof SERVER_MOVE_STATUS_QUERY_KEY];
 type HostProviderCliStatusQueryKey = readonly [
   typeof HOST_PROVIDER_CLI_STATUS_QUERY_KEY,
   string | null,
+];
+type AllHostProviderCliStatusQueryKeyPrefix = readonly [
+  typeof HOST_PROVIDER_CLI_STATUS_QUERY_KEY,
 ];
 type SystemProviderStatesQueryKey = readonly [
   typeof SYSTEM_PROVIDER_STATES_QUERY_KEY,
@@ -447,6 +452,11 @@ type HostPathExistenceQueryKey = readonly [
   typeof HOST_PATH_EXISTENCE_QUERY_KEY,
   string | null,
   readonly string[],
+];
+type HostPathExistsQueryKey = readonly [
+  typeof HOST_PATH_EXISTENCE_QUERY_KEY,
+  string,
+  string,
 ];
 type HostPathExistenceQueryKeyPrefix = readonly [
   typeof HOST_PATH_EXISTENCE_QUERY_KEY,
@@ -974,6 +984,10 @@ export function systemCliCommandQueryKey(): SystemCliCommandQueryKey {
   return [SYSTEM_CLI_COMMAND_QUERY_KEY];
 }
 
+export function systemSetupGuideQueryKey(): SystemSetupGuideQueryKey {
+  return [SYSTEM_SETUP_GUIDE_QUERY_KEY];
+}
+
 export function systemConfigQueryKey(): SystemConfigQueryKey {
   return [SYSTEM_CONFIG_QUERY_KEY];
 }
@@ -1010,6 +1024,10 @@ export function hostProviderCliStatusQueryKey(
   hostId: string | null,
 ): HostProviderCliStatusQueryKey {
   return [HOST_PROVIDER_CLI_STATUS_QUERY_KEY, hostId];
+}
+
+export function allHostProviderCliStatusQueryKeyPrefix(): AllHostProviderCliStatusQueryKeyPrefix {
+  return [HOST_PROVIDER_CLI_STATUS_QUERY_KEY];
 }
 
 export function systemProviderStatesQueryKey(
@@ -1060,6 +1078,13 @@ export function hostPathExistenceQueryKey(
   paths: readonly string[],
 ): HostPathExistenceQueryKey {
   return [HOST_PATH_EXISTENCE_QUERY_KEY, hostId, paths];
+}
+
+export function hostPathExistsQueryKey(
+  hostId: string,
+  path: string,
+): HostPathExistsQueryKey {
+  return [HOST_PATH_EXISTENCE_QUERY_KEY, hostId, path];
 }
 
 export function hostPathExistenceQueryKeyPrefix(): HostPathExistenceQueryKeyPrefix {

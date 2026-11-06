@@ -646,117 +646,159 @@ describe("editThreadMessage", () => {
     },
   );
 
-  it("keeps history intact until the staged Codex rewind succeeds, then replaces the suffix", async () => {
-    await withTestHarness(async (harness) => {
-      const { environment, thread } = seedEditableThread(harness);
-      const payload = {
-        operationId: "edit-op-success",
-        expectedRequestSequence: 7,
-        input: [
-          { type: "text" as const, text: "Replacement message", mentions: [] },
-        ],
-        model: "gpt-5",
-        serviceTier: "default" as const,
-        reasoningLevel: "medium" as const,
-        permissionMode: "full" as const,
-      };
-      const editPromise = editThreadMessage(harness.deps, {
-        environment,
-        thread,
-        payload,
-      });
-      const rewind = await waitForQueuedCommand(
-        harness,
-        (queued) => queued.command.type === "thread.rewind.prepare",
-      );
-      expect(rewind.command).toMatchObject({
-        sourceProviderThreadId: "provider-original",
-        retainThroughProviderCheckpoint: "checkpoint-first",
-        threadId: thread.id,
-      });
-      expect(listEvents(harness.db, { threadId: thread.id })).toHaveLength(11);
+  it.each(["ordinary", "strict"] as const)(
+    "keeps history intact until the staged Codex rewind succeeds with a %s hook, then replaces the suffix",
+    async (enforcement) => {
+      await withTestHarness(async (harness) => {
+        const { environment, thread } = seedEditableThread(harness);
+        const hook = vi.fn(() =>
+          enforcement === "strict"
+            ? ({ action: "proceed" } as const)
+            : ({ action: "wait", reason: "Ordinary policy" } as const),
+        );
+        setPluginHookProvider({
+          decisionTimeoutMs: 10_000,
+          invokeHook: (_id, _label, run) => invokePluginInline(run),
+          listHooks: () => [
+            {
+              pluginId: "edit-policy",
+              ...(enforcement === "strict"
+                ? { experimental_enforcement: "strict" as const }
+                : {}),
+              handler: hook,
+            },
+          ],
+        });
+        try {
+          const payload = {
+            operationId: "edit-op-success",
+            expectedRequestSequence: 7,
+            input: [
+              {
+                type: "text" as const,
+                text: "Replacement message",
+                mentions: [],
+              },
+            ],
+            model: "gpt-5",
+            serviceTier: "default" as const,
+            reasoningLevel: "medium" as const,
+            permissionMode: "full" as const,
+          };
+          const editPromise = editThreadMessage(harness.deps, {
+            environment,
+            thread,
+            payload,
+          });
+          const rewind = await waitForQueuedCommand(
+            harness,
+            (queued) => queued.command.type === "thread.rewind.prepare",
+          );
+          expect(hook).toHaveBeenCalledTimes(enforcement === "strict" ? 1 : 0);
+          if (enforcement === "strict") {
+            expect(
+              listRunningThreadsWithIntendedHosts(harness.deps, true),
+            ).toEqual([{ id: thread.id, hostId: environment.hostId }]);
+          }
+          expect(rewind.command).toMatchObject({
+            sourceProviderThreadId: "provider-original",
+            retainThroughProviderCheckpoint: "checkpoint-first",
+            threadId: thread.id,
+          });
+          expect(listEvents(harness.db, { threadId: thread.id })).toHaveLength(
+            11,
+          );
 
-      if (rewind.command.type !== "thread.rewind.prepare") {
-        throw new Error("Expected a thread.rewind.prepare command");
-      }
-      await reportQueuedCommandSuccess(harness, rewind, {
-        providerThreadId: "provider-staged-rewind",
-      });
-      await expect(editPromise).resolves.toEqual({
-        ok: true,
-        operationId: "edit-op-success",
-        requestSequence: 13,
-      });
+          if (rewind.command.type !== "thread.rewind.prepare") {
+            throw new Error("Expected a thread.rewind.prepare command");
+          }
+          await reportQueuedCommandSuccess(harness, rewind, {
+            providerThreadId: "provider-staged-rewind",
+          });
+          await expect(editPromise).resolves.toEqual({
+            ok: true,
+            operationId: "edit-op-success",
+            requestSequence: 13,
+          });
 
-      const stored = listEvents(harness.db, { threadId: thread.id });
-      expect(stored.map((event) => event.sequence)).toEqual([
-        1, 2, 3, 4, 5, 6, 12, 13,
-      ]);
-      const replacement = stored.find((event) => event.sequence === 13);
-      expect(replacement).toMatchObject({ type: "client/turn/requested" });
-      expect(JSON.parse(replacement?.data ?? "null")).toMatchObject({
-        input: [{ type: "text", text: "Replacement message", mentions: [] }],
+          const stored = listEvents(harness.db, { threadId: thread.id });
+          expect(stored.map((event) => event.sequence)).toEqual([
+            1, 2, 3, 4, 5, 6, 12, 13,
+          ]);
+          const replacement = stored.find((event) => event.sequence === 13);
+          expect(replacement).toMatchObject({ type: "client/turn/requested" });
+          expect(JSON.parse(replacement?.data ?? "null")).toMatchObject({
+            input: [
+              { type: "text", text: "Replacement message", mentions: [] },
+            ],
+          });
+          expect(getThread(harness.db, thread.id)).toMatchObject({
+            status: "active",
+          });
+          const replacementStart = await waitForQueuedCommand(
+            harness,
+            (queued) =>
+              queued.command.type === "thread.start" &&
+              queued.command.threadId === thread.id,
+          );
+          expect(
+            listQueuedThreadCommands(harness, "thread.start", thread.id),
+          ).toEqual([
+            expect.objectContaining({
+              fork: { sourceProviderThreadId: "provider-staged-rewind" },
+              input: [
+                { type: "text", text: "Replacement message", mentions: [] },
+              ],
+            }),
+          ]);
+          await reportQueuedCommandSuccess(harness, replacementStart, {
+            providerThreadId: "provider-replacement",
+          });
+          const discard = await waitForQueuedCommand(
+            harness,
+            (queued) => queued.command.type === "thread.rewind.discard",
+          );
+          expect(discard.command).toMatchObject({
+            leaseId:
+              rewind.command.type === "thread.rewind.prepare"
+                ? rewind.command.leaseId
+                : undefined,
+            threadId: thread.id,
+          });
+          await reportQueuedCommandSuccess(harness, discard, {});
+          await expect(
+            editThreadMessage(harness.deps, {
+              environment,
+              thread,
+              payload,
+            }),
+          ).resolves.toEqual({
+            ok: true,
+            operationId: "edit-op-success",
+            requestSequence: 13,
+          });
+          expect(
+            listQueuedThreadCommands(harness, "thread.start", thread.id),
+          ).toHaveLength(0);
+          expect(
+            listStoredProjectPromptHistoryRows(harness.db, {
+              projectId: thread.projectId,
+              limit: 10,
+            }).map((entry) => entry.requestSequence),
+          ).toEqual([2]);
+          expect(
+            listStoredThreadPromptHistoryRows(harness.db, {
+              threadId: thread.id,
+              limit: 10,
+            }).map((entry) => entry.requestSequence),
+          ).toEqual([13]);
+          expect(hook).toHaveBeenCalledTimes(enforcement === "strict" ? 1 : 0);
+        } finally {
+          setPluginHookProvider(undefined);
+        }
       });
-      expect(getThread(harness.db, thread.id)).toMatchObject({
-        status: "active",
-      });
-      const replacementStart = await waitForQueuedCommand(
-        harness,
-        (queued) =>
-          queued.command.type === "thread.start" &&
-          queued.command.threadId === thread.id,
-      );
-      expect(
-        listQueuedThreadCommands(harness, "thread.start", thread.id),
-      ).toEqual([
-        expect.objectContaining({
-          fork: { sourceProviderThreadId: "provider-staged-rewind" },
-          input: [{ type: "text", text: "Replacement message", mentions: [] }],
-        }),
-      ]);
-      await reportQueuedCommandSuccess(harness, replacementStart, {
-        providerThreadId: "provider-replacement",
-      });
-      const discard = await waitForQueuedCommand(
-        harness,
-        (queued) => queued.command.type === "thread.rewind.discard",
-      );
-      expect(discard.command).toMatchObject({
-        leaseId:
-          rewind.command.type === "thread.rewind.prepare"
-            ? rewind.command.leaseId
-            : undefined,
-        threadId: thread.id,
-      });
-      await reportQueuedCommandSuccess(harness, discard, {});
-      await expect(
-        editThreadMessage(harness.deps, {
-          environment,
-          thread,
-          payload,
-        }),
-      ).resolves.toEqual({
-        ok: true,
-        operationId: "edit-op-success",
-        requestSequence: 13,
-      });
-      expect(
-        listQueuedThreadCommands(harness, "thread.start", thread.id),
-      ).toHaveLength(0);
-      expect(
-        listStoredProjectPromptHistoryRows(harness.db, {
-          projectId: thread.projectId,
-          limit: 10,
-        }).map((entry) => entry.requestSequence),
-      ).toEqual([2]);
-      expect(
-        listStoredThreadPromptHistoryRows(harness.db, {
-          threadId: thread.id,
-          limit: 10,
-        }).map((entry) => entry.requestSequence),
-      ).toEqual([13]);
-    });
-  });
+    },
+  );
 
   it("returns the committed result to an overlapping retry of the same operation", async () => {
     await withTestHarness(async (harness) => {

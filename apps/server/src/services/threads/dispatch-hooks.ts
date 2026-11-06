@@ -14,7 +14,6 @@ import {
 import { sliceUtf16Head } from "@bb/text-utils";
 import type {
   ExecutionInputFieldSource,
-  SendMessageRequest,
   ThreadResponse,
 } from "@bb/server-contract";
 import type {
@@ -39,16 +38,6 @@ type DispatchHookDeps = Pick<AppDeps, "db" | "hub">;
  * send.
  */
 export type DispatchAttemptKind = PluginDispatchAttemptKind;
-
-export function resolveDispatchAttemptKind(
-  thread: Thread,
-  mode: SendMessageRequest["mode"],
-): DispatchAttemptKind {
-  if (thread.status !== "active") return "start-turn";
-  return mode === "steer" || mode === "steer-if-active" || mode === "auto"
-    ? "join-turn"
-    : "start-turn";
-}
 
 /**
  * A hook handler's answer, re-parsed at the boundary. Plugin sources are

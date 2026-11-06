@@ -71,11 +71,6 @@ import { settleDanglingBackgroundTasks } from "../../src/services/threads/backgr
 
 const WORKSPACE_PATH = "/tmp/dispatch-hooks-project";
 
-/**
- * The hook registry. Reading a mapped type through a generic key is sound,
- * which is what lets the fake provider satisfy `listHooks<K>` with no cast —
- * the same shape the real registry uses on the plugin handle.
- */
 type HookRegistry = {
   [K in PluginHookName]: PluginHookRegistration<K>[];
 };
@@ -84,19 +79,12 @@ function emptyRegistry(): HookRegistry {
   return { "message.dispatch": [] };
 }
 
-/**
- * Installs fake handlers through the same seam createApp registers the plugin
- * service through, so these tests exercise the real runner (order, lock, box,
- * validation, provenance) without loading plugins.
- */
 function installHooks(
   registry: HookRegistry,
   options: { decisionTimeoutMs?: number } = {},
 ): void {
   setPluginHookProvider({
     listHooks: (hook) => registry[hook],
-    // Mirrors the plugin service's failure isolation: a throw is reported, not
-    // propagated, and the runner is what turns it into a failed dispatch.
     invokeHook: (_pluginId, _label, run) => invokePluginInline(run),
     decisionTimeoutMs: options.decisionTimeoutMs ?? 10_000,
   });
@@ -145,21 +133,12 @@ function createHookedThread(
   });
 }
 
-/**
- * The turn requests on a thread. The runtime-state seed plants one, so tests
- * about "did a turn dispatch" compare counts rather than expecting an empty
- * list.
- */
 function turnRequests(harness: TestAppHarness, threadId: string) {
   return listEvents(harness.db, { threadId }).filter(
     (event) => event.type === "client/turn/requested",
   );
 }
 
-/**
- * A thread's queued rows: a live queued row carrying a wait. This is the queue
- * shape that replaced the hold table — the row IS the queued dispatch.
- */
 function queuedRows(
   harness: TestAppHarness,
   threadId: string,
@@ -180,7 +159,6 @@ function onlyQueuedRow(
   return rows[0];
 }
 
-/** A live thread that can take a follow-up send. */
 function seedRunnableThread(
   harness: TestAppHarness,
   args: { hostId: string; status: "idle" | "active" },
@@ -340,9 +318,6 @@ describe("message.dispatch hook context", () => {
         ],
       });
 
-      // A workspace path with no environment row yet: the environment is only
-      // provisioned at admission, so the hook decides about a thread that has
-      // none — the exact state a per-host limiter must still see a host in.
       const thread = await createThreadFromRequest(harness.deps, {
         environment: {
           type: "host",
@@ -356,9 +331,6 @@ describe("message.dispatch hook context", () => {
         startedOnBehalfOf: null,
       });
 
-      // A cold start has no environment yet, but its start intent already
-      // names the machine it will occupy — a per-host limiter that saw null
-      // here would wave every cold start past its pool.
       expect(seen).toEqual([{ environment: null, hostId: host.id }]);
       expect(queuedRows(harness, thread.id)).toHaveLength(1);
     });
@@ -368,8 +340,6 @@ describe("message.dispatch hook context", () => {
 describe("pending admission races", () => {
   it("re-decides a first message that lost the admission instead of calling it sent", async () => {
     await withTestHarness(async (harness) => {
-      // Park the thread in `pending` with its first message queued, then take
-      // the hook away so the next attempts admit freely.
       const registry = emptyRegistry();
       registry["message.dispatch"].push({
         pluginId: "limiter",
@@ -388,6 +358,7 @@ describe("pending admission races", () => {
       expect(stale.status).toBe("pending");
       const attempt = (text: string) =>
         attemptDispatch(harness.deps, {
+          systemNotice: null,
           thread: stale,
           payload: { input: textInput(text), mode: "start" },
           source: { kind: "inline" },
@@ -399,13 +370,9 @@ describe("pending admission races", () => {
           trigger: "user",
         });
 
-      // The first attempt wins the admission; the second holds a thread row
-      // captured before that flip — exactly what a concurrent sender holds.
       expect((await attempt("Winner")).kind).toBe("dispatched");
       const loser = await attempt("Loser");
 
-      // Reporting `dispatched` here is what used to lose the message. The
-      // thread is starting now, so the loser queues behind its cold start.
       expect(loser.kind).toBe("queued");
       if (loser.kind !== "queued") throw new Error("expected a queued outcome");
       expect(loser.entry.waitingOn).toEqual({ kind: "provisioning" });
@@ -414,6 +381,66 @@ describe("pending admission races", () => {
           block.type === "text" ? [block.text] : [],
         ),
       ).toEqual(["Loser"]);
+    });
+  });
+});
+
+describe("thread status races under a send", () => {
+  it("queues a send whose thread changes twice under it, then drains it", async () => {
+    await withTestHarness(async (harness) => {
+      const { environment, thread } = seedRunnableThread(harness, {
+        hostId: "host-status-flap",
+        status: "idle",
+      });
+      let passes = 0;
+      const registry = emptyRegistry();
+      registry["message.dispatch"].push({
+        pluginId: "limiter",
+        handler: () => {
+          passes += 1;
+          if (passes === 1) {
+            applyLoggedThreadLifecycleEvent(harness.deps, {
+              event: { type: "run.started" },
+              threadId: thread.id,
+            });
+            seedTurnStarted(harness.deps, {
+              environmentId: environment.id,
+              providerThreadId: "provider-host-status-flap",
+              threadId: thread.id,
+              turnId: "turn-host-status-flap",
+            });
+          }
+          if (passes === 2) {
+            applyLoggedThreadLifecycleEvent(harness.deps, {
+              event: { type: "run.succeeded" },
+              threadId: thread.id,
+            });
+          }
+          return { action: "proceed" } as const;
+        },
+      });
+      installHooks(registry);
+
+      const response = await acceptThreadSendRequest(harness.deps, {
+        payload: { input: textInput("keep me"), mode: "auto" },
+        thread,
+      });
+
+      expect(passes).toBe(2);
+      expect(response.delivery).toBe("queued");
+      if (response.delivery !== "queued") throw new Error("expected queued");
+      expect(response.queuedMessage.waitingOn).toEqual({
+        kind: "thread-busy",
+      });
+      const submit = await waitForQueuedCommand(
+        harness,
+        ({ command }) =>
+          command.type === "turn.submit" && command.threadId === thread.id,
+      );
+      expect(submit.command).toMatchObject({
+        input: textInput("keep me"),
+      });
+      expect(listQueuedThreadMessages(harness.db, thread.id)).toEqual([]);
     });
   });
 });
@@ -437,8 +464,6 @@ describe("message.dispatch hook composition", () => {
           handler: (context) => {
             seen.push("second");
             secondSawModel = context.requestedExecution.model;
-            // Waiting here queues the dispatch so the frozen tuple is
-            // observable without dispatching a real turn.
             return { action: "wait", reason: "checking" } as const;
           },
         },
@@ -453,8 +478,6 @@ describe("message.dispatch hook composition", () => {
       });
 
       expect(seen).toEqual(["first", "second"]);
-      // Every handler decides about the same resolved request, and that is the
-      // tuple the queued row freezes.
       expect(secondSawModel).toBe("requested-model");
       expect(onlyQueuedRow(harness, thread.id).model).toBe("requested-model");
     });
@@ -522,7 +545,6 @@ describe("message.dispatch hook composition", () => {
       expect(error.body.message).toBe("Contains a secret");
       expect(error.body.details).toEqual({ pluginId: "dlp" });
       expect(laterHandlerRan).toBe(false);
-      // Nothing persisted: a rejected create leaves no thread and no row.
       expect(listQueuedThreadMessagesForApi(harness.db, {})).toEqual([]);
     });
   });
@@ -535,9 +557,6 @@ describe("message.dispatch hook composition", () => {
       registry["message.dispatch"].push({
         pluginId: "limiter",
         handler: async () => {
-          // A handler that tallies its own in-flight work is only correct if the
-          // server-wide evaluation lock holds; without it both passes would
-          // see zero running and both would proceed.
           inFlight += 1;
           maxInFlight = Math.max(maxInFlight, inFlight);
           await new Promise((resolve) => setTimeout(resolve, 5));
@@ -560,19 +579,12 @@ describe("message.dispatch hook composition", () => {
 
 describe("message.dispatch hook admission visibility", () => {
   it("commits a cleared first dispatch before the lock releases, so the next pass sees it", async () => {
-    // The invariant `sdk.threads.listRunning()` rests on. The evaluation lock
-    // already serializes the QUESTIONS; this pins that the ANSWERS land inside
-    // it too. Without the flip-before-unlock ordering both passes below read an
-    // empty running set and a limit of one admits two threads — the exact race
-    // that made the limiter keep its own tally of in-flight `proceed`s.
     await withTestHarness(async (harness) => {
       const seen: string[][] = [];
       const registry = emptyRegistry();
       registry["message.dispatch"].push({
         pluginId: "limiter",
         handler: async () => {
-          // Precisely what the concurrency limiter does: ask the server what
-          // is running, at the moment the handler runs.
           const running = listRunningThreads(harness.db);
           seen.push(running.map((row) => row.id));
           return running.length >= 1
@@ -598,7 +610,6 @@ describe("message.dispatch hook admission visibility", () => {
       const admittedId = seen[1]![0]!;
       const queued = created.find((thread) => thread.id !== admittedId)!;
       expect(created.map((thread) => thread.id)).toContain(admittedId);
-      // One admitted and started, one still pending with its message queued.
       expect(getThread(harness.db, admittedId)?.status).not.toBe("pending");
       expect(getThread(harness.db, queued.id)?.status).toBe("pending");
       expect(onlyQueuedRow(harness, queued.id).waitingOn).toEqual({
@@ -610,13 +621,6 @@ describe("message.dispatch hook admission visibility", () => {
   });
 
   it("shows a warm follow-up's admission only after its send lands, not inside the pass", async () => {
-    // The honest boundary on the exactness contract. A first dispatch commits
-    // `pending -> starting` inside the lock; a follow-up on an already-live
-    // thread commits `idle -> active` inside the send transaction, which needs
-    // a prepared host command and therefore cannot run under the lock. So a
-    // handler deciding about an idle thread does not yet see it, and sees it on
-    // the next attempt. Pinned here so a future change that closes the gap
-    // fails loudly and takes the doc comment with it.
     await withTestHarness(async (harness) => {
       const seen: string[][] = [];
       const registry = emptyRegistry();
@@ -637,11 +641,7 @@ describe("message.dispatch hook admission visibility", () => {
         payload: { input: textInput("first follow-up"), mode: "auto" },
         thread,
       });
-      // Not visible to its own pass: an idle thread occupies nothing, and the
-      // activation is still ahead of it.
       expect(seen).toEqual([[]]);
-      // It IS committed by the time the send returns, so the next attempt —
-      // and every other reader — sees it.
       expect(listRunningThreads(harness.db).map((row) => row.id)).toEqual([
         thread.id,
       ]);
@@ -664,8 +664,6 @@ describe("message.dispatch hook admission visibility", () => {
 describe("dispatch hooks and the no-hook path", () => {
   it("leaves creation unchanged when no plugin answers the hook", async () => {
     await withTestHarness(async (harness) => {
-      // A provider is registered, but no plugin answers `message.dispatch`:
-      // the pass must not run, take the lock, or allocate a queued row.
       installHooks(emptyRegistry());
       const { host, project } = seedDispatchFixture(harness, "host-hook-none");
 
@@ -683,9 +681,6 @@ describe("dispatch hooks and the no-hook path", () => {
   });
 
   it("hooks a steer into a live turn like any other dispatch", async () => {
-    // Steers used to be exempt because they joined a decision already made.
-    // With one checkpoint they are hooked uniformly, distinguished only by
-    // `attempt` — which is what lets a limiter or a DLP handler cover them.
     await withTestHarness(async (harness) => {
       const attempts: string[] = [];
       const registry = emptyRegistry();
@@ -766,6 +761,7 @@ describe("message.dispatch hook message author", () => {
       const originalRequestId = createClientTurnRequestId();
 
       await attemptDispatch(harness.deps, {
+        systemNotice: null,
         thread,
         payload: { input: textInput("retried work"), mode: "auto" },
         source: { kind: "inline" },
@@ -831,8 +827,6 @@ describe("message.dispatch hook message author", () => {
 
       await runQueuedMessageDispatch(harness.deps, { kind: "plugin-recheck" });
 
-      // The re-attempt is the same logical dispatch, so a policy keyed on the
-      // sender must not see it change identity between passes.
       expect(seen).toEqual([
         { initiator: "agent", senderThreadId: sender.id },
         { initiator: "agent", senderThreadId: sender.id },
@@ -1005,6 +999,7 @@ describe("message.dispatch hook message author", () => {
       });
 
       await attemptDispatch(harness.deps, {
+        systemNotice: null,
         thread,
         payload: { input: textInput("spawned work"), mode: "auto" },
         source: { kind: "inline" },
@@ -1022,89 +1017,74 @@ describe("message.dispatch hook message author", () => {
 });
 
 describe("message.dispatch grouped authors", () => {
-  it.each(
-    (
-      [
-        {
-          name: "human messages",
-          authors: ["user", "user"],
-          sharedSender: false,
-          initiator: "user",
-          sender: "none",
-        },
-        {
-          name: "one agent",
-          authors: ["agent", "agent"],
-          sharedSender: true,
-          initiator: "agent",
-          sender: "shared",
-        },
-        {
-          name: "different agents",
-          authors: ["agent", "agent"],
-          sharedSender: false,
-          initiator: "agent",
-          sender: "mixed",
-        },
-        {
-          name: "agent then human",
-          authors: ["agent", "user"],
-          sharedSender: false,
-          initiator: "mixed",
-          sender: "mixed",
-        },
-        {
-          name: "human then agent",
-          authors: ["user", "agent"],
-          sharedSender: false,
-          initiator: "mixed",
-          sender: "mixed",
-        },
-        {
-          name: "agent and system requesters",
-          authors: ["agent", "system"],
-          sharedSender: true,
-          initiator: "mixed",
-          sender: "shared",
-        },
-      ] as const
-    ).flatMap((authorCase) =>
-      (
-        [
-          {
-            origins: [null, null],
-            pluginIds: [null, null],
-            origin: null,
-            originPluginId: null,
-          },
-          {
-            origins: ["plugin", "plugin"],
-            pluginIds: ["drafts", "drafts"],
-            origin: "plugin",
-            originPluginId: "drafts",
-          },
-          {
-            origins: ["plugin", "plugin"],
-            pluginIds: ["drafts", "automations"],
-            origin: "plugin",
-            originPluginId: "mixed",
-          },
-          {
-            origins: ["plugin", null],
-            pluginIds: ["drafts", null],
-            origin: "mixed",
-            originPluginId: "mixed",
-          },
-          {
-            origins: ["app", "cli"],
-            pluginIds: [null, null],
-            origin: "mixed",
-            originPluginId: null,
-          },
-        ] as const
-      ).map((originCase) => ({ ...authorCase, ...originCase })),
-    ),
-  )(
+  it.each([
+    {
+      name: "human messages",
+      authors: ["user", "user"],
+      sharedSender: false,
+      initiator: "user",
+      sender: "none",
+      origins: [null, null],
+      pluginIds: [null, null],
+      origin: null,
+      originPluginId: null,
+    },
+    {
+      name: "one agent",
+      authors: ["agent", "agent"],
+      sharedSender: true,
+      initiator: "agent",
+      sender: "shared",
+      origins: ["plugin", "plugin"],
+      pluginIds: ["drafts", "drafts"],
+      origin: "plugin",
+      originPluginId: "drafts",
+    },
+    {
+      name: "different agents",
+      authors: ["agent", "agent"],
+      sharedSender: false,
+      initiator: "agent",
+      sender: "mixed",
+      origins: ["plugin", "plugin"],
+      pluginIds: ["drafts", "automations"],
+      origin: "plugin",
+      originPluginId: "mixed",
+    },
+    {
+      name: "agent then human",
+      authors: ["agent", "user"],
+      sharedSender: false,
+      initiator: "mixed",
+      sender: "mixed",
+      origins: ["plugin", null],
+      pluginIds: ["drafts", null],
+      origin: "mixed",
+      originPluginId: "mixed",
+    },
+    {
+      name: "human then agent",
+      authors: ["user", "agent"],
+      sharedSender: false,
+      initiator: "mixed",
+      sender: "mixed",
+      origins: ["app", "cli"],
+      pluginIds: [null, null],
+      origin: "mixed",
+      originPluginId: null,
+    },
+    {
+      name: "agent and system requesters",
+      authors: ["agent", "system"],
+      sharedSender: true,
+      initiator: "mixed",
+      sender: "shared",
+      origins: [null, "plugin"],
+      pluginIds: [null, "drafts"],
+      origin: "mixed",
+      originPluginId: "mixed",
+    },
+  ] as const)(
     "summarizes $name with origins $origins and plugins $pluginIds without splitting the group",
     async ({
       authors,
@@ -1314,8 +1294,6 @@ describe("message.dispatch hooks on the queue drain", () => {
       });
 
       expect(drained).toBe(true);
-      // The claim is handed back rather than consumed: it is the SAME row, now
-      // queued, so the user still has one card for one message.
       const waiting = onlyQueuedRow(harness, thread.id);
       expect(waiting.id).toBe(queued.id);
       expect(waiting.content).toEqual(textInput("queued work"));
@@ -1682,7 +1660,10 @@ describe("strict dispatch admission", () => {
         waiter,
       });
 
-      settleDanglingBackgroundTasks(harness.deps, { hostId: host.id });
+      settleDanglingBackgroundTasks(harness.deps, {
+        hostId: host.id,
+        reason: "host-connection-lost",
+      });
 
       await vi.waitFor(() =>
         expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
@@ -1951,6 +1932,7 @@ describe("strict dispatch admission", () => {
           reason: "Retry",
         },
         pluginSubmission: null,
+        systemNotice: null,
         origin: null,
         originPluginId: null,
         startedOnBehalfOf: null,
@@ -1969,34 +1951,79 @@ describe("strict dispatch admission", () => {
   });
 });
 
-it("gates manual compaction before a provider command", async () => {
-  await withTestHarness(async (harness) => {
-    const { thread } = seedRunnableThread(harness, {
-      hostId: "strict-compact",
-      status: "idle",
+it.each(["compact", "clear"] as const)(
+  "gates %s before provider or history effects",
+  async (operation) => {
+    await withTestHarness(async (harness) => {
+      const { thread } = seedRunnableThread(harness, {
+        hostId: `strict-${operation}`,
+        status: "idle",
+      });
+      const hook = vi.fn(
+        () => ({ action: "wait", reason: "Capacity" }) as const,
+      );
+      installHooks({
+        "message.dispatch": [
+          {
+            pluginId: "capacity",
+            experimental_enforcement: "strict",
+            handler: hook,
+          },
+        ],
+      });
+      const before = turnRequests(harness, thread.id).length;
+      const beforeEvents = listEvents(harness.db, { threadId: thread.id });
+      const response =
+        operation === "compact"
+          ? await harness.app.request(`/api/v1/threads/${thread.id}/compact`, {
+              method: "POST",
+            })
+          : await harness.app.request(`/api/v1/threads/${thread.id}/send`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                mode: "auto",
+                input: [
+                  {
+                    type: "text",
+                    text: "/clear",
+                    mentions: [
+                      {
+                        start: 0,
+                        end: 6,
+                        resource: {
+                          kind: "command",
+                          trigger: "/",
+                          name: "clear",
+                          source: "command",
+                          origin: "builtin",
+                          label: "clear",
+                          argumentHint: null,
+                        },
+                      },
+                    ],
+                  },
+                ],
+              }),
+            });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        code: "dispatch_rejected",
+      });
+      expect(hook).toHaveBeenCalledOnce();
+      expect(turnRequests(harness, thread.id)).toHaveLength(before);
+      expect(listEvents(harness.db, { threadId: thread.id })).toEqual(
+        beforeEvents,
+      );
+      expect(
+        listQueuedThreadCommands(harness, "thread.stop", thread.id),
+      ).toEqual([]);
+      expect(listRunningThreadsWithIntendedHosts(harness.deps, true)).toEqual(
+        [],
+      );
     });
-    const hook = vi.fn(() => ({ action: "wait", reason: "Capacity" }) as const);
-    installHooks({
-      "message.dispatch": [
-        {
-          pluginId: "capacity",
-          experimental_enforcement: "strict",
-          handler: hook,
-        },
-      ],
-    });
-    const before = turnRequests(harness, thread.id).length;
-    const response = await harness.app.request(
-      `/api/v1/threads/${thread.id}/compact`,
-      { method: "POST" },
-    );
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ code: "dispatch_rejected" });
-    expect(hook).toHaveBeenCalledOnce();
-    expect(turnRequests(harness, thread.id)).toHaveLength(before);
-    expect(listRunningThreadsWithIntendedHosts(harness.deps, true)).toEqual([]);
-  });
-});
+  },
+);
 
 it("queues parent system notifications behind strict admission and preserves their taxonomy on drain", async () => {
   await withTestHarness(async (harness) => {
@@ -2005,17 +2032,18 @@ it("queues parent system notifications behind strict admission and preserves the
       status: "idle",
     });
     let wait = true;
+    const hook = vi.fn((context: MessageDispatchHookContext) => {
+      expect(context.initiator).toBe("system");
+      return wait
+        ? ({ action: "wait", reason: "Capacity" } as const)
+        : ({ action: "proceed" } as const);
+    });
     installHooks({
       "message.dispatch": [
         {
           pluginId: "capacity",
           experimental_enforcement: "strict",
-          handler: (context) => {
-            expect(context.initiator).toBe("system");
-            return wait
-              ? { action: "wait", reason: "Capacity" }
-              : { action: "proceed" };
-          },
+          handler: hook,
         },
       ],
     });
@@ -2046,6 +2074,14 @@ it("queues parent system notifications behind strict admission and preserves the
     });
     expect(listQueuedThreadMessages(harness.db, thread.id)).toEqual([]);
     expect(turnRequests(harness, thread.id)).toHaveLength(before + 1);
+    expect(
+      JSON.parse(turnRequests(harness, thread.id).at(-1)!.data),
+    ).toMatchObject({
+      initiator: "system",
+      systemMessageKind: "child-completed",
+      systemMessageSubject: null,
+    });
+    expect(hook).toHaveBeenCalledTimes(3);
   });
 });
 
