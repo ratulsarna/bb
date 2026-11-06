@@ -1,11 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { eq } from "drizzle-orm";
-import {
-  environments,
-  getThread,
-  listEvents,
-  markThreadDeleted,
-} from "@bb/db";
+import { environments, getThread, listEvents, markThreadDeleted } from "@bb/db";
 import type { EnvironmentRow } from "@bb/db";
 import {
   LEGACY_CODEX_GOAL_EXTENSION_KIND,
@@ -325,7 +320,7 @@ describe("thread stop dispatch", () => {
     });
   });
 
-  it("settles a thread whose host never answers the stop", async () => {
+  it("keeps a thread stopping when its host never answers the stop", async () => {
     await withTestHarness(async (harness) => {
       const { environment, thread } = seedActiveThreadStopFixture({
         harness,
@@ -343,7 +338,7 @@ describe("thread stop dispatch", () => {
       await stopThreadForCurrentState(harness.deps, thread, environment);
 
       expect(getThread(harness.db, thread.id)).toMatchObject({
-        status: "idle",
+        status: "stopping",
       });
       expect(rpc).toHaveBeenCalledOnce();
       const threadEvents = listEvents(harness.db, { threadId: thread.id });
@@ -354,7 +349,7 @@ describe("thread stop dispatch", () => {
       ).toHaveLength(1);
       expect(
         threadEvents.filter((event) => event.type === "turn/completed"),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
     });
   });
 
