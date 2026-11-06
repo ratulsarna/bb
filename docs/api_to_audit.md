@@ -695,8 +695,6 @@ Committed thread status and activity notifications share one admission-release
 observer; released reservations use the same deduped queue wake. A release during
 hook evaluation is recorded even before the waiting row exists, and that row
 rechecks after persistence. Paced rechecks retry when the pacing window ends.
-Plugin waits retain the later of the requested send time and the hook's retry
-time. Automatic rechecks preserve that time; explicit Send now can bypass it.
 Queue claims and recorded lifecycle/activity support restart recovery. Plugins
 own membership and counting rules; core defines no task IDs or numerical limits.
 
