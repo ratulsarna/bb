@@ -1982,7 +1982,7 @@ describe("RuntimeManager", () => {
     ]);
   });
 
-  it("does not synthesize failure events for exited threads without an active turn", async () => {
+  it("reports an unexpected provider exit between turns", async () => {
     const emittedEvents: Array<{
       environmentId: string;
       event: ThreadEvent;
@@ -2028,7 +2028,18 @@ describe("RuntimeManager", () => {
       stderr: null,
     });
 
-    expect(emittedEvents).toEqual([]);
+    expect(emittedEvents).toEqual([
+      {
+        environmentId: "env-idle-exit",
+        event: {
+          type: "system/error",
+          threadId: "thread-idle",
+          scope: threadScope(),
+          code: "provider_process_exited",
+          message: 'Provider "codex" exited unexpectedly with code 1',
+        },
+      },
+    ]);
   });
 
   it("emits a thread failure when a provider exits before turn/started", async () => {

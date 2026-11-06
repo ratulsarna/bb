@@ -1137,16 +1137,14 @@ export class RuntimeManager {
 
     for (const thread of info.threads) {
       if (thread.activeTurnId === null) {
-        if (thread.pendingTurnStart) {
-          events.push({
-            type: "system/error",
-            threadId: thread.threadId,
-            scope: threadScope(),
-            code: "provider_process_exited",
-            message,
-            ...(detail ? { detail } : {}),
-          });
-        }
+        events.push({
+          type: "system/error",
+          threadId: thread.threadId,
+          scope: threadScope(),
+          code: "provider_process_exited",
+          message,
+          ...(detail ? { detail } : {}),
+        });
         continue;
       }
 
