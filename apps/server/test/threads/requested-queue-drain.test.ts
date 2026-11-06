@@ -716,6 +716,51 @@ describe("the requested queue drain", () => {
     });
   });
 
+  it("does not keep retrying the first of two capacity waits without another wake", async () => {
+    await withTestHarness(async (harness) => {
+      const { thread } = seedRunnableThread(harness, {
+        hostId: "host-two-capacity-waits",
+        status: "idle",
+      });
+      const rows = ["first", "second"].map((text) =>
+        seedQueuedMessage(harness.deps, {
+          threadId: thread.id,
+          content: textInput(text),
+          waitingOn: { kind: "plugin", pluginId: "capacity", reason: "Full" },
+        }),
+      );
+      const seen: string[] = [];
+      installHooks({
+        "message.dispatch": [
+          {
+            pluginId: "capacity",
+            experimental_enforcement: "strict",
+            handler: (context) => {
+              seen.push(...context.queuedMessages.map((row) => row.id));
+              return { action: "wait", reason: "Full" };
+            },
+          },
+        ],
+      });
+      const requestsBefore = turnRequests(harness, thread.id);
+      vi.useFakeTimers();
+      await runPluginWake(harness);
+      expect(seen).toEqual([rows[0]!.id]);
+
+      await vi.advanceTimersByTimeAsync(3_001);
+      expect(seen).toEqual([rows[0]!.id]);
+
+      await runQueuedMessageDispatch(harness.deps, {
+        kind: "dispatch-admission-released",
+      });
+      expect(seen).toEqual([rows[0]!.id, ...rows.map((row) => row.id)]);
+      expect(
+        listQueuedThreadMessages(harness.db, thread.id).map((row) => row.id),
+      ).toEqual(rows.map((row) => row.id));
+      expect(turnRequests(harness, thread.id)).toEqual(requestsBefore);
+    });
+  });
+
   it("walks the queued rows in queue order", async () => {
     await withTestHarness(async (harness) => {
       let admit = false;

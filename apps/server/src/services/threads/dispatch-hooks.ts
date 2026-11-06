@@ -145,11 +145,9 @@ export function noteDispatchRequeued(threadId: string): void {
   lastRequeuedAtByThreadId.set(threadId, now);
 }
 
-export function dispatchRequeueDelayMs(threadId: string): number {
+export function isDispatchRequeuedRecently(threadId: string): boolean {
   const at = lastRequeuedAtByThreadId.get(threadId);
-  return at === undefined
-    ? 0
-    : Math.max(0, DISPATCH_REQUEUE_MIN_INTERVAL_MS - (Date.now() - at));
+  return at !== undefined && Date.now() - at < DISPATCH_REQUEUE_MIN_INTERVAL_MS;
 }
 
 /**

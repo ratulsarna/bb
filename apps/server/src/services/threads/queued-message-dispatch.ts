@@ -27,7 +27,7 @@ import {
 } from "../lib/error-log-fields.js";
 import {
   hasStrictMessageDispatchHook,
-  dispatchRequeueDelayMs,
+  isDispatchRequeuedRecently,
 } from "./dispatch-hooks.js";
 import { recordQueuedMessageDrainFailure } from "./queue-drain-failure.js";
 import { clearQueuedMessageWait } from "./queue-waits.js";
@@ -276,7 +276,7 @@ async function executePreparedQueuedMessageDispatch(
         })) {
           await attemptAutomaticQueuedMessage(deps, row, {
             now: Date.now(),
-            requeuePacing: "none",
+            respectRequeuePacing: false,
             retryingFailure: false,
           });
         }
@@ -290,7 +290,7 @@ async function executePreparedQueuedMessageDispatch(
         })) {
           await attemptAutomaticQueuedMessage(deps, row, {
             now: Date.now(),
-            requeuePacing: "none",
+            respectRequeuePacing: false,
             retryingFailure: false,
           });
         }
@@ -391,7 +391,7 @@ async function runTurnStartedDispatch(
   for (const row of rows) {
     await attemptAutomaticQueuedMessage(deps, row, {
       now: Date.now(),
-      requeuePacing: "none",
+      respectRequeuePacing: false,
       retryingFailure: false,
     });
   }
@@ -416,7 +416,7 @@ async function runWorkspaceReadyDispatch(
   for (const row of rows) {
     await attemptAutomaticQueuedMessage(deps, row, {
       now: Date.now(),
-      requeuePacing: "none",
+      respectRequeuePacing: false,
       retryingFailure: false,
     });
   }
@@ -443,7 +443,7 @@ async function runEditReleasedDispatch(
 ): Promise<void> {
   await attemptAutomaticQueuedMessage(deps, row, {
     now: Date.now(),
-    requeuePacing: "none",
+    respectRequeuePacing: false,
     retryingFailure: false,
   });
   await runThreadReadyDispatch(deps, row.threadId);
@@ -455,40 +455,9 @@ export async function attemptQueuedMessageNow(
 ): Promise<void> {
   await attemptAutomaticQueuedMessage(deps, row, {
     now: Date.now(),
-    requeuePacing: "none",
+    respectRequeuePacing: false,
     retryingFailure: false,
   });
-}
-
-const pacedPluginRechecks = new WeakMap<
-  QueueDispatchDeps["db"],
-  Map<string, ReturnType<typeof setTimeout>>
->();
-
-export function cancelPacedPluginRechecks(db: QueueDispatchDeps["db"]): void {
-  const pending = pacedPluginRechecks.get(db);
-  if (pending === undefined) return;
-  for (const timer of pending.values()) clearTimeout(timer);
-  pacedPluginRechecks.delete(db);
-}
-
-function schedulePacedPluginRecheck(
-  deps: QueueDispatchDeps,
-  threadId: string,
-  delay: number,
-): void {
-  let pending = pacedPluginRechecks.get(deps.db);
-  if (pending === undefined) {
-    pending = new Map();
-    pacedPluginRechecks.set(deps.db, pending);
-  }
-  if (pending.has(threadId)) return;
-  const timer = setTimeout(() => {
-    pending.delete(threadId);
-    if (deps.db.$client.open)
-      requestQueuedMessageDispatch(deps, { kind: "plugin-recheck" });
-  }, delay).unref();
-  pending.set(threadId, timer);
 }
 
 async function attemptAutomaticQueuedMessage(
@@ -496,17 +465,12 @@ async function attemptAutomaticQueuedMessage(
   row: QueuedMessageDispatchRef,
   args: {
     now: number;
-    requeuePacing: "none" | "skip" | "retry";
+    respectRequeuePacing: boolean;
     retryingFailure: boolean;
   },
 ): Promise<void> {
-  const delay =
-    args.requeuePacing === "none" ? 0 : dispatchRequeueDelayMs(row.threadId);
-  if (delay > 0) {
-    if (args.requeuePacing === "retry")
-      schedulePacedPluginRecheck(deps, row.threadId, delay);
+  if (args.respectRequeuePacing && isDispatchRequeuedRecently(row.threadId))
     return;
-  }
   if (getQueuedThreadMessage(deps.db, row.id) === null) return;
   const thread = getThread(deps.db, row.threadId);
   if (!thread || thread.deletedAt !== null) return;
@@ -565,10 +529,8 @@ async function runPluginRecheckDispatch(
     );
     await attemptAutomaticQueuedMessage(deps, row, {
       now,
-      requeuePacing:
-        bypassStrictWaiterPacing && hasStrictMessageDispatchHook(pluginId)
-          ? "none"
-          : "retry",
+      respectRequeuePacing:
+        !bypassStrictWaiterPacing || !hasStrictMessageDispatchHook(pluginId),
       retryingFailure: false,
     });
   }
@@ -602,7 +564,7 @@ async function runDueScheduledDispatch(
   for (const row of listDueScheduledQueuedThreadMessages(deps.db, now)) {
     await attemptAutomaticQueuedMessage(deps, row, {
       now,
-      requeuePacing: "skip",
+      respectRequeuePacing: true,
       retryingFailure: false,
     });
   }
@@ -635,7 +597,7 @@ async function runFailedRetryDispatch(
     );
     await attemptAutomaticQueuedMessage(deps, row, {
       now,
-      requeuePacing: "skip",
+      respectRequeuePacing: true,
       retryingFailure: true,
     });
   }
@@ -648,7 +610,7 @@ async function runIdleThreadRecovery(deps: QueueDispatchDeps): Promise<void> {
   for (const row of listReadySystemNoticesOnBusyThreads(deps.db)) {
     await attemptAutomaticQueuedMessage(deps, row, {
       now: Date.now(),
-      requeuePacing: "skip",
+      respectRequeuePacing: true,
       retryingFailure: false,
     });
   }

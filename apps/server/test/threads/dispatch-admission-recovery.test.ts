@@ -5,7 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { setPluginHookProvider } from "../../src/services/plugins/plugin-hook-registry.js";
 import { listRunningThreadsWithIntendedHosts } from "../../src/services/threads/dispatch-attempt.js";
 import { noteDispatchRequeued } from "../../src/services/threads/dispatch-hooks.js";
-import { runQueuedMessageDispatch } from "../../src/services/threads/queued-message-dispatch.js";
 import { acceptThreadSendRequest } from "../../src/services/threads/thread-send-request.js";
 import {
   interruptActiveThreadsForHost,
@@ -193,62 +192,6 @@ it("rechecks a wait when capacity is released during its hook decision", async (
     await vi.waitFor(
       () => expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
       { timeout: 2_000 },
-    );
-    expect(listQueuedThreadMessages(harness.db, waiter.id)).toEqual([]);
-  });
-});
-
-it("does not strand a mixed ordinary and strict wait inside the pacing window", async () => {
-  await withTestHarness(async (harness) => {
-    const occupied = seedDispatchThread(harness, {
-      hostId: "occupied",
-      status: "active",
-    });
-    const { thread: waiter } = seedDispatchThread(harness, {
-      hostId: "waiting",
-    });
-    let ordinaryReady = false;
-    installAdmissionHooks([
-      {
-        pluginId: "ordinary",
-        handler: () =>
-          ordinaryReady
-            ? { action: "proceed" }
-            : { action: "wait", reason: "Not ready" },
-      },
-      {
-        pluginId: "capacity",
-        experimental_enforcement: "strict",
-        handler: () =>
-          listRunningThreadsWithIntendedHosts(harness.deps, true).some(
-            (row) => row.id === occupied.thread.id,
-          )
-            ? { action: "wait", reason: "Full" }
-            : { action: "proceed" },
-      },
-    ]);
-    await acceptThreadSendRequest(harness.deps, {
-      thread: waiter,
-      payload: { input: textInput("Waiting work"), mode: "auto" },
-    });
-    await runQueuedMessageDispatch(harness.deps, { kind: "plugin-recheck" });
-    ordinaryReady = true;
-    expect(
-      (
-        await postDispatchEvents(harness, occupied.session, [
-          {
-            type: "turn/completed",
-            threadId: occupied.thread.id,
-            providerThreadId: occupied.providerThreadId,
-            scope: turnScope(occupied.turnId),
-            status: "completed",
-          },
-        ])
-      ).status,
-    ).toBe(200);
-    await vi.waitFor(
-      () => expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
-      { timeout: 2_500 },
     );
     expect(listQueuedThreadMessages(harness.db, waiter.id)).toEqual([]);
   });
