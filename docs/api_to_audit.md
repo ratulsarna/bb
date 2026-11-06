@@ -660,18 +660,23 @@ hooks also inspect conversation operations and cannot be bypassed by Send now.
 The dedicated context-clear route and `sdk.threads.clearContext` use the same
 dispatcher operation as inline `/clear`.
 Message and notification waits use the existing durable queue; operation waits
-return 409 before provider, stop, rewind, or history effects. A compact-first
-send runs its compaction as an operation first, so a strict wait refuses it with
-409 instead of queueing it. Mixed registrations
+return 409 before provider, stop, rewind, or history effects. Mixed registrations
 share one hook pass per dispatch attempt; any participating plugin can wait or
 reject it.
+
+Accepted limitations:
+
+- An unconfirmed Stop releases capacity while provider work may still be running.
+- A scheduled message held by a capacity wait can send when capacity frees,
+  before the user's chosen time.
+- `compactFirst` sends return 409 under a strict wait.
 
 `sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true })`
 returns `{ id, hostId }` rows for admitted command preparations, starting/active
 threads, stopping threads, tracked background commands, agents, workflows, and
 active native goals between autonomous turns. Archived/deleted threads remain
 included while starting, active, stopping, or carrying unfinished tracked work.
-Runtime loss, confirmed Stop, or storage deletion releases stale active goal occupancy;
+Runtime loss, Stop settlement, or storage deletion releases stale active goal occupancy;
 an admitted restart reacquires it. Stop requests and queued messages alone do not
 change goal occupancy. Pending threads occupy capacity only when admitted or carrying
 tracked work. Defaults retain the starting/active, unarchived, undeleted query.
@@ -693,7 +698,8 @@ no expiry. Dispatch commits canonical occupancy before releasing the reservation
 Committed thread status and activity notifications share one admission-release
 observer; released reservations use the same deduped queue wake. A release during
 hook evaluation is recorded even before the waiting row exists, and that row
-rechecks after persistence. Paced rechecks retry when the pacing window ends.
+rechecks after persistence. Plugin rechecks within the per-thread pacing window
+are skipped; admission-release wakes bypass pacing for strict-owned waits.
 Queue claims and recorded lifecycle/activity support restart recovery. Plugins
 own membership and counting rules; core defines no task IDs or numerical limits.
 
