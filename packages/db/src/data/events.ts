@@ -1817,9 +1817,16 @@ function listFilteredLatestThreadStateEventRows(
             ? sql`NOT EXISTS (
             SELECT 1 FROM events stopped
             WHERE stopped.thread_id = ${events.threadId}
-              AND stopped.type = 'system/operation'
-              AND json_extract(stopped.data, '$.operation') = ${THREAD_RUNTIME_STOPPED_OPERATION}
-              AND json_extract(stopped.data, '$.status') = 'completed'
+              AND (
+                (stopped.type = 'system/operation'
+                  AND json_extract(stopped.data, '$.operation') = ${THREAD_RUNTIME_STOPPED_OPERATION}
+                  AND json_extract(stopped.data, '$.status') = 'completed')
+                OR (stopped.type = 'system/error'
+                  AND json_extract(stopped.data, '$.code') = 'provider_process_exited')
+                OR (stopped.type = 'system/thread/interrupted'
+                  AND coalesce(json_extract(stopped.data, '$.cause'), json_extract(stopped.data, '$.reason'))
+                    IN ('host-daemon-restarted', 'host-connection-lost', 'host-removed'))
+              )
               AND NOT EXISTS (
                 SELECT 1 FROM events restarted
                 WHERE restarted.thread_id = stopped.thread_id

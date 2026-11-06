@@ -667,7 +667,7 @@ returns `{ id, hostId }` rows for admitted command preparations, starting/active
 threads, stopping threads, tracked background commands, agents, workflows, and
 active native goals between autonomous turns. Archived/deleted threads remain
 included while starting, active, stopping, or carrying unfinished tracked work.
-Confirmed runtime Stop or storage deletion releases stale active goal occupancy;
+Runtime loss, confirmed Stop, or storage deletion releases stale active goal occupancy;
 an admitted restart reacquires it. Stop requests and queued messages alone do not
 change goal occupancy. Pending threads occupy capacity only when admitted or carrying
 tracked work. Defaults retain the starting/active, unarchived, undeleted query.

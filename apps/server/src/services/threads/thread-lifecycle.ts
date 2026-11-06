@@ -91,7 +91,10 @@ import {
   applyLoggedThreadLifecycleEvent,
   applyLoggedThreadLifecycleEventInTransaction,
 } from "./lifecycle-outcome.js";
-import { buildThreadStatusChangeMetadata } from "./thread-runtime-display.js";
+import {
+  buildThreadStatusChangeMetadata,
+  listThreadsWithActiveGoals,
+} from "./thread-runtime-display.js";
 import {
   addRequestIdToTurnSubmitCommandPayload,
   buildThreadStartCommand,
@@ -2160,7 +2163,8 @@ export function interruptActiveThreadsForHost(
   deps: LoggedPendingInteractionWorkSessionDeps,
   args: InterruptActiveThreadsForHostArgs,
 ): InterruptActiveThreadsResult {
-  const activeThreads = deps.db
+  const goalThreadIds = listThreadsWithActiveGoals(deps);
+  const runtimeThreads = deps.db
     .select({
       environmentId: environments.id,
       threadId: threads.id,
@@ -2170,17 +2174,24 @@ export function interruptActiveThreadsForHost(
     .where(
       and(
         eq(environments.hostId, args.hostId),
-        inArray(
-          threads.status,
-          args.includeStopping ? ["active", "stopping"] : ["active"],
+        or(
+          and(
+            inArray(
+              threads.status,
+              args.includeStopping ? ["active", "stopping"] : ["active"],
+            ),
+            isNull(threads.deletedAt),
+          ),
+          goalThreadIds.length > 0
+            ? inArray(threads.id, goalThreadIds)
+            : undefined,
         ),
-        isNull(threads.deletedAt),
       ),
     )
     .all();
 
   return interruptActiveThreads(deps, {
-    threads: activeThreads,
+    threads: runtimeThreads,
     reason: args.reason,
     resumingThreadIds: args.resumingThreadIds,
     ...(args.cause ? { cause: args.cause } : {}),

@@ -88,6 +88,8 @@ const occupancyEventTypes = new Set([
   "thread/goal/cleared",
   "thread/extensionState/updated",
   "system/operation",
+  "system/error",
+  "system/thread/interrupted",
 ]);
 
 export function observeDispatchAdmissionReleases(
