@@ -1,5 +1,4 @@
 import { performance } from "node:perf_hooks";
-import { hasMessageDispatchHooks } from "../services/threads/dispatch-hooks.js";
 import { Buffer } from "node:buffer";
 import { and, desc, eq, gt, lt, sql } from "drizzle-orm";
 import {
@@ -28,7 +27,6 @@ import {
   type HostDaemonRejectedEvent,
 } from "@bb/host-daemon-contract";
 import {
-  LEGACY_CODEX_GOAL_EXTENSION_KIND,
   THREAD_SESSION_OPTIONS_STATE_KIND,
   THREAD_PROVIDER_MODEL_CATALOG_STATE_KIND,
   requireThreadEventScopeTurnId,
@@ -263,9 +261,7 @@ interface QueuedMessageDispatchFollowUp {
   kind: "queued-message-dispatch";
   wake: Extract<
     QueuedMessageDispatchWake,
-    | { kind: "thread-ready" }
-    | { kind: "turn-started" }
-    | { kind: "dispatch-admission-released" }
+    { kind: "thread-ready" } | { kind: "turn-started" }
   >;
 }
 
@@ -636,27 +632,6 @@ async function applyEventEffects(
         "Failed to apply event side effects",
       );
     }
-  }
-  if (
-    hasMessageDispatchHooks(true) &&
-    events.some(
-      ({ event }) =>
-        event.type === "turn/completed" ||
-        event.type === "item/backgroundTask/completed" ||
-        (event.type === "item/backgroundTask/progress" &&
-          event.item.status !== "pending") ||
-        event.type === "thread/goal/updated" ||
-        event.type === "thread/goal/cleared" ||
-        (event.type === "thread/extensionState/updated" &&
-          event.kind === LEGACY_CODEX_GOAL_EXTENSION_KIND) ||
-        (event.type === "system/error" &&
-          event.code === "provider_process_exited"),
-    )
-  ) {
-    followUps.push({
-      kind: "queued-message-dispatch",
-      wake: { kind: "dispatch-admission-released" },
-    });
   }
   return followUps;
 }

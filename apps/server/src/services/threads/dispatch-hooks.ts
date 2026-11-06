@@ -145,14 +145,11 @@ export function noteDispatchRequeued(threadId: string): void {
   lastRequeuedAtByThreadId.set(threadId, now);
 }
 
-/**
- * True when this thread re-queued moments ago and the next drain attempt
- * should wait. The caller does nothing, so the row stays queued and the next
- * sweep tick, drain or user action tries again.
- */
-export function isDispatchRequeuedRecently(threadId: string): boolean {
+export function dispatchRequeueDelayMs(threadId: string): number {
   const at = lastRequeuedAtByThreadId.get(threadId);
-  return at !== undefined && Date.now() - at < DISPATCH_REQUEUE_MIN_INTERVAL_MS;
+  return at === undefined
+    ? 0
+    : Math.max(0, DISPATCH_REQUEUE_MIN_INTERVAL_MS - (Date.now() - at));
 }
 
 /**

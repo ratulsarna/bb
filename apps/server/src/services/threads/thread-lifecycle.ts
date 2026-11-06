@@ -126,7 +126,6 @@ import { scheduleThreadProvisioningAdvance } from "./thread-provisioning.js";
 import { isPreStartThreadStatus } from "./thread-status.js";
 import { settleDanglingBackgroundTasksForStoppedThreadInTransaction } from "./background-task-reconciliation.js";
 import { abortPluginToolCallsForThreads } from "../plugins/plugin-tool-calls.js";
-import { requestDispatchAdmissionReleased } from "./dispatch-admission.js";
 import {
   settleUnconfirmedSteerInTransaction,
   settleUnconfirmedTurnStartInTransaction,
@@ -902,7 +901,6 @@ function settleThreadCommandFailure(
   });
   if (outcome.applied) {
     args.deps.hub.notifyThread(thread.id, ["status-changed"]);
-    postCommitActions.push(dispatchAdmissionReleasedAction());
   }
   if (isParentNotifiableChildThread(thread, "failed")) {
     const parentThreadId = thread.parentThreadId;
@@ -1234,7 +1232,6 @@ export function requestThreadStorageDeletion(
     notificationBuffer.flushInto(deps.hub);
     markThreadStorageDeleted(deps.db, { threadId: thread.id });
     finalizeStoppedThread(deps, { threadId: thread.id });
-    requestDispatchAdmissionReleased(deps);
     return;
   }
   if (environment === null) {
@@ -1307,15 +1304,6 @@ function drainQueuedMessagesAfterStopAction(
   return {
     run: (deps) => {
       requestQueuedMessageDispatch(deps, { kind: "thread-ready", threadId });
-      requestDispatchAdmissionReleased(deps);
-    },
-  };
-}
-
-function dispatchAdmissionReleasedAction(): CommandResultPostCommitAction {
-  return {
-    run: (deps) => {
-      requestDispatchAdmissionReleased(deps);
     },
   };
 }

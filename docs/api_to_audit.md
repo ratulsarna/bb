@@ -685,10 +685,13 @@ activation when the marker is missing.
 
 Core reserves cleared admissions inside the hook evaluation lock and releases
 that lock before provider command preparation or daemon RPC. Reservations have
-no expiry. Dispatch commits canonical occupancy before releasing the reservation;
-preparation and claim failures release it and wake the existing queue. Queue
-claims and recorded lifecycle/activity support restart recovery. Plugins own
-membership and counting rules; core defines no task IDs or numerical limits.
+no expiry. Dispatch commits canonical occupancy before releasing the reservation.
+Committed thread status and activity notifications share one admission-release
+observer; released reservations use the same deduped queue wake. A release during
+hook evaluation is recorded even before the waiting row exists, and that row
+rechecks after persistence. Paced rechecks retry when the pacing window ends.
+Queue claims and recorded lifecycle/activity support restart recovery. Plugins
+own membership and counting rules; core defines no task IDs or numerical limits.
 
 **Audit before stabilizing.** Exercise mixed ordinary/strict policies, concurrent
 cold/warm starts, provider preparation failures, manual operations, restart claim

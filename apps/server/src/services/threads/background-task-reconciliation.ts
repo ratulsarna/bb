@@ -15,12 +15,8 @@ import {
   threadScope,
 } from "@bb/domain";
 import type { ThreadEventBackgroundTaskItem } from "@bb/domain";
-import type {
-  AppDeps,
-  LoggedPendingInteractionWorkSessionDeps,
-} from "../../types.js";
+import type { AppDeps } from "../../types.js";
 import { appendThreadEventsInTransaction } from "./thread-events.js";
-import { requestDispatchAdmissionReleased } from "./dispatch-admission.js";
 
 interface SettleDanglingBackgroundTasksArgs {
   hostId: string;
@@ -31,8 +27,7 @@ interface SettleDanglingBackgroundTasksArgs {
     | "host-removed";
 }
 
-type SettleDanglingBackgroundTasksDeps =
-  LoggedPendingInteractionWorkSessionDeps;
+type SettleDanglingBackgroundTasksDeps = Pick<AppDeps, "db" | "hub" | "logger">;
 type SettleDanglingBackgroundTasksTransactionDeps = {
   db: DbTransaction;
   hub: DbNotifier;
@@ -137,7 +132,6 @@ function settleBackgroundTaskRows(
       eventTypes: ["item/backgroundTask/completed"],
     });
   }
-  if (settledThreadIds.size > 0) requestDispatchAdmissionReleased(deps);
 }
 
 export function settleDanglingBackgroundTasksForStoppedThreadInTransaction(

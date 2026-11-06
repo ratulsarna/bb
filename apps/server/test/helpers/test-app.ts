@@ -389,8 +389,13 @@ export async function createTestAppHarness(
     watchInterests,
     sharedPorts,
   };
-  const { app, pluginCatalogService, pluginService, serverMove } =
-    createApp(deps);
+  const {
+    app,
+    closeWebSockets,
+    pluginCatalogService,
+    pluginService,
+    serverMove,
+  } = createApp(deps);
   installDefaultEnvironmentProviders();
 
   return {
@@ -406,6 +411,7 @@ export async function createTestAppHarness(
       clearAllThreadProvisionSchedules();
       setPluginEnvironmentProviderBridge(undefined);
       await pluginService.stop();
+      await closeWebSockets();
       await rm(dataDir, {
         recursive: true,
         force: true,

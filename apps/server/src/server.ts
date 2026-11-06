@@ -1,3 +1,5 @@
+import { observeDispatchAdmissionReleases } from "./services/threads/dispatch-admission.js";
+import { cancelPacedPluginRechecks } from "./services/threads/queued-message-dispatch.js";
 import { createPluginUpdateJobs } from "./services/plugins/plugin-update-jobs.js";
 import { registerPluginUpdateJobRoutes } from "./routes/plugin-update-jobs.js";
 import {
@@ -478,6 +480,7 @@ export function createApp(
   deps: ServerAppDeps,
   options?: CreateAppOptions,
 ): ServerApp {
+  const stopDispatchAdmissionObserver = observeDispatchAdmissionReleases(deps);
   const app = new Hono();
   const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({
     app,
@@ -1096,12 +1099,15 @@ export function createApp(
 
   return {
     app,
-    closeWebSockets: () =>
-      closeWebSocketServer({
+    closeWebSockets: () => {
+      stopDispatchAdmissionObserver();
+      cancelPacedPluginRechecks(deps.db);
+      return closeWebSocketServer({
         forceCloseAfterMs: WEB_SOCKET_SHUTDOWN_FORCE_CLOSE_MS,
         reason: WEB_SOCKET_SHUTDOWN_REASON,
         server: wss,
-      }),
+      });
+    },
     injectWebSocket,
     pluginService,
     pluginCatalogService,

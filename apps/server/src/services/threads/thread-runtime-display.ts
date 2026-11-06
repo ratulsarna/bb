@@ -354,8 +354,10 @@ export function toThreadResponseFromThread(
 
 export function listThreadsWithActiveGoals(
   deps: Pick<ThreadPromptBannerDeps, "db">,
+  threadIds?: readonly string[],
 ): string[] {
   return listLatestThreadStateEventRowsByThreadIds(deps.db, {
+    threadIds,
     kind: LEGACY_CODEX_GOAL_EXTENSION_KIND,
     status: "active",
     excludeStopped: true,

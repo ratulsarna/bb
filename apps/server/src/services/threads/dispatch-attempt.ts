@@ -4,6 +4,8 @@ import {
 } from "./queued-message-dispatch.js";
 import {
   listDispatchAdmissions,
+  dispatchAdmissionReleaseVersion,
+  recheckReleasedDispatchAdmission,
   reserveDispatchAdmission,
 } from "./dispatch-admission.js";
 import {
@@ -723,6 +725,7 @@ async function runDispatchAttemptWithAdmission(
   };
 
   if (hasMessageDispatchHooks(sendNow)) {
+    const evaluatedVersion = dispatchAdmissionReleaseVersion(deps.db);
     const outcome = await runDispatchAttemptHooks(
       deps,
       args,
@@ -738,7 +741,7 @@ async function runDispatchAttemptWithAdmission(
       if (claimed !== null) {
         noteDispatchRequeued(thread.id);
       }
-      return waitOn(
+      const waiting = waitOn(
         {
           kind: "plugin",
           pluginId: outcome.waiter.pluginId,
@@ -746,6 +749,8 @@ async function runDispatchAttemptWithAdmission(
         },
         outcome.waiter.sendAt,
       );
+      recheckReleasedDispatchAdmission(deps, evaluatedVersion);
+      return waiting;
     }
   } else {
     await continueThroughCoreWaits();

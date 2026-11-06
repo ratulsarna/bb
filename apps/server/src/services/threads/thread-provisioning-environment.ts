@@ -38,7 +38,6 @@ import {
   type ThreadProvisionContext,
 } from "./thread-startup-store.js";
 import { applyLoggedThreadLifecycleEvent } from "./lifecycle-outcome.js";
-import { requestDispatchAdmissionReleased } from "./dispatch-admission.js";
 import { isParentNotifiableChildThread } from "./thread-parent.js";
 import { queueChildThreadTurnNotificationBestEffort } from "./child-thread-notifications.js";
 
@@ -156,7 +155,6 @@ export function failThreadProvisioning(
     ),
   );
   if (outcome.applied) {
-    requestDispatchAdmissionReleased(deps);
     queueChildSetupFailureNotification(deps, args.thread);
   }
 }
