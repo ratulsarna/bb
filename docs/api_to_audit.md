@@ -670,6 +670,11 @@ Accepted limitations:
 - A scheduled message held by a capacity wait can send when capacity frees,
   before the user's chosen time.
 - `compactFirst` sends return 409 under a strict wait.
+- A Codex goal whose provider crashes between turns keeps its slot until the
+  user stops it or removes the task.
+- A restart rejected before the provider starts can restore stale goal occupancy.
+- A mixed ordinary and strict hook wait can miss a release wake inside the
+  per-thread pacing window.
 
 `sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true })`
 returns `{ id, hostId }` rows for admitted command preparations, starting/active
