@@ -297,7 +297,7 @@ describe("message.dispatch hook context", () => {
         pluginId: "drafts",
         reason: "Draft",
       });
-      expect(onlyQueuedRow(harness, thread.id).sendAt).toBeNull();
+      expect(onlyQueuedRow(harness, thread.id).sendAt).toBe(sendAt);
     });
   });
 

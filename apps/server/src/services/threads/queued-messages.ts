@@ -503,6 +503,12 @@ async function sendClaimedQueuedMessageForThread(
           )
         : { input, mode }),
       ...(inputGroups.length > 1 ? { inputGroups } : {}),
+      ...(!args.sendNow &&
+      queuedMessages.some(
+        (row) => row.waitingOn?.kind === "plugin" && row.sendAt !== null,
+      )
+        ? { sendAt: Math.max(...queuedMessages.map((row) => row.sendAt ?? 0)) }
+        : {}),
     },
     source: {
       kind: "drain",

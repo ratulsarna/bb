@@ -747,7 +747,9 @@ async function runDispatchAttemptWithAdmission(
           pluginId: outcome.waiter.pluginId,
           reason: dispatchWaitReasonForPass(outcome),
         },
-        outcome.waiter.sendAt,
+        payload.sendAt === undefined
+          ? outcome.waiter.sendAt
+          : Math.max(payload.sendAt, outcome.waiter.sendAt ?? payload.sendAt),
       );
       recheckReleasedDispatchAdmission(deps, evaluatedVersion);
       return waiting;
