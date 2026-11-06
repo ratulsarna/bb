@@ -17,6 +17,7 @@ import {
   isNotNull,
   isNull,
   lte,
+  ne,
   notInArray,
   or,
   sql,
@@ -2174,14 +2175,10 @@ export function interruptActiveThreadsForHost(
     .where(
       and(
         eq(environments.hostId, args.hostId),
+        isNull(threads.deletedAt),
+        args.includeStopping ? undefined : ne(threads.status, "stopping"),
         or(
-          and(
-            inArray(
-              threads.status,
-              args.includeStopping ? ["active", "stopping"] : ["active"],
-            ),
-            isNull(threads.deletedAt),
-          ),
+          inArray(threads.status, ["active", "stopping"]),
           goalThreadIds.length > 0
             ? inArray(threads.id, goalThreadIds)
             : undefined,
