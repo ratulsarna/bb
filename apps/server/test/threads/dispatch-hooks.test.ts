@@ -12,6 +12,7 @@ import {
   createQueuedThreadMessage,
   deleteQueuedThreadMessage,
   getThread,
+  getLatestSessionForHost,
   listEvents,
   listQueuedThreadMessages,
   listQueuedThreadMessagesForApi,
@@ -49,6 +50,7 @@ import { applyLoggedThreadLifecycleEvent } from "../../src/services/threads/life
 import { createClientTurnRequestId } from "../../src/services/threads/thread-events.js";
 import { toThreadQueuedMessage } from "../../src/services/threads/thread-queued-messages.js";
 import { textInput } from "../helpers/prompt-input.js";
+import { registerHostRpcResponder } from "../helpers/host-rpc.js";
 import {
   internalAuthHeaders,
   listQueuedThreadCommands,
@@ -1951,13 +1953,26 @@ describe("strict dispatch admission", () => {
   });
 });
 
-it.each(["compact", "clear"] as const)(
+it.each(["compact", "clear", "context-clear"] as const)(
   "gates %s before provider or history effects",
   async (operation) => {
     await withTestHarness(async (harness) => {
-      const { thread } = seedRunnableThread(harness, {
+      const { thread, environment } = seedRunnableThread(harness, {
         hostId: `strict-${operation}`,
         status: "idle",
+      });
+      const stop = vi.fn();
+      registerHostRpcResponder(harness, {
+        hostId: environment.hostId,
+        sessionId: getLatestSessionForHost(harness.db, {
+          hostId: environment.hostId,
+        })!.id,
+        handle: async ({ command }) => {
+          if (command.type !== "thread.stop")
+            throw new Error(`Unexpected command: ${command.type}`);
+          stop();
+          return { ok: true, result: { providerCheckpointId: null } };
+        },
       });
       const hook = vi.fn(
         () => ({ action: "wait", reason: "Capacity" }) as const,
@@ -1978,39 +1993,45 @@ it.each(["compact", "clear"] as const)(
           ? await harness.app.request(`/api/v1/threads/${thread.id}/compact`, {
               method: "POST",
             })
-          : await harness.app.request(`/api/v1/threads/${thread.id}/send`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                mode: "auto",
-                input: [
-                  {
-                    type: "text",
-                    text: "/clear",
-                    mentions: [
-                      {
-                        start: 0,
-                        end: 6,
-                        resource: {
-                          kind: "command",
-                          trigger: "/",
-                          name: "clear",
-                          source: "command",
-                          origin: "builtin",
-                          label: "clear",
-                          argumentHint: null,
+          : operation === "context-clear"
+            ? await harness.app.request(
+                `/api/v1/threads/${thread.id}/context/clear`,
+                { method: "POST" },
+              )
+            : await harness.app.request(`/api/v1/threads/${thread.id}/send`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  mode: "auto",
+                  input: [
+                    {
+                      type: "text",
+                      text: "/clear",
+                      mentions: [
+                        {
+                          start: 0,
+                          end: 6,
+                          resource: {
+                            kind: "command",
+                            trigger: "/",
+                            name: "clear",
+                            source: "command",
+                            origin: "builtin",
+                            label: "clear",
+                            argumentHint: null,
+                          },
                         },
-                      },
-                    ],
-                  },
-                ],
-              }),
-            });
+                      ],
+                    },
+                  ],
+                }),
+              });
       expect(response.status).toBe(409);
       expect(await response.json()).toMatchObject({
         code: "dispatch_rejected",
       });
       expect(hook).toHaveBeenCalledOnce();
+      expect(stop).not.toHaveBeenCalled();
       expect(turnRequests(harness, thread.id)).toHaveLength(before);
       expect(listEvents(harness.db, { threadId: thread.id })).toEqual(
         beforeEvents,

@@ -25,6 +25,7 @@ import {
 } from "@bb/server-contract";
 import type { Hono } from "hono";
 import {
+  createStandaloneBuiltinClearCommandInput,
   getRelativeHostPathSegments,
   type ThreadQueuedMessage,
 } from "@bb/domain";
@@ -63,7 +64,6 @@ import {
 } from "../../services/threads/thread-send.js";
 import { acceptThreadSendRequest } from "../../services/threads/thread-send-request.js";
 import { editThreadMessage } from "../../services/threads/thread-edit-message.js";
-import { clearThreadContext } from "../../services/threads/thread-context-clear.js";
 import {
   buildExecutionOptions,
   dispatchThreadUnarchiveCommand,
@@ -450,8 +450,13 @@ export function registerThreadActionRoutes(app: Hono, deps: AppDeps): void {
 
   post(routes.clearContext, async (context) => {
     const thread = requirePublicThread(deps.db, context.req.param("id"));
-    const environment = await requireThreadCommandEnvironment(deps, { thread });
-    await clearThreadContext(deps, { environment, thread });
+    await acceptThreadSendRequest(deps, {
+      thread,
+      payload: {
+        input: createStandaloneBuiltinClearCommandInput(),
+        mode: "start",
+      },
+    });
     return context.json({ ok: true });
   });
 

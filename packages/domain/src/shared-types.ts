@@ -323,28 +323,38 @@ export function isStandaloneBuiltinClearCommand(
   return isStandaloneBuiltinCommand(input, "clear");
 }
 
-export function createStandaloneBuiltinCompactCommandInput(): PromptInput[] {
+function createStandaloneBuiltinCommandInput(
+  name: "compact" | "clear",
+): PromptInput[] {
   return [
     {
       type: "text",
-      text: "/compact",
+      text: `/${name}`,
       mentions: [
         {
           start: 0,
-          end: "/compact".length,
+          end: `/${name}`.length,
           resource: {
             kind: "command",
             trigger: "/",
-            name: "compact",
+            name,
             source: "command",
             origin: "builtin",
-            label: "compact",
+            label: name,
             argumentHint: null,
           },
         },
       ],
     },
   ];
+}
+
+export function createStandaloneBuiltinCompactCommandInput(): PromptInput[] {
+  return createStandaloneBuiltinCommandInput("compact");
+}
+
+export function createStandaloneBuiltinClearCommandInput(): PromptInput[] {
+  return createStandaloneBuiltinCommandInput("clear");
 }
 
 const BUILTIN_PLAN_COMMAND_TEXT = "/plan";

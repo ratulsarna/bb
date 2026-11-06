@@ -657,6 +657,8 @@ and parent/child system notifications. Ordinary hooks follow upstream's
 dispatcher behavior: they inspect messages and system notifications, Send now
 bypasses them, and conversation operations bypass their policy pass. Strict
 hooks also inspect conversation operations and cannot be bypassed by Send now.
+The dedicated context-clear route and `sdk.threads.clearContext` use the same
+dispatcher operation as inline `/clear`.
 Message and notification waits use the existing durable queue; operation waits
 return 409 before provider, stop, rewind, or history effects. Mixed registrations
 share one hook pass per dispatch attempt; any participating plugin can wait or
