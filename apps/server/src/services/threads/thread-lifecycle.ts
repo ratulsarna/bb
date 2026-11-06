@@ -17,14 +17,12 @@ import {
   isNotNull,
   isNull,
   lte,
-  ne,
   notInArray,
   or,
   sql,
 } from "drizzle-orm";
 import {
   getLatestThreadSequence,
-  createEventId,
   deleteThread,
   environments,
   events,
@@ -1077,7 +1075,6 @@ function recordConfirmedGoalRuntimeStop(args: {
       threadIds: [threadId],
       kind: LEGACY_CODEX_GOAL_EXTENSION_KIND,
       status: "active",
-      excludeStopped: true,
     }).length === 0
   )
     return;
@@ -1134,7 +1131,11 @@ export function settleThreadStopCommandResult(
   }
 
   if (!args.report.ok) {
-    if (args.report.errorCode !== "unknown_environment") {
+    if (
+      args.report.errorCode !== "unknown_environment" &&
+      args.report.errorCode !== "host_unavailable" &&
+      args.report.errorCode !== "command_timeout"
+    ) {
       return emptyCommandResultSideEffects();
     }
 
@@ -2182,12 +2183,7 @@ export function interruptActiveThreadsForHost(
             isNull(threads.deletedAt),
           ),
           goalThreadIds.length > 0
-            ? and(
-                inArray(threads.id, goalThreadIds),
-                args.includeStopping
-                  ? undefined
-                  : ne(threads.status, "stopping"),
-              )
+            ? inArray(threads.id, goalThreadIds)
             : undefined,
         ),
       ),
@@ -2208,18 +2204,15 @@ export function finalizeStoppedThread(
 ): void {
   const notificationBuffer = new NotificationBuffer();
   deps.db.transaction(
-    (tx) => {
-      const txDeps = { ...deps, db: tx, hub: notificationBuffer };
-      recordConfirmedGoalRuntimeStop({
-        command: { threadId: args.threadId },
-        deps: txDeps,
-        operationId: createEventId(),
-      });
-      settleDanglingBackgroundTasksForStoppedThreadInTransaction(txDeps, {
-        threadId: args.threadId,
-      });
-      finalizeStoppedThreadInTransaction(txDeps, args);
-    },
+    (tx) =>
+      finalizeStoppedThreadInTransaction(
+        {
+          ...deps,
+          db: tx,
+          hub: notificationBuffer,
+        },
+        args,
+      ),
     { behavior: "immediate" },
   );
   notificationBuffer.flushInto(deps.hub);
