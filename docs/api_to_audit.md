@@ -660,7 +660,9 @@ hooks also inspect conversation operations and cannot be bypassed by Send now.
 The dedicated context-clear route and `sdk.threads.clearContext` use the same
 dispatcher operation as inline `/clear`.
 Message and notification waits use the existing durable queue; operation waits
-return 409 before provider, stop, rewind, or history effects. Mixed registrations
+return 409 before provider, stop, rewind, or history effects. A compact-first
+send runs its compaction as an operation first, so a strict wait refuses it with
+409 instead of queueing it. Mixed registrations
 share one hook pass per dispatch attempt; any participating plugin can wait or
 reject it.
 

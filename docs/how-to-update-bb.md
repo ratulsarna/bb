@@ -57,6 +57,11 @@ git push origin codex/deployment
 When upstream has implemented one of our fixes, remove the duplicate fork fix
 during this merge. Do not keep both implementations.
 
+Fork changes must not add database migrations. Drizzle applies only
+migrations newer than the last one a database ran, so a fork migration can
+make every fork install skip an upstream migration generated before it but
+merged after it.
+
 ## 2. Build and test an isolated package
 
 Keep the deployment checkout clean. `scripts/build-deploy-package.sh` builds
