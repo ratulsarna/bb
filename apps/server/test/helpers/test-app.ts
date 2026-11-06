@@ -99,6 +99,7 @@ export async function installTestBuiltinPlugin(
 }
 
 export type TestAppHarnessConfigOverrides = Partial<ServerRuntimeConfig> & {
+  databaseOptions?: Parameters<typeof createMigratedConnection>[0];
   appUpdateService?: AppUpdateService;
   cliCommandService?: CliCommandService;
   terminalAttachTimeoutMs?: number;
@@ -155,8 +156,10 @@ export function createTestDaemonHostKey(
   });
 }
 
-export function createTestDb(): DbConnection {
-  const db = createMigratedConnection();
+export function createTestDb(
+  options?: Parameters<typeof createMigratedConnection>[0],
+): DbConnection {
+  const db = createMigratedConnection(options);
   ensurePersonalProject(db);
   return db;
 }
@@ -165,6 +168,7 @@ export async function createTestAppHarness(
   overrides: TestAppHarnessConfigOverrides = {},
 ): Promise<TestAppHarness> {
   const {
+    databaseOptions,
     appUpdateService,
     cliCommandService,
     terminalAttachTimeoutMs = TEST_TERMINAL_RPC_TIMEOUT_MS,
@@ -178,7 +182,7 @@ export async function createTestAppHarness(
   } = overrides;
   const logger = createTestLogger();
   const dataDir = await mkdtemp(join(tmpdir(), "bb-server-test-"));
-  const db = createTestDb();
+  const db = createTestDb(databaseOptions);
   setAppSettings(db, {
     ...getAppSettings(db),
     machineGitCredentialsEnabled: false,

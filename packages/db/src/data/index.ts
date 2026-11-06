@@ -493,6 +493,7 @@ export {
   listReadySystemNoticesOnBusyThreads,
   listQueuedThreadMessageCountsByThreadIds,
   listQueuedThreadMessagePluginWaitRefs,
+  hasQueuedThreadMessagePluginWaits,
   listQueuedThreadMessages,
   listQueuedThreadMessagesForApi,
   listQueuedThreadMessagesByWaitHolder,

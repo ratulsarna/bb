@@ -2450,12 +2450,7 @@ export function listQueuedThreadMessagePluginWaitRefs(
       waitHolder: queuedThreadMessages.waitHolder,
     })
     .from(queuedThreadMessages)
-    .where(
-      and(
-        isNotNull(queuedThreadMessages.waitHolder),
-        automaticallyDrainableQueuedThreadMessage(),
-      ),
-    )
+    .where(pluginHeldQueuedThreadMessage())
     .orderBy(
       asc(queuedThreadMessages.createdAt),
       asc(queuedThreadMessages.sortKey),
@@ -2465,6 +2460,26 @@ export function listQueuedThreadMessagePluginWaitRefs(
     .flatMap((row) =>
       row.waitHolder === null ? [] : [{ ...row, waitHolder: row.waitHolder }],
     );
+}
+
+function pluginHeldQueuedThreadMessage() {
+  return and(
+    isNotNull(queuedThreadMessages.waitHolder),
+    automaticallyDrainableQueuedThreadMessage(),
+  );
+}
+
+export function hasQueuedThreadMessagePluginWaits(
+  db: DbQueryConnection,
+): boolean {
+  return (
+    db
+      .select({ id: queuedThreadMessages.id })
+      .from(queuedThreadMessages)
+      .where(pluginHeldQueuedThreadMessage())
+      .limit(1)
+      .get() !== undefined
+  );
 }
 
 /**

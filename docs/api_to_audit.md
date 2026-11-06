@@ -701,7 +701,9 @@ Core reserves cleared admissions inside the hook evaluation lock and releases
 that lock before provider command preparation or daemon RPC. Reservations have
 no expiry. Dispatch commits canonical occupancy before releasing the reservation.
 Committed thread status and activity notifications share one admission-release
-observer; released reservations use the same deduped queue wake. A release during
+observer. Notifications coalesce into one deferred check per tick for any
+plugin-held rows, then use the same deduped queue wake as released reservations.
+A release during
 hook evaluation is recorded even before the waiting row exists, and that row
 rechecks after persistence. Plugin rechecks within the per-thread pacing window
 are skipped; admission-release wakes bypass pacing for strict-owned waits.

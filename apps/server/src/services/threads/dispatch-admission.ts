@@ -2,7 +2,7 @@ import {
   afterCommit,
   getThread,
   listActiveBackgroundTaskCountsByThreadIds,
-  listQueuedThreadMessagePluginWaitRefs,
+  hasQueuedThreadMessagePluginWaits,
   type DbConnection,
   type RunningThreadRow,
 } from "@bb/db";
@@ -10,6 +10,7 @@ import type { LoggedPendingInteractionWorkSessionDeps } from "../../types.js";
 import { requestQueuedMessageDispatch } from "./queued-message-dispatch.js";
 import { listThreadsWithActiveGoals } from "./thread-runtime-display.js";
 import { hasMessageDispatchHooks } from "./dispatch-hooks.js";
+import { deferAfterResponse } from "../lib/response-deferral.js";
 
 const admissions = new WeakMap<DbConnection, Map<symbol, RunningThreadRow>>();
 
@@ -59,7 +60,7 @@ function requestAdmissionRecheck(
 ): void {
   if (
     !hasMessageDispatchHooks(true) ||
-    listQueuedThreadMessagePluginWaitRefs(deps.db).length === 0
+    !hasQueuedThreadMessagePluginWaits(deps.db)
   )
     return;
   requestQueuedMessageDispatch(deps, { kind: "dispatch-admission-released" });
@@ -95,7 +96,22 @@ const occupancyEventTypes = new Set([
 export function observeDispatchAdmissionReleases(
   deps: LoggedPendingInteractionWorkSessionDeps,
 ): () => void {
-  return deps.hub.onChangedMessage((message) => {
+  let releaseCheckPending = false;
+  let stopped = false;
+  const scheduleReleaseCheck = () => {
+    if (releaseCheckPending || stopped) return;
+    releaseCheckPending = true;
+    deferAfterResponse({
+      config: deps.config,
+      logger: deps.logger,
+      name: "Dispatch admission release check",
+      work: async () => {
+        releaseCheckPending = false;
+        if (!stopped) requestDispatchAdmissionReleased(deps);
+      },
+    });
+  };
+  const unsubscribe = deps.hub.onChangedMessage((message) => {
     if (message.entity !== "thread" || !hasMessageDispatchHooks(true)) return;
     if (
       !message.changes.some(
@@ -109,11 +125,12 @@ export function observeDispatchAdmissionReleases(
       )
     )
       return;
-    afterCommit(deps.db, () => {
-      if (!threadOccupiesDispatchCapacity(deps, message.id))
-        requestDispatchAdmissionReleased(deps);
-    });
+    afterCommit(deps.db, scheduleReleaseCheck);
   });
+  return () => {
+    stopped = true;
+    unsubscribe();
+  };
 }
 
 export function listDispatchAdmissions(db: DbConnection): RunningThreadRow[] {

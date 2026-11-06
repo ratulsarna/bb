@@ -1,4 +1,10 @@
-import { getThread, listQueuedThreadMessages } from "@bb/db";
+import {
+  getThread,
+  listQueuedThreadMessages,
+  threads,
+  type SlowDbQueryLogFields,
+} from "@bb/db";
+import { inArray } from "drizzle-orm";
 import { threadScope, turnScope } from "@bb/domain";
 import { createDeferredPromise } from "@bb/test-helpers";
 import { afterEach, expect, it, vi } from "vitest";
@@ -21,9 +27,106 @@ import {
   waitForQueuedCommand,
 } from "../helpers/commands.js";
 import { textInput } from "../helpers/prompt-input.js";
+import { seedThread } from "../helpers/seed.js";
 import { withTestHarness } from "../helpers/test-app.js";
 
 afterEach(() => setPluginHookProvider(undefined));
+
+it("batches bulk runtime status notifications into one release check and wakes a real waiter", async () => {
+  const queries: SlowDbQueryLogFields[] = [];
+  await withTestHarness(
+    {
+      databaseOptions: {
+        slowQueryThresholdMs: 0,
+        slowQueryLogger: {
+          info: (fields) => {
+            queries.push(fields);
+          },
+        },
+      },
+    },
+    async (harness) => {
+      const occupied = seedDispatchThread(harness, {
+        hostId: "occupied",
+        status: "active",
+      });
+      const bulk = Array.from({ length: 64 }, () =>
+        seedThread(harness.deps, {
+          projectId: occupied.project.id,
+          environmentId: occupied.environment.id,
+        }),
+      );
+      harness.db
+        .update(threads)
+        .set({ archivedAt: Date.now() })
+        .where(
+          inArray(
+            threads.id,
+            bulk.slice(0, 32).map((row) => row.id),
+          ),
+        )
+        .run();
+      harness.db
+        .update(threads)
+        .set({ deletedAt: Date.now() })
+        .where(
+          inArray(
+            threads.id,
+            bulk.slice(32).map((row) => row.id),
+          ),
+        )
+        .run();
+      const { thread: waiter } = seedDispatchThread(harness, {
+        hostId: "waiting",
+      });
+      installAdmissionHooks([
+        {
+          pluginId: "capacity",
+          experimental_enforcement: "strict",
+          handler: () =>
+            listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+              (row) => row.id === occupied.thread.id,
+            )
+              ? { action: "wait", reason: "Full" }
+              : { action: "proceed" },
+        },
+      ]);
+      await expect(
+        acceptThreadSendRequest(harness.deps, {
+          thread: waiter,
+          payload: { input: textInput("Waiting work"), mode: "auto" },
+        }),
+      ).resolves.toMatchObject({ delivery: "queued" });
+
+      queries.length = 0;
+      for (const thread of bulk)
+        harness.hub.notifyThread(thread.id, ["status-changed"]);
+      expect(queries).toEqual([]);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(queries).toHaveLength(1);
+      expect(queries[0]).toMatchObject({ operation: "get" });
+      expect(queries[0]!.sql).toContain("queued_thread_messages");
+
+      expect(
+        (
+          await postDispatchEvents(harness, occupied.session, [
+            {
+              type: "turn/completed",
+              threadId: occupied.thread.id,
+              providerThreadId: occupied.providerThreadId,
+              scope: turnScope(occupied.turnId),
+              status: "completed",
+            },
+          ])
+        ).status,
+      ).toBe(200);
+      await vi.waitFor(() =>
+        expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
+      );
+      expect(listQueuedThreadMessages(harness.db, waiter.id)).toEqual([]);
+    },
+  );
+});
 
 it.each([
   "daemon restart",
