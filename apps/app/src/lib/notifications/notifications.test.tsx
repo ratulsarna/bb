@@ -74,6 +74,7 @@ describe("toast history", () => {
     act(() => {
       toast.dismiss();
     });
+    await waitFor(() => expect(screen.queryByText("Deployed v2")).toBeNull());
   });
 });
 
