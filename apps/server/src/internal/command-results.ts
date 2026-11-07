@@ -14,6 +14,7 @@ import {
   settleEnvironmentProvisionCommandResult,
 } from "../services/environments/environment-engine.js";
 import {
+  settleThreadArchiveCommandResult,
   settleThreadPlanCancelCommandResult,
   settleThreadStartCommandResult,
   settleThreadStorageDeleteCommandResult,
@@ -56,6 +57,7 @@ const commandResultSideEffectHandlers: CommandResultSideEffectHandlers = {
   "thread.start": settleThreadStartCommandResult,
   "thread.stop": settleThreadStopCommandResult,
   "thread.storage.delete": settleThreadStorageDeleteCommandResult,
+  "thread.archive": settleThreadArchiveCommandResult,
   "thread.plan.cancel": settleThreadPlanCancelCommandResult,
   "turn.submit": settleTurnSubmitCommandResult,
   "workspace.commit": ({ deps, command, report }) => {

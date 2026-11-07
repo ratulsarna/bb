@@ -21,9 +21,75 @@ import {
   seedDispatchThread,
 } from "../helpers/dispatch-admission.js";
 import { textInput } from "../helpers/prompt-input.js";
+import {
+  reportQueuedCommandSuccess,
+  waitForQueuedCommand,
+} from "../helpers/commands.js";
 import { withTestHarness } from "../helpers/test-app.js";
 
 afterEach(() => setPluginHookProvider(undefined));
+
+it("releases an idle native goal and its waiter only after archive confirmation", async () => {
+  await withTestHarness(async (harness) => {
+    const occupied = seedDispatchThread(harness, { hostId: "archived-goal" });
+    seedDispatchGoal(harness, occupied);
+    const { thread: waiter } = seedDispatchThread(harness, {
+      hostId: "waiting",
+    });
+    installAdmissionHooks([
+      {
+        pluginId: "capacity",
+        experimental_enforcement: "strict",
+        handler: () =>
+          listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+            (row) => row.id === occupied.thread.id,
+          )
+            ? { action: "wait", reason: "Full" }
+            : { action: "proceed" },
+      },
+    ]);
+    await expect(
+      acceptThreadSendRequest(harness.deps, {
+        thread: waiter,
+        payload: { input: textInput("Waiting work"), mode: "auto" },
+      }),
+    ).resolves.toMatchObject({ delivery: "queued" });
+    expect(
+      (
+        await harness.app.request(
+          `/api/v1/threads/${occupied.thread.id}/archive-all`,
+          { method: "POST" },
+        )
+      ).status,
+    ).toBe(200);
+    const archive = await waitForQueuedCommand(
+      harness,
+      ({ command }) =>
+        command.type === "thread.archive" &&
+        command.threadId === occupied.thread.id,
+    );
+    expect(getThread(harness.db, occupied.thread.id)).toMatchObject({
+      archivedAt: expect.any(Number),
+      status: "idle",
+    });
+    expect(
+      listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+        (row) => row.id === occupied.thread.id,
+      ),
+    ).toBe(true);
+    expect(getThread(harness.db, waiter.id)?.status).toBe("idle");
+    await reportQueuedCommandSuccess(harness, archive, {});
+    expect(
+      listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+        (row) => row.id === occupied.thread.id,
+      ),
+    ).toBe(false);
+    await vi.waitFor(() =>
+      expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
+    );
+    expect(listQueuedThreadMessages(harness.db, waiter.id)).toEqual([]);
+  });
+});
 
 it("settles a stopping goal after a daemon restart without a failure banner", async () => {
   await withTestHarness(async (harness) => {

@@ -683,10 +683,11 @@ returns `{ id, hostId }` rows for admitted command preparations, starting/active
 threads, stopping threads, tracked background commands, agents, workflows, and
 active native goals between autonomous turns. Archived/deleted threads remain
 included while starting, active, stopping, or carrying unfinished tracked work.
-Runtime loss, Stop settlement, or storage deletion releases stale active goal occupancy;
-an admitted restart reacquires it. Stop requests and queued messages alone do not
-change goal occupancy. Pending threads occupy capacity only when admitted or carrying
-tracked work. Defaults retain the starting/active, unarchived, undeleted query.
+Runtime loss, confirmed archive, Stop settlement, or storage deletion releases
+stale active goal occupancy; an admitted restart reacquires it. Stop requests and
+queued messages alone do not change goal occupancy. Pending threads occupy
+capacity only when admitted or carrying tracked work. Defaults retain the
+starting/active, unarchived, undeleted query.
 The HTTP query is `GET /threads/running?experimental_includeDispatchOccupancy=true`.
 `threads.get` and `threads.getPluginMetadata` accept
 `experimental_includeDeleted: true` to resolve retained deleted threads and

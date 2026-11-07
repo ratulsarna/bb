@@ -405,6 +405,13 @@ interface SettleThreadStorageDeleteCommandResultArgs {
   report: ThreadStorageDeleteCommandResultReport;
 }
 
+interface SettleThreadArchiveCommandResultArgs {
+  command: HostDaemonCommandForType<"thread.archive">;
+  deps: ThreadCommandResultSettlementDeps;
+  execution: HostDaemonCommandExecutionRecord;
+  report: CommandResultReportForType<"thread.archive">;
+}
+
 interface SettleThreadPlanCancelCommandResultArgs {
   command: ThreadPlanCancelCommand;
   deps: FinalizeStoppedThreadTransactionDeps;
@@ -1099,6 +1106,16 @@ function recordConfirmedGoalRuntimeStop(args: {
   });
   args.deps.hub.notifyThread(threadId, ["events-appended"], {
     eventTypes: ["system/operation"],
+  });
+}
+
+export function settleThreadArchiveCommandResult(
+  args: SettleThreadArchiveCommandResultArgs,
+): void {
+  if (!args.report.ok) return;
+  recordConfirmedGoalRuntimeStop({
+    ...args,
+    operationId: args.execution.id,
   });
 }
 
