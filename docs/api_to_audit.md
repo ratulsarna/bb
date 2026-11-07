@@ -675,6 +675,8 @@ Accepted limitations:
 - A restart rejected before the provider starts can restore stale goal occupancy.
 - A mixed ordinary and strict hook wait can miss a release wake inside the
   per-thread pacing window.
+- A deleted goal thread whose storage cleanup fails after a daemon restart keeps
+  its slot.
 
 `sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true })`
 returns `{ id, hostId }` rows for admitted command preparations, starting/active

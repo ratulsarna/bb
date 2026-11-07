@@ -23,6 +23,7 @@ import {
   sql,
 } from "drizzle-orm";
 import {
+  createEventId,
   getLatestThreadSequence,
   deleteThread,
   environments,
@@ -310,6 +311,10 @@ interface ProvisioningInterruptedThread {
 interface FinalizeStoppedThreadArgs {
   providerCheckpointId?: string;
   threadId: string;
+}
+
+interface FinalizeStoppedThreadTransactionArgs extends FinalizeStoppedThreadArgs {
+  runtimeStopConfirmed: boolean;
 }
 
 interface InterruptActiveTurnForThreadArgs {
@@ -946,6 +951,7 @@ export function settleThreadStartCommandResult(
   if (currentThread && currentThread.deletedAt !== null) {
     finalizeStoppedThreadInTransaction(args.deps, {
       threadId: currentThread.id,
+      runtimeStopConfirmed: false,
     });
     return { postCommitActions };
   }
@@ -1076,6 +1082,7 @@ function recordConfirmedGoalRuntimeStop(args: {
       threadIds: [threadId],
       kind: LEGACY_CODEX_GOAL_EXTENSION_KIND,
       status: "active",
+      excludeStopped: true,
     }).length === 0
   )
     return;
@@ -1149,6 +1156,7 @@ export function settleThreadStopCommandResult(
     });
     finalizeStoppedThreadInTransaction(args.deps, {
       threadId: args.command.threadId,
+      runtimeStopConfirmed: false,
     });
     return {
       postCommitActions: [
@@ -1162,6 +1170,7 @@ export function settleThreadStopCommandResult(
       ? { providerCheckpointId: args.report.result.providerCheckpointId }
       : {}),
     threadId: args.command.threadId,
+    runtimeStopConfirmed: args.report.result.activeTurnRetained !== true,
   });
 
   return {
@@ -1199,6 +1208,7 @@ export function settleThreadStorageDeleteCommandResult(
       ? { providerCheckpointId: args.report.result.providerCheckpointId }
       : {}),
     threadId: args.command.threadId,
+    runtimeStopConfirmed: true,
   });
   return {
     postCommitActions: [
@@ -1324,6 +1334,7 @@ export function settleThreadPlanCancelCommandResult(
   }
   finalizeStoppedThreadInTransaction(args.deps, {
     threadId: args.command.threadId,
+    runtimeStopConfirmed: false,
   });
   return emptyCommandResultSideEffects();
 }
@@ -1733,6 +1744,7 @@ function requestPreStartThreadStop(
 
       finalizeStoppedThreadInTransaction(txDeps, {
         threadId: currentThread.id,
+        runtimeStopConfirmed: false,
       });
       return {
         abandonedProvider,
@@ -2208,7 +2220,7 @@ export function finalizeStoppedThread(
           db: tx,
           hub: notificationBuffer,
         },
-        args,
+        { ...args, runtimeStopConfirmed: true },
       ),
     { behavior: "immediate" },
   );
@@ -2224,11 +2236,19 @@ export function finalizeStoppedThread(
 
 export function finalizeStoppedThreadInTransaction(
   deps: FinalizeStoppedThreadTransactionDeps,
-  args: FinalizeStoppedThreadArgs,
+  args: FinalizeStoppedThreadTransactionArgs,
 ): void {
   const currentThread = getThread(deps.db, args.threadId);
   if (!currentThread) {
     return;
+  }
+
+  if (currentThread.status === "stopping" && args.runtimeStopConfirmed) {
+    recordConfirmedGoalRuntimeStop({
+      command: { threadId: currentThread.id },
+      deps,
+      operationId: createEventId(),
+    });
   }
 
   const interruptionReason =

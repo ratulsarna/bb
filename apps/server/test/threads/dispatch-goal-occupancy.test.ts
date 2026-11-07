@@ -32,6 +32,27 @@ it("settles a stopping goal after a daemon restart without a failure banner", as
       status: "stopping",
     });
     seedDispatchGoal(harness, fixture);
+    const { thread: waiter } = seedDispatchThread(harness, {
+      hostId: "waiting",
+    });
+    installAdmissionHooks([
+      {
+        pluginId: "capacity",
+        experimental_enforcement: "strict",
+        handler: () =>
+          listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+            (row) => row.id === fixture.thread.id,
+          )
+            ? { action: "wait", reason: "Full" }
+            : { action: "proceed" },
+      },
+    ]);
+    await expect(
+      acceptThreadSendRequest(harness.deps, {
+        thread: waiter,
+        payload: { input: textInput("Waiting work"), mode: "auto" },
+      }),
+    ).resolves.toMatchObject({ delivery: "queued" });
     interruptActiveThreadsForHost(harness.deps, {
       hostId: fixture.host.id,
       includeStopping: false,
@@ -47,10 +68,19 @@ it("settles a stopping goal after a daemon restart without a failure banner", as
     });
     expect(getThread(harness.db, fixture.thread.id)?.status).toBe("idle");
     expect(
+      listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+        (row) => row.id === fixture.thread.id,
+      ),
+    ).toBe(false);
+    expect(
       listEvents(harness.db, { threadId: fixture.thread.id }).filter(
         (event) => event.type === "system/error",
       ),
     ).toEqual([]);
+    await vi.waitFor(() =>
+      expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
+    );
+    expect(listQueuedThreadMessages(harness.db, waiter.id)).toEqual([]);
   });
 });
 

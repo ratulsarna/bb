@@ -1584,6 +1584,7 @@ function settleEnvironmentProvisionOutcome(
       if (thread.deletedAt !== null) {
         finalizeStoppedThreadInTransaction(args.deps, {
           threadId: thread.id,
+          runtimeStopConfirmed: false,
         });
         continue;
       }
@@ -1736,6 +1737,7 @@ export function settleEnvironmentProvisionCancelCommandResult(
   for (const thread of stoppedThreads) {
     finalizeStoppedThreadInTransaction(args.deps, {
       threadId: thread.id,
+      runtimeStopConfirmed: true,
     });
   }
 
