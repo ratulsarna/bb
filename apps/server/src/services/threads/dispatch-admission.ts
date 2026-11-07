@@ -1,6 +1,6 @@
 import {
   afterCommit,
-  hasReleasedThreadDispatchCapacity,
+  listThreadDispatchOccupancy,
   hasQueuedThreadMessagePluginWaits,
   type DbConnection,
   type RunningThreadRow,
@@ -69,13 +69,10 @@ function threadsReleasedDispatchCapacity(
   deps: LoggedPendingInteractionWorkSessionDeps,
   threadIds: readonly string[],
 ): boolean {
-  const reserved = new Set(
-    listDispatchAdmissions(deps.db).map((row) => row.id),
+  const occupied = new Set(
+    listDispatchOccupancy(deps.db, threadIds).map((row) => row.id),
   );
-  return hasReleasedThreadDispatchCapacity(deps.db, {
-    threadIds: threadIds.filter((id) => !reserved.has(id)),
-    goalStateKind: LEGACY_CODEX_GOAL_EXTENSION_KIND,
-  });
+  return threadIds.some((id) => !occupied.has(id));
 }
 
 const occupancyEventTypes = new Set([
@@ -136,6 +133,18 @@ export function observeDispatchAdmissionReleases(
   };
 }
 
-export function listDispatchAdmissions(db: DbConnection): RunningThreadRow[] {
-  return [...(admissions.get(db)?.values() ?? [])];
+export function listDispatchOccupancy(
+  db: DbConnection,
+  threadIds?: readonly string[],
+): RunningThreadRow[] {
+  const rows = listThreadDispatchOccupancy(db, {
+    ...(threadIds === undefined ? {} : { threadIds }),
+    goalStateKind: LEGACY_CODEX_GOAL_EXTENSION_KIND,
+  });
+  const occupied = new Map(rows.map((row) => [row.id, row]));
+  const requested = threadIds === undefined ? null : new Set(threadIds);
+  for (const row of admissions.get(db)?.values() ?? []) {
+    if (requested === null || requested.has(row.id)) occupied.set(row.id, row);
+  }
+  return [...occupied.values()];
 }

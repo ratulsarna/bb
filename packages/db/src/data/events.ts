@@ -85,6 +85,7 @@ import { deriveStoredEventItemFieldsFromSource } from "../stored-event-item-fiel
 import {
   upsertThreadSearchSegments,
   DISPATCH_OCCUPYING_THREAD_STATUSES,
+  type RunningThreadRow,
   type UpsertThreadSearchSegmentInput,
 } from "./threads.js";
 import {
@@ -1801,8 +1802,13 @@ function latestThreadStateEventRowsQuery(
     ListLatestThreadStateEventRowsByThreadIdsArgs,
     "kind" | "status" | "excludeStopped"
   >,
-  requestedThreads: SQL,
+  requestedThreads: SQL | undefined,
 ) {
+  const requested =
+    requestedThreads ??
+    sql`SELECT DISTINCT state.thread_id AS column1
+    FROM ${events} AS state INDEXED BY events_thread_state_thread_sequence_idx
+    WHERE state.type ${THREAD_STATE_TYPES_PREDICATE}`;
   return db
     .select(storedEventRowFields)
     .from(events)
@@ -1842,7 +1848,7 @@ function latestThreadStateEventRowsQuery(
         ORDER BY candidate.sequence DESC
         LIMIT 1
       )
-      FROM (${requestedThreads}) AS requested
+      FROM (${requested}) AS requested
     )`,
       ),
     );
@@ -1855,9 +1861,7 @@ function listFilteredLatestThreadStateEventRows(
   const queryBatch = (threadIds: readonly string[] | undefined) => {
     const requestedThreads =
       threadIds === undefined
-        ? sql`SELECT DISTINCT state.thread_id AS column1
-          FROM ${events} AS state INDEXED BY events_thread_state_thread_sequence_idx
-          WHERE state.type ${THREAD_STATE_TYPES_PREDICATE}`
+        ? undefined
         : sql`VALUES ${sql.join(
             threadIds.map((id) => sql`(${id})`),
             sql`, `,
@@ -2833,11 +2837,12 @@ export function listActiveBackgroundTaskCountsByThreadIds(
   );
 }
 
-export function hasReleasedThreadDispatchCapacity(
+export function listThreadDispatchOccupancy(
   db: DbQueryConnection,
-  args: { threadIds: readonly string[]; goalStateKind: string },
-): boolean {
-  if (args.threadIds.length === 0) return false;
+  args: { threadIds?: readonly string[]; goalStateKind: string },
+): RunningThreadRow[] {
+  if (args.threadIds?.length === 0) return [];
+  const scoped = args.threadIds !== undefined;
   const goals = latestThreadStateEventRowsQuery(
     db,
     {
@@ -2845,34 +2850,39 @@ export function hasReleasedThreadDispatchCapacity(
       status: "active",
       excludeStopped: true,
     },
-    sql`SELECT thread_id AS column1 FROM notified`,
+    scoped ? sql`SELECT thread_id AS column1 FROM requested` : undefined,
   );
   const backgroundTasks = activeBackgroundTaskCountsQuery(
-    sql`${events.threadId} IN (SELECT thread_id FROM notified)`,
+    scoped
+      ? sql`${events.threadId} IN (SELECT thread_id FROM requested)`
+      : sql`1 = 1`,
     true,
   );
-  return (
-    db.get<{ threadId: string }>(sql`
-    WITH notified AS (
-      SELECT CAST(value AS text) AS thread_id FROM json_each(${JSON.stringify(args.threadIds)})
-    ), active_goals AS (${goals.getSQL()}),
-    active_background_tasks AS (${backgroundTasks})
-    SELECT notified.thread_id AS threadId
-    FROM notified
-    LEFT JOIN ${threads} ON ${threads.id} = notified.thread_id
-    WHERE CASE
-      WHEN ${inArray(threads.status, [...DISPATCH_OCCUPYING_THREAD_STATUSES])} THEN 0
-      WHEN EXISTS (
-        SELECT 1 FROM active_background_tasks WHERE threadId = notified.thread_id
-      ) THEN 0
-      WHEN EXISTS (
-        SELECT 1 FROM active_goals WHERE thread_id = notified.thread_id
-      ) THEN 0
-      ELSE 1
-    END = 1
-    LIMIT 1
-  `) !== undefined
+  const statusFilter = and(
+    inArray(threads.status, [...DISPATCH_OCCUPYING_THREAD_STATUSES]),
+    scoped
+      ? sql`${threads.id} IN (SELECT thread_id FROM requested)`
+      : undefined,
   );
+  return db.all<RunningThreadRow>(sql`
+    WITH ${
+      scoped
+        ? sql`requested AS (
+      SELECT CAST(value AS text) AS thread_id FROM json_each(${JSON.stringify(args.threadIds)})
+    ),`
+        : sql``
+    } active_goals AS (${goals.getSQL()}),
+    active_background_tasks AS (${backgroundTasks})
+    SELECT ${threads.id} AS id, ${environments.hostId} AS hostId
+    FROM ${threads}
+    LEFT JOIN ${environments} ON ${environments.id} = ${threads.environmentId}
+    WHERE ${threads.id} IN (
+      SELECT ${threads.id} FROM ${threads} WHERE ${statusFilter}
+      UNION SELECT threadId FROM active_background_tasks
+      UNION SELECT thread_id FROM active_goals
+    )
+    ORDER BY ${threads.id}
+  `);
 }
 
 type StoredTurnKeyEventType = Extract<

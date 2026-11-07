@@ -677,6 +677,11 @@ Accepted limitations:
   per-thread pacing window.
 - A deleted goal thread whose storage cleanup fails after a daemon restart keeps
   its slot.
+- A strict hook that counts only the default `listRunning()` starting/active rows
+  can miss a wake when a foreground turn ends while its native goal remains
+  active, because core wakes on dispatch-occupancy release.
+- Replaying events buffered across a reconnect can restore a stopped goal's
+  occupancy.
 
 `sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true })`
 returns `{ id, hostId }` rows for admitted command preparations, starting/active
@@ -705,12 +710,13 @@ that lock before provider command preparation or daemon RPC. Reservations have
 no expiry. Dispatch commits canonical occupancy before releasing the reservation.
 Committed thread status and activity notifications share one admission-release
 observer. Notifications collect thread IDs for one deferred occupancy query per
-tick. If any notified thread has released capacity, the observer records a
-release and uses the same deduped queue wake as released reservations when
-plugin-held rows exist. A release during hook evaluation is recorded even before
-the waiting row exists, and that row rechecks after persistence. Plugin rechecks
-within the per-thread pacing window are skipped; admission-release wakes bypass
-pacing for strict-owned waits.
+tick. The occupancy list and release check share the same status, tracked-work,
+goal and reservation definition. If any notified thread has released capacity,
+the observer records a release and uses the same deduped queue wake as released
+reservations when plugin-held rows exist. A release during hook evaluation is
+recorded even before the waiting row exists, and that row rechecks after
+persistence. Plugin rechecks within the per-thread pacing window are skipped;
+admission-release wakes bypass pacing for strict-owned waits.
 Queue claims and recorded lifecycle/activity support restart recovery. Plugins
 own membership and counting rules; core defines no task IDs or numerical limits.
 

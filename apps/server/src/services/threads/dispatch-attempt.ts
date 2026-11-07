@@ -3,7 +3,7 @@ import {
   requestQueuedMessageDispatch,
 } from "./queued-message-dispatch.js";
 import {
-  listDispatchAdmissions,
+  listDispatchOccupancy,
   dispatchAdmissionReleaseVersion,
   recheckReleasedDispatchAdmission,
   reserveDispatchAdmission,
@@ -22,7 +22,6 @@ import {
   getThread,
   isThreadQueueAutoSendPaused,
   listRunningThreads,
-  listActiveBackgroundTaskCountsByThreadIds,
   type ClaimedQueuedThreadMessageRow,
   type RunningThreadRow,
 } from "@bb/db";
@@ -96,7 +95,6 @@ import {
 import {
   buildThreadStatusChangeMetadata,
   toThreadResponseFromThread,
-  listThreadsWithActiveGoals,
 } from "./thread-runtime-display.js";
 import { toThreadQueuedMessage } from "./thread-queued-messages.js";
 import { isPreStartThreadStatus } from "./thread-status.js";
@@ -223,26 +221,10 @@ export function listRunningThreadsWithIntendedHosts(
   deps: Pick<LoggedPendingInteractionWorkSessionDeps, "db">,
   includeDispatchOccupancy = false,
 ): RunningThreadRow[] {
-  const rows = listRunningThreads(
-    deps.db,
-    includeDispatchOccupancy
-      ? {
-          includeDispatchOccupancy: true,
-          additionalThreadIds: [
-            ...listActiveBackgroundTaskCountsByThreadIds(deps.db, {
-              includeSkippedTranscript: true,
-            }).map((row) => row.threadId),
-            ...listThreadsWithActiveGoals(deps),
-          ],
-        }
-      : {},
-  );
-  const occupied = new Map(rows.map((row) => [row.id, row]));
-  if (includeDispatchOccupancy) {
-    for (const row of listDispatchAdmissions(deps.db))
-      occupied.set(row.id, row);
-  }
-  return [...occupied.values()].map((row) =>
+  const rows = includeDispatchOccupancy
+    ? listDispatchOccupancy(deps.db)
+    : listRunningThreads(deps.db);
+  return rows.map((row) =>
     row.hostId !== null
       ? row
       : { ...row, hostId: intendedThreadHostId(deps, row.id) },

@@ -1365,13 +1365,7 @@ export interface RunningThreadRow {
  * `archived_at IS NULL` is the leading equality and the status set is the
  * range that follows.
  */
-export function listRunningThreads(
-  db: DbQueryConnection,
-  options: {
-    includeDispatchOccupancy?: boolean;
-    additionalThreadIds?: string[];
-  } = {},
-): RunningThreadRow[] {
+export function listRunningThreads(db: DbQueryConnection): RunningThreadRow[] {
   return db
     .select({
       id: threads.id,
@@ -1380,16 +1374,9 @@ export function listRunningThreads(
     .from(threads)
     .leftJoin(environments, eq(environments.id, threads.environmentId))
     .where(
-      or(
-        options.includeDispatchOccupancy
-          ? inArray(threads.status, [...DISPATCH_OCCUPYING_THREAD_STATUSES])
-          : and(
-              liveThreads(),
-              inArray(threads.status, [...OCCUPYING_THREAD_STATUSES]),
-            ),
-        options.additionalThreadIds?.length
-          ? inArray(threads.id, options.additionalThreadIds)
-          : undefined,
+      and(
+        liveThreads(),
+        inArray(threads.status, [...OCCUPYING_THREAD_STATUSES]),
       ),
     )
     .orderBy(asc(threads.id))

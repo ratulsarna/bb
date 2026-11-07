@@ -336,7 +336,7 @@ export {
   getLatestThreadSequence,
   insertEvents,
   listActiveBackgroundTaskCountsByThreadIds,
-  hasReleasedThreadDispatchCapacity,
+  listThreadDispatchOccupancy,
   listContextWindowUsageRows,
   getLatestTokenUsageRow,
   listEvents,

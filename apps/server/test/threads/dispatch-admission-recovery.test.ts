@@ -111,7 +111,6 @@ it("batches bulk runtime status notifications into one release check and wakes a
       expect(queries).toEqual([]);
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(queries).toHaveLength(1);
-      expect(queries[0]).toMatchObject({ operation: "get" });
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(hook).not.toHaveBeenCalled();
 
