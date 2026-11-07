@@ -1327,6 +1327,11 @@ const OCCUPYING_THREAD_STATUSES: readonly ThreadStatus[] = [
   "active",
 ];
 
+export const DISPATCH_OCCUPYING_THREAD_STATUSES: readonly ThreadStatus[] = [
+  ...OCCUPYING_THREAD_STATUSES,
+  "stopping",
+];
+
 /**
  * One thread currently occupying capacity: its id, and the machine that id is
  * occupying.
@@ -1377,7 +1382,7 @@ export function listRunningThreads(
     .where(
       or(
         options.includeDispatchOccupancy
-          ? inArray(threads.status, [...OCCUPYING_THREAD_STATUSES, "stopping"])
+          ? inArray(threads.status, [...DISPATCH_OCCUPYING_THREAD_STATUSES])
           : and(
               liveThreads(),
               inArray(threads.status, [...OCCUPYING_THREAD_STATUSES]),

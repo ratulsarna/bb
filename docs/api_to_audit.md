@@ -701,12 +701,13 @@ Core reserves cleared admissions inside the hook evaluation lock and releases
 that lock before provider command preparation or daemon RPC. Reservations have
 no expiry. Dispatch commits canonical occupancy before releasing the reservation.
 Committed thread status and activity notifications share one admission-release
-observer. Notifications coalesce into one deferred check per tick for any
-plugin-held rows, then use the same deduped queue wake as released reservations.
-A release during
-hook evaluation is recorded even before the waiting row exists, and that row
-rechecks after persistence. Plugin rechecks within the per-thread pacing window
-are skipped; admission-release wakes bypass pacing for strict-owned waits.
+observer. Notifications collect thread IDs for one deferred occupancy query per
+tick. If any notified thread has released capacity, the observer records a
+release and uses the same deduped queue wake as released reservations when
+plugin-held rows exist. A release during hook evaluation is recorded even before
+the waiting row exists, and that row rechecks after persistence. Plugin rechecks
+within the per-thread pacing window are skipped; admission-release wakes bypass
+pacing for strict-owned waits.
 Queue claims and recorded lifecycle/activity support restart recovery. Plugins
 own membership and counting rules; core defines no task IDs or numerical limits.
 

@@ -1,14 +1,13 @@
 import {
   afterCommit,
-  getThread,
-  listActiveBackgroundTaskCountsByThreadIds,
+  hasReleasedThreadDispatchCapacity,
   hasQueuedThreadMessagePluginWaits,
   type DbConnection,
   type RunningThreadRow,
 } from "@bb/db";
 import type { LoggedPendingInteractionWorkSessionDeps } from "../../types.js";
+import { LEGACY_CODEX_GOAL_EXTENSION_KIND } from "@bb/domain";
 import { requestQueuedMessageDispatch } from "./queued-message-dispatch.js";
-import { listThreadsWithActiveGoals } from "./thread-runtime-display.js";
 import { hasMessageDispatchHooks } from "./dispatch-hooks.js";
 import { deferAfterResponse } from "../lib/response-deferral.js";
 
@@ -28,7 +27,7 @@ export function reserveDispatchAdmission(
   pending.set(token, row);
   return () => {
     if (!pending.delete(token)) return;
-    if (!threadOccupiesDispatchCapacity(deps, row.id))
+    if (threadsReleasedDispatchCapacity(deps, [row.id]))
       requestDispatchAdmissionReleased(deps);
   };
 }
@@ -66,20 +65,17 @@ function requestAdmissionRecheck(
   requestQueuedMessageDispatch(deps, { kind: "dispatch-admission-released" });
 }
 
-function threadOccupiesDispatchCapacity(
+function threadsReleasedDispatchCapacity(
   deps: LoggedPendingInteractionWorkSessionDeps,
-  threadId: string,
+  threadIds: readonly string[],
 ): boolean {
-  const thread = getThread(deps.db, threadId);
-  if (thread === null) return false;
-  return (
-    ["starting", "active", "stopping"].includes(thread.status) ||
-    listActiveBackgroundTaskCountsByThreadIds(deps.db, {
-      threadIds: [threadId],
-      includeSkippedTranscript: true,
-    }).length > 0 ||
-    listThreadsWithActiveGoals(deps, [threadId]).length > 0
+  const reserved = new Set(
+    listDispatchAdmissions(deps.db).map((row) => row.id),
   );
+  return hasReleasedThreadDispatchCapacity(deps.db, {
+    threadIds: threadIds.filter((id) => !reserved.has(id)),
+    goalStateKind: LEGACY_CODEX_GOAL_EXTENSION_KIND,
+  });
 }
 
 const occupancyEventTypes = new Set([
@@ -98,8 +94,11 @@ export function observeDispatchAdmissionReleases(
 ): () => void {
   let releaseCheckPending = false;
   let stopped = false;
-  const scheduleReleaseCheck = () => {
-    if (releaseCheckPending || stopped) return;
+  const notifiedThreadIds = new Set<string>();
+  const scheduleReleaseCheck = (threadId: string) => {
+    if (stopped) return;
+    notifiedThreadIds.add(threadId);
+    if (releaseCheckPending) return;
     releaseCheckPending = true;
     deferAfterResponse({
       config: deps.config,
@@ -107,7 +106,10 @@ export function observeDispatchAdmissionReleases(
       name: "Dispatch admission release check",
       work: async () => {
         releaseCheckPending = false;
-        if (!stopped) requestDispatchAdmissionReleased(deps);
+        const threadIds = [...notifiedThreadIds];
+        notifiedThreadIds.clear();
+        if (!stopped && threadsReleasedDispatchCapacity(deps, threadIds))
+          requestDispatchAdmissionReleased(deps);
       },
     });
   };
@@ -125,10 +127,11 @@ export function observeDispatchAdmissionReleases(
       )
     )
       return;
-    afterCommit(deps.db, scheduleReleaseCheck);
+    afterCommit(deps.db, () => scheduleReleaseCheck(message.id));
   });
   return () => {
     stopped = true;
+    notifiedThreadIds.clear();
     unsubscribe();
   };
 }

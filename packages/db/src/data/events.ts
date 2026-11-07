@@ -84,6 +84,7 @@ import {
 import { deriveStoredEventItemFieldsFromSource } from "../stored-event-item-fields.js";
 import {
   upsertThreadSearchSegments,
+  DISPATCH_OCCUPYING_THREAD_STATUSES,
   type UpsertThreadSearchSegmentInput,
 } from "./threads.js";
 import {
@@ -1794,6 +1795,59 @@ export function listLatestThreadStateEventRowsByThreadIds(
   return read.rows;
 }
 
+function latestThreadStateEventRowsQuery(
+  db: DbQueryConnection,
+  args: Pick<
+    ListLatestThreadStateEventRowsByThreadIdsArgs,
+    "kind" | "status" | "excludeStopped"
+  >,
+  requestedThreads: SQL,
+) {
+  return db
+    .select(storedEventRowFields)
+    .from(events)
+    .where(
+      and(
+        args.excludeStopped
+          ? sql`NOT EXISTS (
+          SELECT 1 FROM events stopped
+          WHERE stopped.thread_id = ${events.threadId}
+            AND (
+              (stopped.type = 'system/operation'
+                AND json_extract(stopped.data, '$.operation') = ${THREAD_RUNTIME_STOPPED_OPERATION}
+                AND json_extract(stopped.data, '$.status') = 'completed')
+              OR (stopped.type = 'system/error'
+                AND json_extract(stopped.data, '$.code') = 'provider_process_exited')
+              OR (stopped.type = 'system/thread/interrupted'
+                AND coalesce(json_extract(stopped.data, '$.cause'), json_extract(stopped.data, '$.reason'))
+                  IN ('host-daemon-restarted', 'host-connection-lost', 'host-removed'))
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM events restarted
+              WHERE restarted.thread_id = stopped.thread_id
+                AND restarted.type IN ('client/turn/requested', 'turn/started')
+                AND restarted.sequence > stopped.sequence
+            )
+        )`
+          : undefined,
+        args.status === undefined
+          ? undefined
+          : sql`coalesce(json_extract(${events.data}, '$.payload.status'), json_extract(${events.data}, '$.status')) = ${args.status}`,
+        sql`${events}.rowid IN (
+      SELECT (
+        SELECT candidate.rowid
+        FROM ${events} AS candidate INDEXED BY events_thread_state_thread_sequence_idx
+        WHERE candidate.thread_id = requested.column1
+          AND ${threadStateKindPredicate(sql`candidate`, args.kind)}
+        ORDER BY candidate.sequence DESC
+        LIMIT 1
+      )
+      FROM (${requestedThreads}) AS requested
+    )`,
+      ),
+    );
+}
+
 function listFilteredLatestThreadStateEventRows(
   db: DbQueryConnection,
   args: ListLatestThreadStateEventRowsByThreadIdsArgs,
@@ -1808,50 +1862,7 @@ function listFilteredLatestThreadStateEventRows(
             threadIds.map((id) => sql`(${id})`),
             sql`, `,
           )}`;
-    return db
-      .select(storedEventRowFields)
-      .from(events)
-      .where(
-        and(
-          args.excludeStopped
-            ? sql`NOT EXISTS (
-            SELECT 1 FROM events stopped
-            WHERE stopped.thread_id = ${events.threadId}
-              AND (
-                (stopped.type = 'system/operation'
-                  AND json_extract(stopped.data, '$.operation') = ${THREAD_RUNTIME_STOPPED_OPERATION}
-                  AND json_extract(stopped.data, '$.status') = 'completed')
-                OR (stopped.type = 'system/error'
-                  AND json_extract(stopped.data, '$.code') = 'provider_process_exited')
-                OR (stopped.type = 'system/thread/interrupted'
-                  AND coalesce(json_extract(stopped.data, '$.cause'), json_extract(stopped.data, '$.reason'))
-                    IN ('host-daemon-restarted', 'host-connection-lost', 'host-removed'))
-              )
-              AND NOT EXISTS (
-                SELECT 1 FROM events restarted
-                WHERE restarted.thread_id = stopped.thread_id
-                  AND restarted.type IN ('client/turn/requested', 'turn/started')
-                  AND restarted.sequence > stopped.sequence
-              )
-          )`
-            : undefined,
-          args.status === undefined
-            ? undefined
-            : sql`coalesce(json_extract(${events.data}, '$.payload.status'), json_extract(${events.data}, '$.status')) = ${args.status}`,
-          sql`${events}.rowid IN (
-        SELECT (
-          SELECT candidate.rowid
-          FROM ${events} AS candidate INDEXED BY events_thread_state_thread_sequence_idx
-          WHERE candidate.thread_id = requested.column1
-            AND ${threadStateKindPredicate(sql`candidate`, args.kind)}
-          ORDER BY candidate.sequence DESC
-          LIMIT 1
-        )
-        FROM (${requestedThreads}) AS requested
-      )`,
-        ),
-      )
-      .all();
+    return latestThreadStateEventRowsQuery(db, args, requestedThreads).all();
   };
   return args.threadIds === undefined
     ? queryBatch(undefined)
@@ -2694,22 +2705,19 @@ export function listLatestOpenBackgroundTaskStateRowsForThread(
   return rows.sort((left, right) => left.sequence - right.sequence);
 }
 
-export function listActiveBackgroundTaskCountsByThreadIds(
-  db: DbQueryConnection,
-  args: ListActiveBackgroundTaskCountsByThreadIdsArgs,
-): ActiveBackgroundTaskCountRow[] {
-  const queryBatch = (threadIds: readonly string[] | undefined) => {
-    const startedType = "item/started" satisfies ThreadEventType;
-    const progressType =
-      "item/backgroundTask/progress" satisfies ThreadEventType;
-    const completedType =
-      "item/backgroundTask/completed" satisfies ThreadEventType;
-    const backgroundTaskItemKind =
-      "backgroundTask" satisfies ThreadEventItemType;
-    const backgroundTaskItemKindPredicate = sql.raw(
-      `= '${backgroundTaskItemKind}'`,
-    );
-    return db.all<ActiveBackgroundTaskCountRow>(sql`
+function activeBackgroundTaskCountsQuery(
+  threadFilter: SQL,
+  includeSkippedTranscript: boolean,
+): SQL {
+  const startedType = "item/started" satisfies ThreadEventType;
+  const progressType = "item/backgroundTask/progress" satisfies ThreadEventType;
+  const completedType =
+    "item/backgroundTask/completed" satisfies ThreadEventType;
+  const backgroundTaskItemKind = "backgroundTask" satisfies ThreadEventItemType;
+  const backgroundTaskItemKindPredicate = sql.raw(
+    `= '${backgroundTaskItemKind}'`,
+  );
+  return sql`
     WITH latest_background_task_state AS (
       SELECT
         ${events.threadId} AS thread_id,
@@ -2728,7 +2736,7 @@ export function listActiveBackgroundTaskCountsByThreadIds(
           END
         ) AS is_completed
       FROM ${events} INDEXED BY events_background_task_thread_type_item_sequence_idx
-      WHERE ${threadIds === undefined ? sql`1 = 1` : inArray(events.threadId, [...threadIds])}
+      WHERE ${threadFilter}
         AND ${events.itemKind} ${backgroundTaskItemKindPredicate}
         AND ${inArray(events.type, [startedType, progressType, completedType])}
         AND ${isNotNull(events.itemId)}
@@ -2776,7 +2784,7 @@ export function listActiveBackgroundTaskCountsByThreadIds(
         ${LOCAL_BASH_TASK_TYPE}
       )
       AND ${
-        args.includeSkippedTranscript
+        includeSkippedTranscript
           ? sql`1 = 1`
           : sql`COALESCE(
               json_extract(active_event.data, '$.item.skipTranscript'),
@@ -2789,8 +2797,22 @@ export function listActiveBackgroundTaskCountsByThreadIds(
       ) = 0
     GROUP BY active_event.thread_id
     ORDER BY active_event.thread_id
-  `);
-  };
+  `;
+}
+
+export function listActiveBackgroundTaskCountsByThreadIds(
+  db: DbQueryConnection,
+  args: ListActiveBackgroundTaskCountsByThreadIdsArgs,
+): ActiveBackgroundTaskCountRow[] {
+  const queryBatch = (threadIds: readonly string[] | undefined) =>
+    db.all<ActiveBackgroundTaskCountRow>(
+      activeBackgroundTaskCountsQuery(
+        threadIds === undefined
+          ? sql`1 = 1`
+          : inArray(events.threadId, [...threadIds]),
+        args.includeSkippedTranscript === true,
+      ),
+    );
   const rows =
     args.threadIds === undefined
       ? queryBatch(undefined)
@@ -2808,6 +2830,48 @@ export function listActiveBackgroundTaskCountsByThreadIds(
       : left.threadId > right.threadId
         ? 1
         : 0,
+  );
+}
+
+export function hasReleasedThreadDispatchCapacity(
+  db: DbQueryConnection,
+  args: { threadIds: readonly string[]; goalStateKind: string },
+): boolean {
+  if (args.threadIds.length === 0) return false;
+  const goals = latestThreadStateEventRowsQuery(
+    db,
+    {
+      kind: args.goalStateKind,
+      status: "active",
+      excludeStopped: true,
+    },
+    sql`SELECT thread_id AS column1 FROM notified`,
+  );
+  const backgroundTasks = activeBackgroundTaskCountsQuery(
+    sql`${events.threadId} IN (SELECT thread_id FROM notified)`,
+    true,
+  );
+  return (
+    db.get<{ threadId: string }>(sql`
+    WITH notified AS (
+      SELECT CAST(value AS text) AS thread_id FROM json_each(${JSON.stringify(args.threadIds)})
+    ), active_goals AS (${goals.getSQL()}),
+    active_background_tasks AS (${backgroundTasks})
+    SELECT notified.thread_id AS threadId
+    FROM notified
+    LEFT JOIN ${threads} ON ${threads.id} = notified.thread_id
+    WHERE CASE
+      WHEN ${inArray(threads.status, [...DISPATCH_OCCUPYING_THREAD_STATUSES])} THEN 0
+      WHEN EXISTS (
+        SELECT 1 FROM active_background_tasks WHERE threadId = notified.thread_id
+      ) THEN 0
+      WHEN EXISTS (
+        SELECT 1 FROM active_goals WHERE thread_id = notified.thread_id
+      ) THEN 0
+      ELSE 1
+    END = 1
+    LIMIT 1
+  `) !== undefined
   );
 }
 
