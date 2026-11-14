@@ -72,6 +72,10 @@ import { resolvePluginMentionContextInputs } from "../plugins/plugin-mentions.js
 import { clearThreadContext } from "./thread-context-clear.js";
 import { withThreadSendGuard } from "./thread-context-mutation-guard.js";
 import {
+  settleInFlightTurnRequest,
+  trackInFlightTurnRequest,
+} from "../../internal/turn-completed-events.js";
+import {
   prependDeferredFirstTurnContext,
   requireDeferredFirstTurnContextCurrent,
   resolveDeferredFirstTurnContext,
@@ -487,7 +491,7 @@ function appendAndQueueSendThreadMessageInTransaction({
 export async function sendThreadMessage(
   deps: LoggedPendingInteractionWorkSessionDeps,
   args: SendThreadMessageArgs,
-): Promise<void> {
+): Promise<number | null> {
   if (isStandaloneBuiltinClearCommand(args.payload.input)) {
     await clearThreadContext(deps, {
       ...(args.beforeAppendInTransaction !== undefined
@@ -496,7 +500,7 @@ export async function sendThreadMessage(
       environment: args.environment,
       thread: args.thread,
     });
-    return;
+    return null;
   }
   return withThreadSendGuard(args.thread.id, () =>
     sendThreadMessageWithoutContextClear(deps, args),
@@ -506,7 +510,7 @@ export async function sendThreadMessage(
 async function sendThreadMessageWithoutContextClear(
   deps: LoggedPendingInteractionWorkSessionDeps,
   args: SendThreadMessageArgs,
-): Promise<void> {
+): Promise<number> {
   const { environment, payload, thread } = args;
   ensureThreadIsWritable(thread);
   if (args.trigger === "user") {
@@ -624,27 +628,26 @@ async function sendThreadMessageWithoutContextClear(
     initiator,
   });
 
-  if (
-    await dispatchTurnDuringReprovision({
-      beforeRequestAppendInTransaction: beforeAppendInTransaction,
-      deps,
-      environment,
-      execution,
-      initiator,
-      input,
-      inputGroups,
-      originPluginId: args.originPluginId,
-      ...(args.retryOf !== undefined ? { retryOf: args.retryOf } : {}),
-      senderThreadId,
-      ...(args.systemNotice !== undefined
-        ? {
-            systemMessageKind: args.systemNotice.kind,
-            systemMessageSubject: args.systemNotice.subject,
-          }
-        : {}),
-      thread,
-    })
-  ) {
+  const reprovisionDispatch = await dispatchTurnDuringReprovision({
+    beforeRequestAppendInTransaction: beforeAppendInTransaction,
+    deps,
+    environment,
+    execution,
+    initiator,
+    input,
+    inputGroups,
+    originPluginId: args.originPluginId,
+    ...(args.retryOf !== undefined ? { retryOf: args.retryOf } : {}),
+    senderThreadId,
+    ...(args.systemNotice !== undefined
+      ? {
+          systemMessageKind: args.systemNotice.kind,
+          systemMessageSubject: args.systemNotice.subject,
+        }
+      : {}),
+    thread,
+  });
+  if (reprovisionDispatch !== null) {
     if (shouldCaptureUserMessageSent) {
       captureUserMessageSentTelemetry(deps, {
         isChildThread: thread.parentThreadId !== null,
@@ -653,7 +656,7 @@ async function sendThreadMessageWithoutContextClear(
         initiator: telemetryInitiator,
       });
     }
-    return;
+    return reprovisionDispatch.messageSequence;
   }
   const readyEnvironment = requireReadyThreadEnvironment(
     getEnvironment(deps.db, environment.id) ?? environment,
@@ -747,18 +750,25 @@ async function sendThreadMessageWithoutContextClear(
       target,
       thread,
     });
+    trackInFlightTurnRequest(thread.id);
     deps.hub.notifyThread(
       thread.id,
       queuedRequest.request.notificationChanges,
       queuedRequest.request.notificationMetadata,
     );
+    const onHistoryReplacementSettled =
+      args.historyReplacement?.onCommandSettled;
     startLiveHostCommand(deps, {
       command: command.command,
       hostId: readyEnvironment.hostId,
       timeoutMs: LIVE_DAEMON_COMMAND_TIMEOUT_MS,
-      ...(args.historyReplacement?.onCommandSettled !== undefined
-        ? { onSettled: args.historyReplacement.onCommandSettled }
-        : {}),
+      onSettled: async () => {
+        try {
+          await onHistoryReplacementSettled?.();
+        } finally {
+          await settleInFlightTurnRequest(deps, thread.id);
+        }
+      },
       onError: ({ error }) => {
         deps.logger.warn(
           { err: error, threadId: thread.id },
@@ -781,7 +791,7 @@ async function sendThreadMessageWithoutContextClear(
         initiator: telemetryInitiator,
       });
     }
-    return;
+    return queuedRequest.request.sequence;
   }
 
   await ensureHostSessionReadyForWork(deps, {
@@ -827,6 +837,7 @@ async function sendThreadMessageWithoutContextClear(
     target,
     thread,
   });
+  trackInFlightTurnRequest(thread.id);
   deps.hub.notifyThread(
     thread.id,
     queuedRequest.request.notificationChanges,
@@ -842,6 +853,7 @@ async function sendThreadMessageWithoutContextClear(
         "Live turn submit command failed",
       );
     },
+    onSettled: () => settleInFlightTurnRequest(deps, thread.id),
   });
   if (shouldCaptureUserMessageSent) {
     captureUserMessageSentTelemetry(deps, {
@@ -851,4 +863,5 @@ async function sendThreadMessageWithoutContextClear(
       initiator: telemetryInitiator,
     });
   }
+  return queuedRequest.request.sequence;
 }

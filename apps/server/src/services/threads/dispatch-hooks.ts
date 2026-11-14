@@ -66,14 +66,6 @@ export type MessageDispatchHookPassOutcome =
   | { kind: "proceed" }
   | {
       kind: "wait";
-      /**
-       * The pass queues ONE row, owned by the FIRST plugin that voted to wait.
-       * Several rows would multiply the user's Send-now/Cancel affordances for
-       * one decision and make "send this message" ambiguous, while one row
-       * keeps a single card whose reason line names every waiter. The losers'
-       * reasons are appended to that reason; each of them votes again on the
-       * next attempt, so nothing is lost by not owning the row.
-       */
       waiter: MessageDispatchWaitDecision;
       additionalWaiters: readonly MessageDispatchWaitDecision[];
     };
@@ -464,20 +456,25 @@ export async function runMessageDispatchHookPass(
       }
     }
 
-    const waiter = waits[0];
+    const queuedOwner = request.queuedMessages[0]?.waitingOn;
+    const ownerId =
+      queuedOwner?.kind === "plugin"
+        ? queuedOwner.pluginId
+        : request.pluginSubmission?.pluginId;
+    const waiter =
+      waits.find((entry) => entry.pluginId === ownerId) ?? waits[0];
     if (waiter === undefined) {
       await request.continueAfterHooks?.();
       return { kind: "proceed" };
     }
-    return { kind: "wait", waiter, additionalWaiters: waits.slice(1) };
+    return {
+      kind: "wait",
+      waiter,
+      additionalWaiters: waits.filter((entry) => entry !== waiter),
+    };
   });
 }
 
-/**
- * The wait reason for a pass, naming every plugin that voted to wait. The
- * first waiter owns the row, so its reason leads; the rest are appended so the
- * user sees the whole picture on one card rather than one card per plugin.
- */
 export function dispatchWaitReasonForPass(
   outcome: Extract<MessageDispatchHookPassOutcome, { kind: "wait" }>,
 ): string {

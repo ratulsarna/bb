@@ -879,7 +879,7 @@ describe("connect settings section", () => {
       }),
     );
     await waitFor(() =>
-      expect(onSetupFailed).toHaveBeenCalledExactlyOnceWith("sign_in"),
+      expect(onSetupFailed).toHaveBeenCalledExactlyOnceWith("sign_in", "other"),
     );
     fireEvent.click(
       unpaired.getByRole("button", { name: "Have a pairing code?" }),
@@ -888,7 +888,7 @@ describe("connect settings section", () => {
       target: { value: "k7qp-2m4x" },
     });
     await waitFor(() =>
-      expect(onSetupFailed).toHaveBeenLastCalledWith("pairing"),
+      expect(onSetupFailed).toHaveBeenLastCalledWith("pairing", "expired_code"),
     );
     cleanup();
 
@@ -1263,7 +1263,10 @@ describe("connect setup guide section", () => {
     });
 
     await waitFor(() =>
-      expect(onSetupFailed).toHaveBeenCalledExactlyOnceWith("pairing"),
+      expect(onSetupFailed).toHaveBeenCalledExactlyOnceWith(
+        "pairing",
+        "expired_code",
+      ),
     );
     expect(onSetupStarted).toHaveBeenCalledTimes(2);
     await slot.findByText(/That code has expired\./u);
@@ -1364,6 +1367,10 @@ describe("connect setup guide section", () => {
 
   it("reports a sign-in that could not start or was denied as a sign-in failure", async () => {
     const onSetupFailed = vi.fn();
+    let resolveStatus: (value: ConnectStatus) => void = () => {};
+    const initialStatus = new Promise<ConnectStatus>((resolve) => {
+      resolveStatus = resolve;
+    });
     let startFails = true;
     const account = fakeAccountSdk({
       "login.start": () => {
@@ -1381,20 +1388,23 @@ describe("connect setup guide section", () => {
       {
         openUrl: () => true,
         sdk: account.sdk,
-        rpc: { status: () => status() },
+        rpc: { status: () => initialStatus },
       },
     );
 
-    fireEvent.click(await slot.findByRole("button", { name: "Set up" }));
-    await waitFor(() =>
-      expect(onSetupFailed).toHaveBeenCalledExactlyOnceWith("sign_in"),
+    await act(async () => resolveStatus(status()));
+    vi.useFakeTimers();
+    await act(async () =>
+      fireEvent.click(slot.getByRole("button", { name: "Set up" })),
     );
+    expect(onSetupFailed).toHaveBeenCalledExactlyOnceWith("sign_in", "other");
     startFails = false;
-    fireEvent.click(await slot.findByRole("button", { name: "Set up" }));
-    await waitFor(() => expect(onSetupFailed).toHaveBeenCalledTimes(2), {
-      timeout: 4_000,
-    });
-    expect(onSetupFailed).toHaveBeenLastCalledWith("sign_in");
+    await act(async () =>
+      fireEvent.click(slot.getByRole("button", { name: "Set up" })),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    expect(onSetupFailed).toHaveBeenCalledTimes(2);
+    expect(onSetupFailed).toHaveBeenLastCalledWith("sign_in", "denied");
   });
 
   it("turns remote access back on when this bb is already signed in", async () => {

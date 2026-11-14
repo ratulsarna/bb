@@ -22,6 +22,7 @@ describe("performance diagnostics", () => {
     const dataDir = await mkdtemp(join(tmpdir(), "bb-perf-test-"));
     const warnings: unknown[] = [];
     const monitor = await startPerformanceDiagnostics({
+      codeOwners: () => [],
       dataDir,
       logger: {
         info: () => {},
@@ -63,63 +64,109 @@ describe("performance diagnostics", () => {
     }
   });
 
-  it("logs the sampled blocker without attributing an adjacent short callback", async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), "bb-stall-attribution-"));
-    const records: object[] = [];
-    const warnings: object[] = [];
-    const monitor = await startPerformanceDiagnostics({
-      dataDir,
-      logger: {
-        info: (fields, message) => {
-          if (message === "Event loop stall attribution") records.push(fields);
+  it.each([
+    { offsetMs: 0, clockJumpMs: 0 },
+    { offsetMs: 172_800_000, clockJumpMs: 0 },
+    { offsetMs: -172_800_000, clockJumpMs: 0 },
+    { offsetMs: 172_800_000, clockJumpMs: 1_000 },
+  ])(
+    "logs the sampled blocker without attributing an adjacent short callback with clock $offsetMs ms and jump $clockJumpMs ms",
+    async ({ offsetMs, clockJumpMs }) => {
+      const dataDir = await mkdtemp(join(tmpdir(), "bb-stall-attribution-"));
+      const records: object[] = [];
+      const warnings: object[] = [];
+      const realNow = process.hrtime.bigint;
+      const clock = vi
+        .spyOn(process.hrtime, "bigint")
+        .mockImplementation(() => realNow() + BigInt(offsetMs) * 1_000_000n);
+      const monitor = await startPerformanceDiagnostics({
+        codeOwners: () => [
+          {
+            location: "performance-diagnostics.test.ts",
+            owner: "plugin:probe",
+          },
+        ],
+        dataDir,
+        logger: {
+          info: (fields, message) => {
+            if (message === "Event loop stall attribution")
+              records.push(fields);
+          },
+          warn: (fields) => {
+            warnings.push(fields);
+          },
         },
-        warn: (fields) => {
-          warnings.push(fields);
-        },
-      },
-    });
-    function unwrappedPluginBlocker() {
-      const until = performance.now() + 200;
-      while (performance.now() < until) Math.sqrt(performance.now());
-    }
-    function shortHeartbeat() {
-      return 1;
-    }
-    try {
-      await delay(40);
-      unwrappedPluginBlocker();
-      shortHeartbeat();
-      await delay(40);
-      await monitor.stop();
-      expect(records).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            stallAttribution: "sampled",
-            stacks: expect.arrayContaining([
+      });
+      function unwrappedPluginBlocker() {
+        const until = performance.now() + 200;
+        while (performance.now() < until) Math.sqrt(performance.now());
+      }
+      function shortHeartbeat() {
+        return 1;
+      }
+      try {
+        await delay(40);
+        unwrappedPluginBlocker();
+        shortHeartbeat();
+        await delay(40);
+        clock.mockImplementation(
+          () => realNow() + BigInt(offsetMs + clockJumpMs) * 1_000_000n,
+        );
+        await monitor.stop();
+        if (clockJumpMs === 0)
+          expect(records).toEqual(
+            expect.arrayContaining([
               expect.objectContaining({
-                frames: expect.arrayContaining([
-                  expect.objectContaining({
-                    functionName: "unwrappedPluginBlocker",
-                  }),
+                stallAttribution: "sampled",
+                owners: expect.arrayContaining([
+                  { owner: "plugin:probe", sampledMs: expect.any(Number) },
                 ]),
-                sampledMs: expect.any(Number),
               }),
             ]),
-          }),
-        ]),
-      );
-      const files = await readdir(join(dataDir, "logs", "performance"));
-      expect(files).toHaveLength(1);
-      expect(files[0]).toMatch(/\.cpuprofile$/);
-      expect(warnings).toEqual([]);
-      expect(JSON.stringify(records)).not.toContain(
-        '"functionName":"shortHeartbeat"',
-      );
-    } finally {
-      await monitor.stop();
-      await rm(dataDir, { recursive: true, force: true });
-    }
-  });
+          );
+        else {
+          expect(records.length).toBeGreaterThan(0);
+          for (const record of records)
+            expect(record).toMatchObject({
+              stallAttribution: "unattributed",
+              sampledMs: 0,
+              owners: [],
+              stacks: [],
+            });
+        }
+        if (offsetMs === 0)
+          expect(records).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                stacks: expect.arrayContaining([
+                  expect.objectContaining({
+                    frames: expect.arrayContaining([
+                      expect.objectContaining({
+                        functionName: "unwrappedPluginBlocker",
+                      }),
+                    ]),
+                  }),
+                ]),
+              }),
+            ]),
+          );
+        const files = await readdir(join(dataDir, "logs", "performance"));
+        expect(files).toHaveLength(1);
+        expect(files[0]).toMatch(/\.cpuprofile$/);
+        expect(warnings).toEqual([]);
+        expect(JSON.stringify(records)).not.toContain(
+          '"functionName":"shortHeartbeat"',
+        );
+      } finally {
+        try {
+          await monitor.stop();
+          await rm(dataDir, { recursive: true, force: true });
+        } finally {
+          clock.mockRestore();
+        }
+      }
+    },
+  );
 
   it("rotates bounded main-thread windows and ignores unrelated console captures", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "bb-perf-rotation-"));
@@ -127,6 +174,7 @@ describe("performance diagnostics", () => {
     const warnings: unknown[] = [];
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const monitor = await startPerformanceDiagnostics({
+      codeOwners: () => [],
       dataDir,
       logger: {
         info: (fields, message) => {
@@ -200,6 +248,7 @@ describe("performance diagnostics", () => {
     await writeFile(join(directory, "profile.pending"), "interrupted write");
     const warnings: unknown[] = [];
     const options = {
+      codeOwners: () => [],
       dataDir,
       logger: {
         info: () => {},
@@ -244,6 +293,7 @@ describe("performance diagnostics", () => {
     const dataDir = await mkdtemp(join(tmpdir(), "bb-perf-save-failure-"));
     const warnings: unknown[] = [];
     const monitor = await startPerformanceDiagnostics({
+      codeOwners: () => [],
       dataDir,
       logger: {
         info: () => {},
@@ -271,6 +321,7 @@ describe("performance diagnostics", () => {
     try {
       await writeFile(join(dataDir, "logs"), "not a directory");
       const monitor = await startPerformanceDiagnostics({
+        codeOwners: () => [],
         dataDir,
         logger: {
           info: () => {},

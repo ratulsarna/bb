@@ -56,6 +56,7 @@ import {
 } from "../plugin-catalog/marketplace-publishers.js";
 import { deleteSecretFile, readOrCreateSecretFile } from "@bb/secret-storage";
 import {
+  CURATED_PLUGIN_MARKETPLACE_NAME,
   ROOT_PLUGIN_SOURCE_SELECTION,
   type InstalledPlugin,
   type PluginCapabilitySummary,
@@ -79,8 +80,10 @@ import {
   getThread,
   getLatestThreadSequence,
   listDuePluginSchedules,
+  pluginScheduleKey,
   listInstalledPlugins,
   listPendingGitPluginArtifacts,
+  getPluginMarketplace,
   listPluginMarketplaces,
   listPluginSchedules,
   listThreadPluginMetadataRows,
@@ -101,6 +104,7 @@ import {
   isBundledMarketplaceEntry,
   marketplaceEntryCollections,
   marketplaceRowIconBase,
+  catalogRangeForInstalledSource,
   parseStoredMarketplaceManifest,
   type MarketplaceManifest,
 } from "../plugin-catalog/marketplace-manifest.js";
@@ -122,6 +126,7 @@ import {
   parsePluginSource,
   recoverInterruptedGitPluginPromotion,
 } from "./install-sources.js";
+import type { RangeUpgradeBasis } from "./update-resolver.js";
 import {
   prunePluginCache,
   removeUnusedPluginArtifacts,
@@ -182,6 +187,7 @@ import {
   createPluginUpdates,
   parsePersistedUpdateEntry,
   pluginVersionLabelForRow,
+  type PluginApplyUpdateOptions,
 } from "./plugin-updates.js";
 
 import type {
@@ -202,6 +208,7 @@ import type {
 } from "./plugin-service-internal.js";
 import type { PluginMachineProviderBridge } from "./plugin-machine-provider-registry.js";
 import { fillPluginPresentation } from "./plugin-presentation.js";
+import { defineItemSweep, type ItemSweep } from "../system/item-sweep.js";
 export type {
   PluginAgentToolContribution,
   PluginMentionResolveResult,
@@ -269,6 +276,7 @@ export interface PluginService {
   start(options?: PluginStartOptions): Promise<void>;
   stop(): Promise<void>;
   handleUncaughtException(error: unknown): boolean;
+  listCodeOwners(): { location: string; owner: string }[];
   list(): InstalledPlugin[];
   getDisplayName(id: string): string;
   providerCatalog(): Array<{
@@ -311,7 +319,10 @@ export interface PluginService {
   stopPeriodicUpdateChecks(): Promise<void>;
   listUpdateResults(): PluginUpdateCheckEntry[];
   getSource(id: string): Promise<PluginSourceDetail | undefined>;
-  applyUpdate(id: string): Promise<PluginApplyUpdateOutcome>;
+  applyUpdate(
+    id: string,
+    options?: PluginApplyUpdateOptions,
+  ): Promise<PluginApplyUpdateOutcome>;
   remove(id: string): Promise<boolean>;
   pruneCache(args: { dryRun: boolean }): Promise<PluginCachePruneResponse>;
   setEnabled(
@@ -484,7 +495,7 @@ export interface PluginService {
     keep(plugin: InstalledPluginRow): boolean;
   }): Promise<string[]>;
   resumeSuspendedPlugins(): Promise<string[]>;
-  sweepDueSchedules(now: number): Promise<void>;
+  dueScheduleSweep(now: number): ItemSweep;
 }
 
 const DEFAULT_MENTION_SEARCH_TIMEOUT_MS = 2_000;
@@ -692,6 +703,7 @@ export function createPluginService(deps: PluginServiceDeps): PluginService {
     isBuiltinPluginId,
     isSafeModeExemptRow,
     isSuppressedBySafeMode,
+    listPluginCodeOwners,
     listPluginHooks,
     listPluginEnvironmentCompositions,
     listPluginEnvironmentProviders,
@@ -786,6 +798,7 @@ export function createPluginService(deps: PluginServiceDeps): PluginService {
     registrationMatchesForActivation,
     emptyPluginUpdateState,
     sourceFingerprint,
+    installedUpdateVersion,
     syncCliSkill,
     notifyPluginsChanged,
   });
@@ -814,6 +827,7 @@ export function createPluginService(deps: PluginServiceDeps): PluginService {
     notifyPluginsChanged,
     installedUpdateVersion,
     npmIntentForRow,
+    rangeUpgradeBasisForRow,
     managedArtifacts: managedPluginArtifacts,
     runArtifactGc,
   });
@@ -977,9 +991,11 @@ export function createPluginService(deps: PluginServiceDeps): PluginService {
         ? {
             version: row.lastFailureVersion,
             label:
+              row.lastFailureLabel ??
               [persisted?.candidate, persisted?.blocked].find(
                 (version) => version?.version === row.lastFailureVersion,
-              )?.label ?? pluginVersionLabelForRow(row, row.lastFailureVersion),
+              )?.label ??
+              pluginVersionLabelForRow(row, row.lastFailureVersion),
             at: row.lastFailureAt,
             detail: row.lastFailureDetail,
           }
@@ -1002,6 +1018,9 @@ export function createPluginService(deps: PluginServiceDeps): PluginService {
             blockedLabel: persisted.blocked.label,
             blockedReasons: persisted.blocked.reasons,
           }),
+      ...(persisted?.rangeUpgrade === undefined
+        ? {}
+        : { rangeUpgrade: persisted.rangeUpgrade }),
       ...(row.lastUpdateCheckAt === null
         ? {}
         : { lastCheckAt: row.lastUpdateCheckAt }),
@@ -1164,6 +1183,25 @@ export function createPluginService(deps: PluginServiceDeps): PluginService {
     | "publishedAt"
     | "updatedAt"
   >;
+
+  function rangeUpgradeBasisForRow(row: InstalledPluginRow): RangeUpgradeBasis {
+    if (row.provenance !== "catalog" || row.catalogEntryId === null) {
+      return { kind: "release" };
+    }
+    const marketplace = getPluginMarketplace(
+      deps.db,
+      row.catalogMarketplaceName ?? CURATED_PLUGIN_MARKETPLACE_NAME,
+    );
+    if (marketplace === undefined) return { kind: "release" };
+    const manifest = cachedMarketplaceManifest(marketplace);
+    if (manifest === null) return { kind: "none" };
+    const entry = manifest.plugins.find(
+      (plugin) => plugin.id === row.catalogEntryId,
+    );
+    if (entry === undefined) return { kind: "none" };
+    const range = catalogRangeForInstalledSource(entry, row);
+    return range === null ? { kind: "none" } : { kind: "catalog", range };
+  }
 
   function cachedMarketplaceManifest(
     marketplace: PluginMarketplaceRow,
@@ -1658,6 +1696,7 @@ export function createPluginService(deps: PluginServiceDeps): PluginService {
     },
 
     handleUncaughtException,
+    listCodeOwners: listPluginCodeOwners,
 
     list,
     getDisplayName(id) {
@@ -2782,48 +2821,48 @@ export function createPluginService(deps: PluginServiceDeps): PluginService {
       });
     },
 
-    async sweepDueSchedules(now) {
-      if (schedulesPaused || loaded.size === 0) return;
-      const due = listDuePluginSchedules(deps.db, {
-        now,
-        limit: SCHEDULE_SWEEP_BATCH_SIZE,
-      });
-      for (const row of due) {
-        const owner = loaded.get(row.pluginId);
-        const schedule = owner?.handle.schedules.find(
-          (record) => record.name === row.name,
-        );
-        if (owner === undefined || schedule === undefined) continue;
-        let newNextRunAt: number;
-        try {
-          newNextRunAt = nextCronRunAt(schedule.cron, now);
-        } catch (error) {
-          logger.warn(
-            `[plugin:${row.pluginId}] schedule ${row.name} has an invalid cron: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+    dueScheduleSweep(now) {
+      return defineItemSweep({
+        name: "plugin-schedule",
+        concurrency: 1,
+        list: ({ excludedKeys }) =>
+          schedulesPaused
+            ? []
+            : listDuePluginSchedules(deps.db, {
+                excludedKeys,
+                limit: SCHEDULE_SWEEP_BATCH_SIZE,
+                now,
+                pluginIds: [...loaded.keys()],
+              }),
+        key: (row) => pluginScheduleKey(row),
+        process: async (row) => {
+          const owner = loaded.get(row.pluginId);
+          const schedule = owner?.handle.schedules.find(
+            (record) => record.name === row.name,
           );
-          continue;
-        }
-        const claimed = claimPluginScheduledRun(deps.db, {
-          pluginId: row.pluginId,
-          name: row.name,
-          expectedNextRunAt: row.nextRunAt,
-          newNextRunAt,
-          now,
-        });
-        if (!claimed) continue;
-        const outcome = await invokeWrapped(owner, `schedule ${row.name}`, () =>
-          schedule.fn(),
-        );
-        recordPluginScheduleResult(deps.db, {
-          pluginId: row.pluginId,
-          name: row.name,
-          status: outcome.ok ? "ok" : "error",
-          error: outcome.ok ? null : outcome.error,
-          now: Date.now(),
-        });
-      }
+          if (owner === undefined || schedule === undefined) return;
+          const claimed = claimPluginScheduledRun(deps.db, {
+            pluginId: row.pluginId,
+            name: row.name,
+            expectedNextRunAt: row.nextRunAt,
+            newNextRunAt: nextCronRunAt(schedule.cron, now),
+            now,
+          });
+          if (!claimed) return;
+          const outcome = await invokeWrapped(
+            owner,
+            `schedule ${row.name}`,
+            () => schedule.fn(),
+          );
+          recordPluginScheduleResult(deps.db, {
+            pluginId: row.pluginId,
+            name: row.name,
+            status: outcome.ok ? "ok" : "error",
+            error: outcome.ok ? null : outcome.error,
+            now: Date.now(),
+          });
+        },
+      });
     },
   };
 }

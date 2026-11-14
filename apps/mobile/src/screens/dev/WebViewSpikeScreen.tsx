@@ -54,7 +54,7 @@ function appendSessionLine(event: SpikeEvent): void {
     const handle = file.open();
     try {
       handle.offset = file.size;
-      handle.writeBytes(new TextEncoder().encode(`${line}\n`));
+      handle.writeBytesSync(new TextEncoder().encode(`${line}\n`));
     } finally {
       handle.close();
     }
@@ -138,6 +138,7 @@ export function WebViewSpikeScreen() {
         const credential = await redeemMachineCredential({
           apexUrl: APEX_URL,
           code: machineCode.trim(),
+          kind: "mobile",
         });
         record("native", {
           kind: "enroll",

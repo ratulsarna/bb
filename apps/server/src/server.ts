@@ -92,7 +92,6 @@ import {
   resolveRequestAppSurface,
 } from "./request-context.js";
 import { runEventLoopWork } from "./services/system/event-loop-work.js";
-import { setTurnTelemetryDeps } from "./services/system/turn-telemetry.js";
 import { runWithTelemetryRequest } from "./services/system/telemetry.js";
 import {
   onClientSocketClose,
@@ -797,6 +796,7 @@ export function createApp(
     db: deps.db,
     hub: deps.hub,
     logger: deps.logger,
+    walCheckpointer: deps.walCheckpointer,
     telemetry: deps.telemetry,
     pendingInteractions: deps.pendingInteractions,
     dataDir: deps.config.dataDir,
@@ -845,7 +845,6 @@ export function createApp(
       threadId,
     });
   });
-  setTurnTelemetryDeps(deps);
   setPluginThreadEventEmitter(pluginService.events);
   setPathPluginPreserver(deps.db, (directory) =>
     pluginService.preservePathPluginsInside(directory),
@@ -870,7 +869,7 @@ export function createApp(
   setEnvironmentProviderRecheckHandler((pluginId) => {
     invalidateEnvironmentProviderMachineAvailability();
     deps.hub.notifySystem(["config-changed"]);
-    void recheckEnvironmentProviderCreations(deps, pluginId);
+    recheckEnvironmentProviderCreations(deps, pluginId);
   });
   // Bridge runtime-config assembly to plugin skills + context (§4.4).
   setPluginAgentContributions(pluginService);
@@ -935,7 +934,7 @@ export function createApp(
   registerDesktopBrowserRoutes(publicApi, deps);
   registerTerminalRoutes(publicApi, deps);
   registerEnvironmentRoutes(publicApi, deps, pluginService);
-  registerThreadRoutes(publicApi, deps);
+  registerThreadRoutes(publicApi, deps, pluginService);
   registerQueueRoutes(publicApi, deps);
   registerSystemRoutes(publicApi, deps, pluginService);
   registerUiPreferenceRoutes(publicApi, deps);

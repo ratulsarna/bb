@@ -67,7 +67,9 @@ const SYSTEM_VERSION_QUERY_KEY = "systemVersion";
 const SYSTEM_APP_UPDATE_QUERY_KEY = "systemAppUpdate";
 const SERVER_MOVE_STATUS_QUERY_KEY = "serverMoveStatus";
 const HOST_PROVIDER_CLI_STATUS_QUERY_KEY = "hostProviderCliStatus";
+const HOST_PROVIDER_CLI_INSTALL_JOBS_QUERY_KEY = "hostProviderCliInstallJobs";
 const SYSTEM_PROVIDER_STATES_QUERY_KEY = "systemProviderStates";
+const HOST_PROVIDER_STATE_QUERY_KEY = "hostProviderState";
 const HOST_PATH_EXISTENCE_QUERY_KEY = "hostPathExistence";
 const PROJECT_SKILLS_QUERY_KEY = "projectSkills";
 export const SKILL_CONTENT_QUERY_KEY = "skillContent";
@@ -427,6 +429,18 @@ type HostProviderCliStatusQueryKey = readonly [
 ];
 type AllHostProviderCliStatusQueryKeyPrefix = readonly [
   typeof HOST_PROVIDER_CLI_STATUS_QUERY_KEY,
+];
+type HostProviderCliInstallJobsQueryKey = readonly [
+  typeof HOST_PROVIDER_CLI_INSTALL_JOBS_QUERY_KEY,
+  string,
+];
+type AllHostProviderCliInstallJobsQueryKeyPrefix = readonly [
+  typeof HOST_PROVIDER_CLI_INSTALL_JOBS_QUERY_KEY,
+];
+type HostProviderStateQueryKey = readonly [
+  typeof HOST_PROVIDER_STATE_QUERY_KEY,
+  string,
+  string,
 ];
 type SystemProviderStatesQueryKey = readonly [
   typeof SYSTEM_PROVIDER_STATES_QUERY_KEY,
@@ -1028,6 +1042,23 @@ export function hostProviderCliStatusQueryKey(
 
 export function allHostProviderCliStatusQueryKeyPrefix(): AllHostProviderCliStatusQueryKeyPrefix {
   return [HOST_PROVIDER_CLI_STATUS_QUERY_KEY];
+}
+
+export function hostProviderCliInstallJobsQueryKey(
+  hostId: string,
+): HostProviderCliInstallJobsQueryKey {
+  return [HOST_PROVIDER_CLI_INSTALL_JOBS_QUERY_KEY, hostId];
+}
+
+export function allHostProviderCliInstallJobsQueryKeyPrefix(): AllHostProviderCliInstallJobsQueryKeyPrefix {
+  return [HOST_PROVIDER_CLI_INSTALL_JOBS_QUERY_KEY];
+}
+
+export function hostProviderStateQueryKey(args: {
+  hostId: string;
+  providerId: string;
+}): HostProviderStateQueryKey {
+  return [HOST_PROVIDER_STATE_QUERY_KEY, args.hostId, args.providerId];
 }
 
 export function systemProviderStatesQueryKey(

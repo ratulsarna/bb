@@ -85,6 +85,7 @@ import {
   scheduleThreadProvisioningAdvance,
 } from "./thread-provisioning.js";
 import {
+  FORK_HISTORY_COPY_MARK,
   threadForkDescriptorSchema,
   threadProvisionEnvironmentIntentSchema,
 } from "./thread-startup-store.js";
@@ -117,6 +118,7 @@ import { markTurnTraceSpan } from "../system/turn-trace.js";
 export const pendingThreadStartContextSchema = z.object({
   environmentIntent: threadProvisionEnvironmentIntentSchema,
   fork: threadForkDescriptorSchema.nullable(),
+  historyCopy: z.literal(FORK_HISTORY_COPY_MARK).optional(),
   /** Provider-facing input when it differs from the persisted start seed. */
   providerInput: z.array(promptInputSchema).optional(),
   startedOnBehalfOf: startedOnBehalfOfSchema.nullable(),
@@ -285,7 +287,7 @@ export interface DispatchAttemptArgs {
 }
 
 export type DispatchAttemptOutcome =
-  | { kind: "dispatched" }
+  | { kind: "dispatched"; messageSequence: number | null }
   | { kind: "queued"; entry: ThreadQueuedMessage };
 
 /**
@@ -373,13 +375,13 @@ async function runOperationDispatch(
     source.prepare === undefined
       ? { thread: args.thread, payload: args.payload }
       : await source.prepare();
-  await sendThreadMessage(deps, {
+  const messageSequence = await sendThreadMessage(deps, {
     ...prepared,
     environment: source.environment,
     originPluginId: args.originPluginId,
     trigger: args.trigger,
   });
-  return { kind: "dispatched" };
+  return { kind: "dispatched", messageSequence };
 }
 
 interface DispatchAttemptRun {
@@ -418,6 +420,16 @@ async function runDispatchAttemptWithAdmission(
   // recover from, rather than the 409 that used to make a stop a dead end for
   // everything the user lined up behind it.
   ensureThreadIsWritable(thread, true);
+  if (
+    thread.status === "pending" &&
+    readPendingThreadStartContext(deps, thread.id)?.historyCopy !== undefined
+  ) {
+    throw new ApiError(
+      409,
+      "fork_history_copying",
+      "This fork is still copying its history; send the message again once it finishes",
+    );
+  }
   assertThreadHostAcceptsWork(deps.db, thread);
   if (
     payload.mode === "queue-if-active" &&
@@ -522,7 +534,7 @@ async function runDispatchAttemptWithAdmission(
       // The row vanished under a re-queue (the user deleted it). Nothing is
       // waiting and nothing dispatched; report it as dispatched-away so the
       // drain stops rather than looping on a row that no longer exists.
-      return { kind: "dispatched" };
+      return { kind: "dispatched", messageSequence: null };
     }
     return { kind: "queued", entry };
   };
@@ -766,13 +778,14 @@ async function runDispatchAttemptWithAdmission(
       return reattemptDispatchForThreadChange(deps, args, current, run, waitOn);
     }
     await launchAdmittedThread(deps, admission);
-    return { kind: "dispatched" };
+    return { kind: "dispatched", messageSequence: admission.messageSequence };
   }
 
   markTurnTraceSpan("dispatch.checkpoint.done");
   const environment = await requireThreadCommandEnvironment(deps, { thread });
+  let messageSequence: number | null;
   try {
-    await sendThreadMessage(deps, {
+    messageSequence = await sendThreadMessage(deps, {
       environment,
       originPluginId: args.originPluginId,
       payload: resolvedPayload,
@@ -808,7 +821,7 @@ async function runDispatchAttemptWithAdmission(
   if (claimed !== null) {
     settleQueueRowDispatched({ row: claimed[0]! });
   }
-  return { kind: "dispatched" };
+  return { kind: "dispatched", messageSequence };
 }
 
 function runDispatchAttemptHooks(
@@ -932,6 +945,7 @@ interface AdmitPendingThreadArgs {
 
 interface PendingThreadAdmission {
   claimedRow: ClaimedQueuedThreadMessageRow | null;
+  messageSequence: number;
   startingThread: Thread;
 }
 
@@ -980,9 +994,9 @@ async function admitPendingThread(
   }
   const execution = args.execution;
   const claimedRow = args.claimed?.[0] ?? null;
-  let startingThread: Thread;
+  let admitted: { messageSequence: number; startingThread: Thread };
   try {
-    startingThread = deps.db.transaction(
+    admitted = deps.db.transaction(
       (tx) => {
         // The row is consumed and the thread flipped in ONE transaction: a
         // flip that loses to a concurrent attempt rolls the consumption back,
@@ -1004,7 +1018,7 @@ async function admitPendingThread(
         }
         const starting = getThread(tx, args.thread.id);
         if (starting === null) throw new PendingThreadAdmissionLost();
-        requestThreadProvision(deps, {
+        const { messageSequence } = requestThreadProvision(deps, {
           author: args.author,
           thread: starting,
           environmentIntent: startContext.environmentIntent,
@@ -1019,7 +1033,7 @@ async function admitPendingThread(
           startedOnBehalfOf: startContext.startedOnBehalfOf,
           titleProvided: startContext.titleProvided,
         });
-        return starting;
+        return { messageSequence, startingThread: starting };
       },
       { behavior: "immediate" },
     );
@@ -1035,6 +1049,7 @@ async function admitPendingThread(
     );
     return null;
   }
+  const { messageSequence, startingThread } = admitted;
   deps.hub.notifyThread(
     startingThread.id,
     ["status-changed"],
@@ -1042,6 +1057,7 @@ async function admitPendingThread(
   );
   return {
     claimedRow,
+    messageSequence,
     startingThread,
   };
 }

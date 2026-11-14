@@ -263,6 +263,65 @@ inaccessible WAL files report a null size with a sample timestamp. WAL size
 can include space reused by earlier generations; it does not measure uncheckpointed backlog or identify
 checkpoint progress. Resource sampling is also disabled with the live gate.
 
+### Slow SQLite query plans
+
+With `BB_QUERY_PLAN_AUDIT=1` (the default for `pnpm dev`, `pnpm start:worktree`,
+and `pnpm desktop:worktree`) or the `performanceDiagnostics` experiment on, the
+server runs `EXPLAIN QUERY PLAN` once for each distinct statement and parameter
+shape it executes, after the statement returns, against a read-only connection
+to the same database. It logs a `Slow SQLite query plan` warning, once per
+process for each `rule`, `table`, and `caller`, when the plan:
+
+- walks `events`, `thread_search_segments`, `prompt_history_entries`, or
+  `terminal_sessions` through an index that matches fewer equality terms than
+  another index on that table (`weaker-index`);
+- scans one of those tables in full (`full-scan`); or
+- builds an automatic index (`automatic-index`).
+
+`caller` is the `src/` file and function that ran the query; in the built
+server, the file comes from the module comments esbuild writes into
+`apps/server/dist` bundles, so it needs an unminified bundle. Callers are read
+from POSIX stack paths, so the audit logs nothing on Windows. Findings listed in
+`packages/db/src/query-plan-allowlist.ts` are not logged. The tests apply the
+same rules and fail on findings missing from the allowlist; see
+`packages/db/src/query-plan-guard.ts`. On pull requests, the Linux test shards
+set `BB_QUERY_PLAN_EXECUTED`, so `@bb/db` and `@bb/server` record the query
+functions they run in `.query-plan/executed.jsonl` (a Turbo test output, so
+cached runs restore it). The `Query functions run in tests` job then fails when
+an exported query function in a `packages/db/src/data` file the PR changed never
+ran. The nightly `Query Plan Audit` workflow
+(`.github/workflows/query-plan-audit.yml`, also runnable by hand) checks main
+for allowlist entries no test reports and for exported query functions in
+`packages/db/src/data` that no `@bb/db` or `@bb/server` test runs; reproduce it
+with
+`BB_QUERY_PLAN_REPORT=<file> pnpm exec turbo run test --filter=@bb/db --filter=@bb/server`
+followed by `pnpm --filter @bb/db check:query-plan-report <file>`.
+
+The `agentCpuPriority` experiment (Settings → Experiments) keeps bb responsive
+when agents saturate the CPU:
+
+- While it is on, the host daemon sets nice 10 (the below-normal priority
+  class on Windows) on provider processes and environment lifecycle scripts as
+  they start, and the builds and tests they launch inherit it. The server
+  sends the value in the session handshake and in
+  `provider-session-policy.replace`, but a toggle takes effect only after
+  restarting bb: a running provider bridge worker keeps the priority it started
+  with while it serves new threads, and a lowered process cannot be raised
+  again. Terminals keep normal priority.
+- On macOS, where the scheduler ignores nice between processes, the launcher
+  spawns the server and daemon through `/usr/sbin/taskpolicy -a` (application
+  scheduling, not inherited by their children). The launcher reads the value
+  from `<data dir>/agent-cpu-priority.json` at each spawn, so this half takes
+  effect after restarting bb. The server and the daemon both rewrite that file
+  when the value changes; a missing or unreadable file means off. Check with
+  `ps -axo pid,ppid,pri,ni,command`: the server and daemon show `PRI` 46,
+  their children 31.
+
+A slow-DB record whose `cpuDurationMs` is a small fraction of `durationMs`
+with many `involuntaryContextSwitches` means the server thread was waiting for
+a CPU rather than working; on Linux check that agent processes show `NI` 10 in
+`ps -o pid,ni,command`.
+
 ## Pending Question Drafts
 
 Native provider questions and Ask User Question plugin forms save partial
@@ -402,6 +461,17 @@ A partially created environment retains its claim and is scheduled for the exist
 background lifecycle cleanup. Sends report `workspace_busy` with “Workspace cleanup
 is pending. Try again shortly.” until removal completes. Provider cleanup is never
 awaited by this admission repair, and startup does not scan for abandoned claims.
+
+A thread create that finds the path claimed by another create whose thread is still
+starting or stopping waits for that create to settle instead of failing. A provisioning
+thread that hits the same claim while attaching stays `starting` and resumes its
+provisioning when the claim settles, without holding up the command result that drove
+it. Both wake on changes to the claiming thread or its environment and re-run admission.
+After 15 minutes (the setup hook bound, which matches the checkout provider's own wait
+for a claimed path) they fail with the usual `workspace_busy` "Cannot checkout branch
+while another thread is using this workspace". Explicit reuse requests, sends, thread
+commands and directory changes still fail immediately. A create that adopts a workspace
+whose setup is still running joins that setup instead of running it again.
 
 ## Local Dev QA
 
@@ -874,7 +944,8 @@ daemon. Leave it off for routine operation: profiling and extra logging add
 overhead.
 
 While on, the server logs database operations of at least 25 ms, API requests
-of at least 100 ms, and event-loop stalls of at least 100 ms. Every five
+of at least 100 ms, event-loop stalls of at least 100 ms, and
+[slow SQLite query plans](#slow-sqlite-query-plans). Every five
 seconds `Server performance sample` records process and main-thread CPU, loop
 utilization and delay, GC, and memory; CPU values are interval totals, not
 per-request attribution. Its `maxDelayMs` and `p99DelayMs` are gaps of the
@@ -921,9 +992,8 @@ While both gates are on, every ingested daemon event batch that carries agent
 message, reasoning, or plan text writes one `Stream trace` info line per thread.
 `streamTrace.receivedAt`, `committedAt`, and `notifiedAt` are epoch
 milliseconds; `events`, `textEvents`, and `textChars` size the batch;
-`served` is `push` when a thread view is subscribed to timeline pushes (the
-`timelinePush` experiment) and `refetch` otherwise, so comparing lines of the
-two kinds gives the A/B between delivery paths. The
+`served` is `push` when a thread view is subscribed to timeline pushes and
+`refetch` otherwise. The
 intervals between consecutive lines for a thread are the chunk cadence the
 server sees. The host daemon logs `Posted daemon event batch` at debug level
 (`BB_LOG_LEVEL=debug`) for every POST: `eventBatch.events`, `textChars`,
@@ -947,6 +1017,29 @@ applied chunk.
    `Thread timeline build blocked the event loop` and its stage timings.
    `inFlightWorkAtObservation` can name an unrelated long poll; compare
    `longestSynchronousWork` and its wall/CPU times with the profile instead.
+   Measured synchronous work includes daemon WebSocket messages, timeline
+   builds, sweep steps, every transaction on bb.db (`db:transaction <mode>:`
+   followed by the first write statement, or the first statement when it only
+   reads), single statements that take at least 1 ms (`db:all`, `db:get`,
+   `db:run`, `db:exec` with redacted SQL), and the synchronous part of each API
+   request, plugin RPC or HTTP handler, plugin event handler, plugin load, and
+   plugin background service before its first `await`
+   (`<label> (until first await)`). When a measured child took at least half
+   of its parent's time, `longestSynchronousWork` names the chain, for example
+   `ws:daemon heartbeat > db:transaction deferred: update "host_daemon_sessions" ...`.
+   `longestSynchronousWorkCaller` names the request, plugin invocation, sweep,
+   or plugin load or service that was running the work, including callbacks
+   and timers a plugin scheduled while it loaded. Code a plugin runs after an
+   `await` is not measured here; it is only named by plugin id in the sampled
+   records below. `longestSynchronousWorkCpuMs` is main-thread CPU, and
+   `longestSynchronousWorkVoluntaryContextSwitches` and
+   `longestSynchronousWorkInvoluntaryContextSwitches` are process-wide counts
+   for the same interval: CPU far below wall time with many involuntary
+   switches means the thread was waiting for a core, and with many voluntary
+   switches it was waiting on a lock, disk, or another thread.
+   `Thread timeline build blocked the event loop` carries the same split as
+   `cpuDurationMs`, `voluntaryContextSwitches`, and
+   `involuntaryContextSwitches`.
    `stallAttribution` is `candidate`, with the operation in
    `stallCauseCandidate`, when a measured synchronous operation is long enough
    (within one 50 ms timer interval) to explain the maximum delay, and `unattributed`
@@ -962,7 +1055,10 @@ applied chunk.
    histogram's observation time is not the stall's end time.
    `stacks` ranks the top five sampled leaf stacks in each gap, with up to 12
    caller frames, including GC, plugin functions, native writes, and database
-   callers. Frame coordinates are one-based; cached Node source maps are used
+   callers. `owners` totals the window's sampled time per plugin
+   (`plugin:<id>`), counting a sample when any frame on its stack belongs to
+   that plugin's server code, and each ranked stack carries the same `owner`
+   (or `null`). Frame coordinates are one-based; cached Node source maps are used
    in the profile worker when available, otherwise coordinates refer to the
    generated code. Profile scanning and stack formatting run in that worker;
    the main thread only collects and transfers bounded timing windows.
@@ -1090,8 +1186,7 @@ values receive the original CSS, so a tab retained across a server update
 keeps working with its old host styles. Compressed responses are cached
 separately for the original and stripped variants.
 
-While the `narrowPluginCss` experiment is on, the app also adds
-`css-scope=owned-root-v1`. When a plugin's `app.js` never sets
+The app also adds `css-scope=owned-root-v1`. When a plugin's `app.js` never sets
 `data-bb-plugin-root` without a nearby `data-bb-plugin`, both routes then
 drop the `[data-bb-plugin-root]:not([data-bb-plugin])` alternative from that
 plugin's utility selectors, so its rules cannot match outside its own roots and

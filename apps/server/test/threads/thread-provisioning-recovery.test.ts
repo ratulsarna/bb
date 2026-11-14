@@ -65,6 +65,7 @@ import { handleDaemonSocketClosed } from "../../src/internal/session-owner-side-
 import { onDaemonSocketOpen } from "../../src/ws/daemon-protocol.js";
 import { HOST_DAEMON_PROTOCOL_VERSION } from "@bb/host-daemon-contract";
 import { advanceEnvironmentProvisioning } from "../../src/services/environments/environment-engine.js";
+import { runThreadPurges } from "../helpers/thread-purges.js";
 
 const THREAD_START_EXECUTION = {
   model: "gpt-5",
@@ -632,7 +633,7 @@ it.each(["metadata", "workspace"])(
         environmentId: environment.id,
         status: "starting",
       });
-      const requested = requestThreadProvision(harness.deps, {
+      const { context: requested } = requestThreadProvision(harness.deps, {
         originPluginId: null,
         author: { initiator: "user", senderThreadId: null },
         thread,
@@ -740,13 +741,13 @@ it("rejects an older startup checkpoint after a new attempt has been persisted",
       startedOnBehalfOf: null,
       titleProvided: true,
     };
-    const first = requestThreadProvision(harness.deps, {
+    const { context: first } = requestThreadProvision(harness.deps, {
       originPluginId: null,
       author: { initiator: "user", senderThreadId: null },
       ...args,
       input: textInput("first"),
     });
-    const second = requestThreadProvision(harness.deps, {
+    const { context: second } = requestThreadProvision(harness.deps, {
       originPluginId: null,
       author: { initiator: "user", senderThreadId: null },
       ...args,
@@ -790,18 +791,21 @@ it("retries failed setup on the same environment without reallocating its worksp
       environmentId: environment.id,
       status: "error",
     });
-    expect(
-      await dispatchTurnDuringReprovision({
-        originPluginId: null,
-        deps: harness.deps,
-        thread,
-        environment,
-        execution: THREAD_START_EXECUTION,
-        input: textInput("retry original input"),
-        initiator: "user",
-        senderThreadId: null,
-      }),
-    ).toBe(true);
+    const dispatched = await dispatchTurnDuringReprovision({
+      originPluginId: null,
+      deps: harness.deps,
+      thread,
+      environment,
+      execution: THREAD_START_EXECUTION,
+      input: textInput("retry original input"),
+      initiator: "user",
+      senderThreadId: null,
+    });
+    expect(dispatched).toEqual({
+      messageSequence: listEvents(harness.db, { threadId: thread.id })
+        .filter((event) => event.type === "client/turn/requested")
+        .at(-1)?.sequence,
+    });
     const attach = await waitForQueuedCommand(
       harness,
       ({ command }) => command.type === "environment.attach",
@@ -1217,6 +1221,7 @@ it.each(["startup", "periodic"] as const)(
             pluginSchedules: harness.pluginService,
             plugins: harness.pluginService,
           }));
+      await runThreadPurges(harness.deps);
       expect(getThread(harness.db, thread.id)).toBeNull();
       expect(getThread(harness.db, other.id)?.deletedAt).toBeNull();
     });

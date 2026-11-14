@@ -137,9 +137,16 @@ composer for: it publishes the editor to `useComposer()`, routes bb's and
 other plugins' composer commands, and registers pane focus and thread drops.
 `experimental_useComposerContributions()` returns other plugins' popups, `+`
 and send menu items and inline actions with their host renderers, applying
-the surface's suppression. Host components cover the voice button, recording
-bar and failed recordings, shortcut hints, the image lightbox, mention and
-plugin icons and thread-title text.
+the surface's suppression. The host components are the voice button
+(`experimental_VoiceInputButton`), recording bar
+(`experimental_VoiceRecordingBar`) and failed recordings
+(`experimental_FailedVoiceRecordings`), shortcut hints
+(`experimental_ShortcutHint`), mention and plugin icons
+(`experimental_PromptMentionIcon`, `experimental_PluginIcon`) and thread-title
+text (`experimental_ThreadTitleText`, with the
+`experimental_useThreadTitleDisplayText(title)` hook for plain strings). The
+image lightbox the composer uses for attachments has its own entry
+(`experimental_ImageLightbox`).
 
 Docs: `frontend-renderer-slots.md`.
 
@@ -1060,6 +1067,10 @@ The one-method host RPC contract (`resolveNativeRoots`). Input is
 `{ providerId, cwd: string | null }`. Output is `{ skills, commands }`, each a
 list of host-absolute roots with `origin`, `recursive`, `ancestors`,
 `namePrefix`, and a `shape` that tells the daemon how to read the root.
+The two Zod schemas are exported too
+(`experimental_nativeRootsResolveInputSchema`,
+`experimental_nativeRootsResolveOutputSchema`); the first-party providers'
+resolver tests validate against them.
 
 Docs: `providers.md`.
 
@@ -1164,6 +1175,30 @@ keys. Callers: the built-in thread list, which gates row metadata on
    experiment list; decide whether to export a typed key union instead.
 2. **Plugin-owned experiments.** Decide whether plugins should declare their
    own experiments in Settings → Experiments rather than only read bb's.
+
+## `bb.sdk.threads.experimental_headState`
+
+`GET /threads/:id/head-state` returns the thread's head state:
+`{ activePromptMode, contextWindowUsage, extensionStates, modelFallback,
+pendingTodos, providerCommands, sessionOptions }`. `readThreadHeadState` reads
+each field from its latest stored state events, so the cost does not grow with
+turn or thread length. The latest timeline page embeds the same result instead
+of deriving these fields from its rows. `pendingTodos` and `activePromptMode`
+are null unless the thread is active. Core callers: the timeline build, `bb
+thread show`, `bb thread commands`, `bb thread options`, and `sdk.status`.
+It replaced the timeline's `summaryOnly` query, which built the whole latest
+page and dropped its rows; the server now ignores that parameter and returns
+the full page.
+
+Docs: `backend-sdk.md`, `docs/timeline-pagination.md`.
+
+**Audit before stabilizing.**
+
+1. **Page-derived fields.** Active thinking, active workflows, and active
+   background commands still come from projecting the latest page, so reading
+   them still needs a timeline page. Decide whether they become head state.
+2. **`threads.context`.** It returns `contextWindowUsage` alone through the
+   same read. Decide whether to keep it as a narrow read or retire it.
 
 ## `bb.sdk.threads.experimental_listAncestors`
 
@@ -1340,6 +1375,8 @@ disabled or unloaded.
 
 Core callers: none. The Cloudflare bb connect path still replays requests to
 the main loopback port; the `connect-next` plugin is the only caller.
+`createFakePluginHost` lists every opened handle in
+`inspection.internal_DO_NOT_USE_tunnelIngresses`.
 
 Docs: `backend-foundation.md`; the request rules are in [connect-next.md](connect-next.md) (Server ingress).
 
@@ -1373,6 +1410,10 @@ cannot send the machine credential elsewhere.
 (dropped when its session ends), and
 `internal_DO_NOT_USE_onNextTunnelStatusChange(listener)` calls `listener` on any
 change and returns an unsubscribe function that disposal also runs.
+`createFakePluginHost` exposes the last config as
+`inspection.internal_DO_NOT_USE_nextTunnelConfig`, and
+`internal_DO_NOT_USE_setNextTunnelStatuses(statuses)` replaces the reported
+statuses and calls every listener.
 
 Core callers: none. Product policy (on or off, which domain) belongs to the
 `connect-next` plugin, which calls all three; core's Cloudflare machine tunnel
@@ -1400,9 +1441,10 @@ component receives `InternalDoNotUseSetupGuideSectionProps`:
 `{ onPhone, onSetupStarted, onSetupFailed }`. `onPhone` is true when the guide
 is open on a phone, so the row hides install links and phone pairing. The row
 calls `onSetupStarted()` when the user starts setting it up and
-`onSetupFailed(stage)` (`InternalDoNotUseSetupFailureStage`: `sign_in`,
-`pairing`, or `turn_on`) when an attempt fails, so the guide can record the
-step. Core's `PluginSetupGuideSections` renders a plugin's rows through
+`onSetupFailed(stage, detail?)` (`InternalDoNotUseSetupFailureStage`:
+`sign_in`, `pairing`, or `turn_on`; `InternalDoNotUseSetupFailureDetail`: a
+fixed error code such as `expired` or `invalid_code`, never a message) when an
+attempt fails, so the guide can record the step and why. Core's `PluginSetupGuideSections` renders a plugin's rows through
 the ordinary plugin slot boundary.
 
 Callers: the bundled `connect` plugin only. Core caller: the onboarding
@@ -1423,8 +1465,9 @@ starts setting up: bb connect calls it when getbb.app sign-in starts, a pairing
 code is submitted, or Turn on is pressed, so the current guide records
 `remote_access` `started` at the same moment as the redesigned guide's
 `onSetupStarted`. `internal_DO_NOT_USE_onSetupFailed(stage)` is its failure
-counterpart, called with the same `InternalDoNotUseSetupFailureStage` the
-redesigned guide's `onSetupFailed` receives (`sign_in` when getbb.app sign-in
+counterpart, called with the same `InternalDoNotUseSetupFailureStage` and
+optional `InternalDoNotUseSetupFailureDetail` the redesigned guide's
+`onSetupFailed` receives (`sign_in` when getbb.app sign-in
 can't start or ends denied, expired, or failed; `pairing` when a pairing code
 is rejected; `turn_on` when turning remote access on fails). Core's
 `PluginSettingsSections` passes them through its `onSetupStarted` and
@@ -1721,11 +1764,14 @@ Docs: `frontend-hooks-and-ui.md`.
 4. Decide whether a nav panel should also declare a default terminal scope so
    the native "+ Terminal" button follows the page's worktree.
 
-## Host plugin foundation (`bb.hosts.experimental_client`, `ExperimentalHostClient.experimental_onWorkerExit`, `ExperimentalHostClient.experimental_onSignal`, `ExperimentalHostRpcContext.experimental_retainWorker`, `experimental_defineHostEntry`, `experimental_killProcessesWithCwdUnder`, `experimental_readProcessIdentity`, and `experimental_createHostEntryHarness`)
+## Host plugin foundation (`bb.hosts.experimental_client`, `ExperimentalHostClient.experimental_onWorkerExit`, `ExperimentalHostClient.experimental_onSignal`, `ExperimentalHostRpcContext.experimental_retainWorker`, `ExperimentalHostRpcContext.experimental_paths`, `ExperimentalHostRpcContext.experimental_emitSignal`, `ExperimentalHostRpcContext.experimental_watch`, `experimental_defineHostEntry`, `experimental_killProcessesWithCwdUnder`, `experimental_readProcessIdentity`, and `experimental_createHostEntryHarness`)
 
-**Kept experimental (2026-08-22).** Signals and watches have no consumer
-(decide whether to delete them or keep them experimental separately from
-calls). None of the lifetime/limit numbers has been measured against a plugin
+**Kept experimental (2026-08-22).** At that date, signals and watches had no
+consumer (decide whether to delete them or keep them experimental separately
+from calls). Both now have consumers. The Worktree and Project checkout hosts
+emit `progress` signals. The 2026-11-06 marketplace audit found
+`experimental_emitSignal` in 30 repositories and `experimental_watch` in 15,
+so deleting them is no longer an option. None of the lifetime/limit numbers has been measured against a plugin
 other than keep-awake. The artifact-contract names (`experimental_apiVersion`,
 `experimental_signals`, the injected context members) are read by the daemon
 from installed artifacts, so renaming them needs a dual-name window plus a
@@ -1847,7 +1893,9 @@ thread and navigation-page fixed tabs may both declare one.
 eligible tabs on the current surface and can submit a target.
 `experimental_useFixedTabTarget()` returns the validated current-session
 target with a sequence and `clear()`. Targets are memory-only: they survive
-remounts but not a refresh.
+remounts but not a refresh. In tests, `renderSlot`'s
+`experimental_fixedTabTarget: { panelId?, tabId, target }` option seeds the
+target the hook returns (omit `panelId` for a thread fixed tab).
 
 Docs: `frontend-core-slots.md`, `frontend-components.md`.
 
@@ -1905,6 +1953,68 @@ Docs: `frontend-core-slots.md`.
    plugins with expensive queries, or add visibility to the hook's inputs.
 4. **More summary.** The More button's accessible name lists every hidden
    badge. Check that this stays usable with many badged hidden panels.
+
+## `PluginNavPanelRegistration.experimental_headerTitle`
+
+An optional component receiving `PluginNavPanelProps` (`{ subPath }`).
+`PluginPanelHeaderCenter`
+(`apps/app/src/components/plugin/PluginPanelHeader.tsx`) renders it in the
+page's shared title bar in place of the panel icon, `title` and
+`experimental_usePageTitle` text, in the routed page header (`AppLayout`) and
+in plugin-panel split panes (`SplitThreadArea`). It is wrapped in
+`PluginContext` and a `data-bb-plugin-root` element like `headerContent`, and
+contained by the same error boundary: a throw logs a warning and shows the
+default icon and title. The window title still comes from
+`experimental_usePageTitle` or the panel title. Before the plugin loads, the
+header shows the remembered default title.
+
+**Core callers.** None: core pages render `PageTitleHeader`. The motivating
+caller is the Conductor layout plugin's "new chat in this workspace" page,
+which shows the same `project › workspace` breadcrumb as its thread header
+title. Tests: `plugin-slot-mounts.test.tsx` (render with subPath, crash
+fallback) and `plugin-app-nav-sidebar.test.ts` (registration).
+
+Docs: `frontend-core-slots.md`.
+
+**Audit before stabilizing.**
+
+1. **Shared title component.** Decide whether core should expose its
+   `PageTitleHeader` so plugins can compose rather than replace it.
+2. **Split panes.** In a split pane the pane drag starts from the title area
+   except on links and buttons; confirm that is enough for rich titles.
+
+## `PluginNavPanelRegistration.experimental_hideFromNavigation`
+
+An optional boolean. When true, `createSidebarNavigationRows`
+(`apps/app/src/components/sidebar/sidebarNavigationItems.ts`) leaves the panel
+out, so it has no rail or list entry, no More entry, no place in the user's
+navigation arrangement and no badge; `buildPluginPagePaletteActions` leaves out
+its "Plugin pages" palette entry. The plugin's capability list describes it
+as a page the plugin opens itself. Its route `/plugins/<pluginId>/<path>/*`
+renders as usual, with its title bar, App panel, right panel and splits; a
+plugin opens it with `useBbNavigate().toPluginPanel(path, { subPath })`.
+
+Navigation renders from the last-known chrome cache
+(`apps/app/src/lib/plugin-nav-panel-chrome.ts`) before plugins load, so the
+cache stores `hideFromNavigation` per panel. Its version went from 1 to 2, so a
+profile's first boot after the upgrade starts with no remembered panels rather
+than showing a hidden one.
+
+**Core callers.** None. The motivating caller is the Conductor layout plugin's
+"new chat in this workspace" page, reached from its tab strip. Tests:
+`SidebarNavigationRail.test.tsx` (rail and More, remembered and live),
+`palette-plugin-page-actions.test.ts`, `plugin-nav-panel-chrome.test.ts`
+(cache), `plugin-slot-mounts.test.tsx` (route renders) and
+`plugin-app-nav-sidebar.test.ts` (registration).
+
+Docs: `frontend-core-slots.md`.
+
+**Audit before stabilizing.**
+
+1. **Discoverability.** A hidden page is reachable only from plugin UI and
+   links. Decide whether Settings or the plugin's detail page should list it.
+2. **Settings toggle.** Decide whether users can show a hidden page in
+   navigation, which would make this a default rather than a rule.
 
 ## `app.slots.experimental_sidebarNavigation` (`@get-bb/plugin-sdk/app`)
 
@@ -2163,7 +2273,23 @@ The published kit a bridge author proves a bridge with, with no private
 (`experimental_runBridgeConformance`), the real delta assembler, the
 delta→event collector, the in-process JSON-RPC harness, the calibration
 normalizer, and the recorded-replay harness and readers. It is
-framework-agnostic and exports named members only.
+framework-agnostic and exports named members only:
+
+- conformance: `experimental_runBridgeConformance`,
+  `experimental_formatConformanceReport`,
+  `experimental_checkRecordedCellReplay`;
+- assembly: `experimental_createDeltaAssembler`,
+  `experimental_createBridgeDeltaEventCollector`,
+  `experimental_assembleCapturedThreadEvents`;
+- JSON-RPC harness and calibration: `experimental_createBridgeJsonRpcTestHarness`,
+  `experimental_captureBridgeJsonRpcOutput`,
+  `experimental_normalizeCalibrationEvents`,
+  `experimental_describeCalibrationEvents`;
+- recordings: `experimental_readBridgeRecording`,
+  `experimental_listRecordedCells`, `experimental_assembleRecordedEvents`,
+  `experimental_replayRecording`, `experimental_compareParity`,
+  `experimental_resolveProviderBridgeLaunch`,
+  `experimental_rerecordCurrentBridgeLane`, `experimental_withCurrentBridgeLane`.
 
 Docs: `providers.md`.
 
@@ -2268,8 +2394,10 @@ Docs: `frontend-hooks-and-ui.md`.
    and cached per theme name for the window's lifetime, so a custom palette
    edited on disk keeps its old document until reload. Confirm that matches
    what the built-in surfaces do.
-4. **Consumer count.** One consumer today. Confirm a second engine (CodeMirror,
-   xterm) needs the same payload before the prefix drops.
+4. **Consumer count.** One in-repo consumer (Monaco editor). The 2026-11-06
+   marketplace audit found it in 22 repositories, which feed it to Monaco,
+   Shiki and terminal renderers. Confirm the payload serves the terminal
+   engines before the prefix drops.
 
 ## `app.experimental_copyToClipboard` (`@get-bb/plugin-sdk/app`)
 
@@ -2348,8 +2476,9 @@ Docs: `frontend-hooks-and-ui.md`.
 2. **Scope.** The hook throws outside a plugin slot component. Content scripts
    already receive `context.pluginId`; confirm no other frontend entry point
    needs it.
-3. **Consumer count.** One consumer today. Confirm a second plugin needs it
-   before the prefix drops.
+3. **Consumer count.** Settled. Five in-repo plugins call it (Agent
+   Annotations, GitHub Star, Prompt Library, Provider usage, Thread list), and
+   the 2026-11-06 marketplace audit found it in 37 repositories.
 
 ## `app.experimental_useQuestionFormHost` (`@get-bb/plugin-sdk/app`)
 
@@ -2377,8 +2506,9 @@ Docs: `frontend-hooks-and-ui.md`.
    the `data-question-form` attribute. Decide whether a ref or wrapper
    component should replace the attribute before the prefix drops.
 4. **Consumer count.** Two first-party consumers (Ask User Question, pi's
-   extension dialogs). Confirm a third-party form needs it before the prefix
-   drops.
+   extension dialogs), through the shared question form. The first
+   third-party form is koenvg's pi-subagents provider (2026-11-06 marketplace
+   audit); audit items 1–3 against it.
 
 ## `app.slots.experimental_providerIcon` (`@get-bb/plugin-sdk/app`)
 
@@ -2515,9 +2645,10 @@ Docs: `frontend-renderer-slots.md`, `backend-cli-agents.md` (form rows),
 
 ## `experimental_NewThreadComposer` (`@get-bb/plugin-sdk/app`)
 
-**Kept experimental (2026-08-22).** There are no consumers, and items 1 (a
-newly required create-thread field going missing silently) and 6
-(projectless switching) need a consumer to validate.
+**Kept experimental (2026-08-22).** Items 1 (a newly required create-thread
+field going missing silently) and 6 (projectless switching) were waiting for
+a consumer. The 2026-11-06 marketplace audit found it in 32 repositories, so
+both can be validated against them.
 
 The host-owned new-thread compose surface. It calls `onSubmit` with a
 `NewThreadRequest` carrying every resolved selection (including
@@ -2603,12 +2734,16 @@ Docs: `frontend-core-slots.md`.
 
 ## `app.slots.experimental_newThreadPanelAction` (`@get-bb/plugin-sdk/app`)
 
-**Kept experimental (2026-08-22).** There are no consumers, and item 5 is
-deferred until an external plugin adopts it.
+**Kept experimental (2026-08-22).** Item 5 was deferred until an external
+plugin adopted the slot. That has happened: the 2026-11-06 marketplace audit
+found registrations in 16 repositories, among them taskboard, aura,
+bookmarks, git-deck, jira and file-manager. Item 5 can now be audited against
+them. No in-repo plugin registers it.
 
 Adds a row to the root New thread screen's right-panel Actions list. The row
 can open a closable tab with `{ projectId: string | null, params: JsonValue | null }`.
-It is separate from `threadPanelAction`, which requires a `threadId`.
+It is separate from thread action tabs (`app.slots.experimental_tab` with a
+thread context and `availability: "action"`), which require a `threadId`.
 
 Docs: `frontend-core-slots.md`.
 
@@ -2627,12 +2762,16 @@ Before stabilization, audit:
 4. **Persistence.** Tabs and JSON params persist in the root panel's fixed
    state. Confirm restoring a plugin tab before registrations load, after a
    plugin is removed, and in projectless compose has the right fallback.
-5. **Relationship to `threadPanelAction`.** Confirm separate opt-in remains
-   preferable to a unified discriminated context after external plugins have
-   had time to adopt the root surface. Decided: both contexts open tabs
-   through `experimental_panel` (see Panel controller), where a thread-context
-   action reference resolves against this slot on the New thread screen. Audit
-   only whether the two contexts should merge.
+5. **Relationship to thread action tabs.** Confirm separate opt-in remains
+   preferable to a unified discriminated context. Every external registrant
+   also registers a thread-context tab: 13 repositories through the retired
+   `threadPanelAction` adapter (taskboard, file-manager, project-files,
+   Connected Files and others), and 4 through `experimental_tab` (maxwell,
+   bureaucat, todo, jira; rebryk's repository has one of each). Check whether they
+   pass the same component to both, which would favor merging. Decided: both
+   contexts open tabs through `experimental_panel` (see Panel controller),
+   where a thread-context action reference resolves against this slot on the
+   New thread screen. Audit only whether the two contexts should merge.
 
 ## `app.experimental_sidebarFooter` (`@get-bb/plugin-sdk/app`)
 
@@ -2784,9 +2923,10 @@ shims.
 3. **Unsupported hosts.** The textarea renders without controls when voice is
    unsupported, with no reason shown. Decide whether callers need the
    unsupported reason or a way to hide the controls.
-4. **Consumer count.** One form (the shared question form, used by Ask User
-   Question, pi, and bb's own questions). Confirm a third-party consumer before
-   the prefix drops.
+4. **Consumer count.** One in-repo form (the shared question form, used by Ask
+   User Question, pi, and bb's own questions). The 2026-11-06 marketplace
+   audit found three third-party consumers (pr-xray, shipyard,
+   inline-comments).
 
 ## `experimental_SourceCode` / `experimental_Diff` (`@get-bb/plugin-sdk/app`)
 
@@ -2859,6 +2999,44 @@ Docs: `frontend-components.md`.
 3. Decide whether `renderPreview` should receive the line range a file open
    requested.
 
+## `experimental_ImageLightbox` (`@get-bb/plugin-sdk/app`)
+
+bb's full-screen image and video viewer, shipped with the forkable composer
+(#6122). The caller owns the item list and the open state: it passes one
+`imageSrc`, `imageAlt`, a screen-reader `title` for the dialog, and an
+optional `mediaType` (`"image"` by default). The viewer is open while
+`isOpen` is true, or, without `isOpen`, while `imageSrc` is non-null; open
+with a null `imageSrc`, it shows a loading state. With `hasMultipleImages` and
+both `onPrevious` and `onNext`, it draws previous and next buttons, and
+ArrowLeft/ArrowRight call them unless `previousDisabled` / `nextDisabled` is
+set. `navigationStatus` is drawn as a caption when given. Escape, a backdrop
+click, a click on an unzoomed image and the close button call `onClose`.
+Images zoom and pan (up to 8x). The test harness renders a plain `<img>`
+while the viewer is open.
+
+**Core callers.** The runtime member is core's `ImageLightbox`
+(`apps/app/src/components/ui/image-lightbox.tsx`), the viewer behind the
+timeline image gallery, message attachments, Markdown previews and image file
+tabs. The bundled composer's attachment previews reach it through this export.
+Outside plugins: three repositories in the 2026-11-06 marketplace audit
+(asana, mattermost, and smsunarto's html and t3-composer plugins), some of
+them outside any composer.
+
+Docs: `frontend-renderer-slots.md`.
+
+**Audit before stabilizing.**
+
+1. **Ownership of the list.** Callers with several images implement index
+   wrapping and the status text themselves. Decide whether the component should take the item list
+   and current index instead of single-item props plus navigation callbacks.
+2. **Open state.** `isOpen` and `imageSrc !== null` both control visibility.
+   Decide whether one of them should go.
+3. **Media scope.** Confirm `mediaType` should stay limited to image and video,
+   and whether video needs its own controls in the contract.
+4. **Documentation home.** It is listed with the composer's host components
+   but is used outside composers. Decide whether it belongs in
+   `frontend-components.md`.
+
 ## `app.slots.experimental_sourceCodeRenderer` / `app.slots.experimental_diffRenderer` (`@get-bb/plugin-sdk/app`)
 
 **Kept experimental (2026-08-22).** There are no registrations, and "two slots
@@ -2930,9 +3108,14 @@ Docs: `frontend-renderer-slots.md`, `testing.md`.
 
 ## `experimental_useSidebarThreads` / `experimental_useSidebarThreadActions` (`@get-bb/plugin-sdk/app`)
 
-**Kept experimental (2026-08-22).** There are no consumers. Items 4 (a
-paged/windowed read at 10k threads) and 5 (the draft indicator gap) cannot be
-resolved without one, and both change the contract.
+**Kept experimental (2026-08-22).** The hold was for a consumer, so item 4
+(a paged or windowed read at 10k threads) could be resolved against one. The
+read hook now has many: the 2026-11-06 marketplace audit found it in the
+sources of 79 repositories. 29 of them replace the thread list through
+`experimental_threadList`. The rest read it for boards, dashboards and
+switchers, such as bb-office, agent-graph and agent-tv. Item 4 can now
+be measured against them, and it changes the contract. Item 5 (the draft
+indicator gap) was closed by `useSidebarThreadDraft` (#4025).
 
 The read hook returns the sidebar's live thread view (`PluginSidebarThread`
 DTOs with a host-resolved `indicator`, plus `sections`) from the host's own
@@ -2955,8 +3138,8 @@ Docs: `frontend-registration.md`.
 
 1. **DTO scope.** Confirm every field earns its place and that the copy stays
    worth its maintenance over `ThreadListEntry`. `hasUnsubmittedDraft` is
-   deliberately absent (client-local composer state); confirm plugins do not
-   need it. `status` and `runtimeStatus` freeze the domain enums into the
+   deliberately absent (client-local composer state); rows read it from
+   `useSidebarThreadDraft(threadId)` instead. `status` and `runtimeStatus` freeze the domain enums into the
    contract the way `indicator` does, under the same treat-unknown-as-fallback
    rule. `host` is resolved to `{ id, name }`; confirm resolution belongs here
    rather than in a separate hosts hook, and that falling back to the id for an
@@ -2972,10 +3155,10 @@ Docs: `frontend-registration.md`.
    identity across refetches, but the host does not cap the array and plugin
    lists are expected to window their rows. Decide whether that expectation
    should be enforced by the contract before stabilizing.
-5. **Draft indicators.** `indicator` never reports "draft" or "working-draft",
-   so an idle unread thread holding a draft reads as "unread-success" where
-   the built-in row paints "draft". Decide whether to close that gap (a
-   per-thread draft hook) or keep it documented.
+5. **Draft indicators.** Decided (#4025): `indicator` still never reports
+   "draft" or "working-draft". A row composes it with
+   `useSidebarThreadDraft(threadId)`, and a collapsed group with
+   `useSidebarThreadDraftIds()`, the client-local state bb's own rows read.
 6. **Sections.** Section writes are plain public API calls rather than
    actions. Confirm that split holds once a replaced list ships section
    drag-and-drop, where the built-in list's optimistic cache transactions have
@@ -3001,6 +3184,68 @@ Docs: `frontend-registration.md`.
    loading/errors, combined views, pagination retries, and archived row
    actions. Audit empty machine sections, machine removal, rename updates, and
    loading behavior for `experimental_hosts`.
+
+## `useSidebarThreadDraft` / `useSidebarThreadDraftIds` / `useSidebarThreadRowStatus` / `useSidebarThreadRowStatuses` / `useSidebarThreadShortcut` (`@get-bb/plugin-sdk/app`)
+
+**Shipped without the `experimental_` prefix.** These hooks became public
+`@get-bb/plugin-sdk/app` exports under final names in #4025, against the
+prefix rule. About ten marketplace plugins import them by these names, so
+Michael decided to keep the names. Do not rename them without
+keeping the current names as runtime aliases. The unprefixed names do not
+mean the hooks have been audited.
+
+They expose the per-row facts that are client-local and therefore missing
+from `PluginSidebarThread`:
+
+- `useSidebarThreadDraft(threadId)` returns `{ hasUnsubmittedDraft }`, which
+  is true while the composer holds unsent input for that thread. It is false
+  for a thread that is not in the sidebar's thread view.
+- `useSidebarThreadDraftIds()` returns the ids of every sidebar thread that
+  holds an unsent draft, through one subscription, for collapsed-group
+  rollups. It returns the same empty set whenever there are none.
+- `useSidebarThreadRowStatus(threadId)` returns the status another plugin's
+  content script set through `experimental_setThreadRowStatus`, or null.
+  `useSidebarThreadRowStatuses()` returns every status that is set, by thread
+  id, through one subscription.
+- `useSidebarThreadShortcut(threadId)` returns `{ label, ariaKeyshortcuts }`
+  for the jump shortcut bb assigns while the app command modifier is held.
+  bb numbers rows carrying `data-sidebar-thread-shortcut-target` in DOM
+  order. The hook returns null when the modifier is up and for rows without
+  the attribute.
+
+Docs: `frontend-registration.md`.
+
+Core callers: the bundled Thread list plugin (`plugins/thread-list`) renders
+bb's sidebar through all five. `ThreadRow` reads the draft, row status and
+shortcut hooks, and the group rollups read `useSidebarThreadDraftIds` and
+`useSidebarThreadRowStatuses`. The app implementations in
+`apps/app/src/lib/plugin-sidebar-hooks.ts` wrap the primitives core's own
+lists use. `usePromptDraftHasInput` and `usePluginThreadRowStatus` feed
+`useThreadListEntryStatus`, which the thread search palette, mobile recents
+and related-thread lists draw. Mobile recents also reads
+`usePromptDraftInputThreadIds`.
+`AppSidebar` provides the `SidebarThreadShortcutKeysContext` behind the
+shortcut hook.
+
+**Audit before calling these stable.**
+
+1. **Hooks versus DTO fields.** Confirm that draft, row status and shortcut
+   should stay separate per-row hooks rather than fields on
+   `PluginSidebarThread`. `useSidebarThreadDraft` is the per-thread draft hook
+   that item 5 of the `experimental_useSidebarThreads` entry asks about.
+2. **Draft scope.** A draft is keyed by project and thread, and the hook
+   reports false for threads outside the sidebar's view. Confirm callers never
+   need drafts for archived threads, or for threads the view filters out.
+3. **Row status contract.** `PluginSidebarThreadRowStatus` aliases
+   `PluginComposerThreadRowStatus`, so the `tone` → `state` rename and the
+   arbitration questions in the `experimental_setThreadRowStatus` entry apply
+   to these hooks as well. A change there changes these return types.
+4. **Shortcut targeting.** Shortcut assignment depends on a DOM attribute and
+   DOM order. Confirm that holds for virtualized lists that do not mount every
+   row, and decide whether the attribute name belongs in the typed contract.
+5. **Whole-list subscriptions.** Confirm the set and map returned by
+   `useSidebarThreadDraftIds` and `useSidebarThreadRowStatuses` keep their
+   identity while nothing changes, at ten thousand threads.
 
 ## `app.slots.experimental_threadInfoRow` / `app.slots.experimental_threadInfoSection` / `experimental_THREAD_INFO_ROW_GROUPS` / `experimental_THREAD_INFO_SECTION_GROUPS` / `experimental_InfoSection` / `experimental_DetailRow` / `experimental_InfoList` / `experimental_InfoListRow` (`@get-bb/plugin-sdk/app`)
 
@@ -3145,6 +3390,96 @@ Docs: `frontend-thread-context-card.md`, `frontend-registration.md`,
    header button and the transcript's position do not depend on the thread.
 6. **Groups.** Rows and sections reuse the Info tab's groups. Confirm the two surfaces
    should share one group vocabulary.
+
+## `app.slots.experimental_threadHeaderRow` (`@get-bb/plugin-sdk/app`)
+
+A registration is `{ id, order?, component }`. Every registered row renders
+full width, stacked by `order` ascending (unset last, then registration
+order), directly under `ThreadDetailHeader` and above the timeline, in every
+thread page and split pane. The component receives
+`ExperimentalThreadHeaderRowProps`: `{ threadId, projectId, environment }`,
+where `environment` is `{ id }` from the thread, null when it has none. A
+component that returns null takes no space; when no plugin registers a row,
+the host renders nothing.
+
+`ThreadDetailView` appends `PluginThreadHeaderRows`
+(`apps/app/src/components/plugin/PluginThreadHeaderRows.tsx`) to the
+`timelineHeader` it passes as `mainHeader` to `SecondaryPanelLayout`, inside
+the thread's `AppNavigationHostProvider`, so `experimental_useAppPanel()` and
+`experimental_usePanelTabs()` in a row act on that thread's side panel. Each
+row mounts in its own `PluginSlotMount` crash boundary (`crashFallback={null}`),
+keyed by plugin, id, generation and thread, so a crash removes only that row
+for that thread.
+
+**Core callers.** None: bb draws nothing between the thread header and the
+timeline, so there is no core path to share. The motivating caller is a
+Conductor-style tab strip of the threads that share the thread's environment.
+Contract tests: `ThreadDetailView.contract.test.tsx` (placement, order, props,
+crash containment, plugin hooks, and the panel controller contract run from a
+row).
+
+Docs: `frontend-thread-header-row.md`.
+
+**Audit before stabilizing.**
+
+1. **Callers.** Ship at least one plugin that uses the row, and decide whether
+   bb moves any of its own pane chrome (such as banners) into the slot.
+2. **Compact viewports.** Rows take vertical space above the timeline on
+   phones; decide whether bb hides or collapses them in a compact viewport.
+3. **Ordering across plugins.** `order` is a bare number shared by every
+   plugin; confirm that is enough, or add groups as the Info tab has.
+4. **Transcript and panel presentations.** Rows render only on thread
+   pages and split panes, not in threads shown inside a panel or as a
+   transcript; confirm that scope.
+
+## `app.slots.experimental_threadHeaderTitle` (`@get-bb/plugin-sdk/app`)
+
+A registration is `{ id, component }`. The component receives
+`ExperimentalThreadHeaderTitleProps`, an alias of
+`ExperimentalThreadHeaderRowProps` (`{ threadId, projectId, environment }`),
+and renders in `ThreadDetailHeader` in place of the `ThreadTitle` text, in
+every thread page and split pane. Only one title renders: the first
+registration in slot order, which is plugin id in lexical order, then
+registration order within a plugin. Later registrations are ignored.
+
+Core keeps the rest of the header: the Thread actions menu after the title,
+plugin header actions, the open-in button, pane maximize and close, the context
+card button, the right-panel toggle, the macOS drag region, and the split-pane
+drag from the title area. While the inline rename editor is open (the
+`thread.rename` command or the menu's Rename) the header shows core's editor
+instead of the plugin title. Double-click does not start a rename on a plugin
+title. The pane drag ignores pointer-downs on links, buttons, inputs, labels,
+`role="button"`/`role="link"` and content-editable elements inside the title,
+so a plugin title can be clickable. The plugin title renders in a `div`, not
+core's `p`, so block content is valid. The document title stays the thread
+title.
+
+`PluginThreadHeaderTitle`
+(`apps/app/src/components/plugin/PluginThreadHeaderTitle.tsx`) mounts the
+component through `PluginSlotMount` keyed by plugin, id, generation and thread,
+with core's `ThreadTitle` as `crashFallback`, so a crash shows the normal title
+for that thread.
+
+**Core callers.** None: core draws the thread title itself and has no
+alternative title. The motivating caller is the Conductor layout plugin, which
+shows the thread title as the active tab of an `experimental_threadHeaderRow`
+tab strip and puts a `project › workspace` breadcrumb in the header instead.
+Tests: `ThreadDetailHeader.test.tsx` (props, plugin order, crash fallback,
+rename editor, pane drag from controls) and
+`plugin-app-thread-header-title.test.ts` (registration).
+
+Docs: `frontend-thread-header-row.md`.
+
+**Audit before stabilizing.**
+
+1. **Exclusivity.** First-wins by plugin id is silent. Decide whether users
+   pick the title provider in Settings, as for the thread list and composer.
+2. **Rename affordance.** A plugin title loses double-click rename; confirm
+   the menu and shortcut are enough or let the component request a rename.
+3. **Compact viewports.** Check how a long breadcrumb truncates next to the
+   header actions on phones and in narrow split panes.
+4. **Window title.** Decide whether a plugin should be able to set the window
+   title for a thread, or whether it stays core-owned.
 
 ## `app.slots.experimental_threadRowMetadata` / `experimental_ThreadRowMetadata` (`@get-bb/plugin-sdk/app`)
 
@@ -4073,6 +4408,51 @@ be cancelled during activation or rollback.
 Stabilization requires exercising reconnect/reload, concurrent deduplication,
 rollback delivery, missing jobs after restart, and CLI/SDK parity.
 
+## `PluginBbSdk.hosts.experimental_startProviderCliInstall` and `experimental_providerCliInstallJobs`
+
+Starts a server-owned provider CLI install or update on a machine and returns
+its job at once (`POST /hosts/:id/provider-clis/install-jobs`, 202).
+`experimental_providerCliInstallJobs.list/get` report `running`, then
+`completed` with the installer's events or `failed` with the reason the
+machine could not run it; `wait` polls `get` until the job ends and rides out
+up to two minutes of the server being unreachable. Starting the same provider
+on the same machine while a job runs returns that job. Jobs survive client
+disconnects, stay ten minutes after finishing, and live in memory only, so a
+server restart answers `provider_cli_install_job_not_found`. Installs on one
+machine run one at a time. When the machine refuses an action that is no
+longer needed and a fresh status shows the provider installed (install) or
+current (update), the job completes with one successful `completed` event
+whose `exitCode` and `signal` are null, instead of the refusal.
+`installProviderCli` keeps its events contract by starting a job and waiting
+on it. Core callers: the Updates settings section,
+the sidebar updates badge and the setup guide through
+`provider-cli-install-store`, which also follows jobs started elsewhere
+(another device or before a reload), and `bb updates apply` and
+`bb machine` through `installProviderCli`. Stabilize after reload, server
+restart and multi-device follow have been exercised on released builds, and
+once streaming installer output into the job (which needs a daemon protocol
+change) is settled.
+
+## `PluginApplyUpdateArgs.range`, `expectedVersion`, and `rangeUpgrade` on update checks
+
+`checkUpdates` and `listUpdateResults` entries carry `rangeUpgrade` when a
+newer stable release sits outside a git semver or npm range source's saved
+range: `currentRange`, the proposed `range`, `basis` (`catalog` when the
+plugin's marketplace entry still lists the same repository or package and its
+current range admits the release, `release` for installs from no marketplace
+or a removed one, which get `^<version>`; none is reported once the plugin's
+marketplace no longer lists it), the `candidate`, `breaking` (caret rule from the installed
+version), and `reasons` when the candidate fails engines on this bb.
+`applyUpdate` and `experimental_startUpdate` accept `range` to change the
+saved range in the same staged activation (refusing pinned sources, ranges
+with nothing newer, and downgrades) and `expectedVersion` to refuse a
+candidate other than the one reviewed. Core callers: the plugin details
+Review action and `UpdatePluginDialog` through `startPluginUpdate`, and
+`bb plugin update <id> --range`. Stabilize after the rollback of a range
+change, catalog-range adoption, and npm range changes have been exercised on
+released builds, and once a later decision on following non-breaking catalog
+range widenings automatically is made.
+
 ## `PluginBbSdk.system.experimental_recordTelemetryEvent`
 
 Posts one anonymous product event to `POST /api/v1/system/telemetry/events`,
@@ -4098,7 +4478,10 @@ step, whether the scan ran out of time and how many folders it could not open.
 A failed operation or `onboarding_sign_in` adds a `failure_reason` from a fixed
 set (`no_host`, `host_unavailable`, `timed_out`, `not_found`, `permission`,
 `command_failed`, `unsupported`, or `other`); a failed `remote_access` adds a
-`failure_stage` (`sign_in`, `pairing`, or `turn_on`) instead.
+`failure_stage` (`sign_in`, `pairing`, or `turn_on`) instead. Agent install
+and sign-in failures with `command_failed`, and `sign_in` or `pairing`
+remote access failures, may add `failure_detail` from a fixed set of error
+classes and an integer `exit_code`; never output or messages.
 `onboarding_left` reports the step a guide was on when the page unloaded
 before the guide finished; it passes the optional second argument
 `{ keepalive: true }`, which sends the request with `fetch`'s `keepalive` so it
@@ -4109,8 +4492,7 @@ the same fixed set.
 around the guide in `OnboardingGate`, which reports and rethrows render errors
 and listens for window errors only while the guide is open.
 `onboarding_exposed` (`entry`) marks the guide being shown; the server saves
-the assignment, adds `setup_guide_variant` and `setup_guide_source`, sets
-`setup_guide_variant` as a person property (`$set`), and sends
+the assignment, adds `setup_guide_variant` and `setup_guide_source`, and sends
 `$feature_flag_called` when the variant came from the PostHog flag. Every
 setup-guide event gets `setup_guide_variant` from the server.
 
@@ -4272,6 +4654,7 @@ field introduces no separate backend or headless side effect.
 - Predictions remain over incoming reads until confirmed matched reads arrive, independently of mutation pending state. A rejected write rolls back its layer and surfaces the mutation error. An accepted write whose refresh fails keeps its prediction with the read error and Retry; a successful refresh replaces it. Later predictions and confirmed values are protected from older mutation settles and rollbacks. Inverted completion retains the later confirmed value until a subsequent fresh read can replace it. Keyed rows live in the `@bb/query-tags` keyed store: a row prediction is never written into the stored row, and an accepted one stays until a read of that row that started after acceptance replaces it. Stabilization includes overlapping writes, external invalidation, refresh failures, plain/keyed targets and completion without stale flicker.
 - `defineRpcContract` accepts `tags(input, output)` and `keyTags(key, value)` from `ContractTagDeclarations`; both receive validated values, and the tags travel in the RPC envelope. Writes declare nothing: the server calls `bb.rpc.experimental_invalidate` where the data changes, so a write from the app, the CLI, an agent tool or background work refreshes matching reads once. Tagged mutations resolve at write acknowledgement while matching active reads refresh in the background. Contract `invalidates` is retired (see its Retired entry).
 - `bb.rpc.experimental_invalidate(tags)` requires nonempty tags; `experimental_invalidateAll()` refreshes all reads of that plugin, including untagged reads. Load, reload, disable and reconnect refresh plugin reads through the same cache path. Plugin changed messages are scoped to `{ kind: "plugin", pluginId }` subscribers; reconnect batches subscriptions and unknown targets are ignored.
+- Test harnesses: the fake host records each `experimental_invalidate(tags)` in `inspection.experimental_rpcInvalidations` (`null` for `experimental_invalidateAll()`) and calls `experimental_onRpcInvalidation` listeners. `renderSlot` drives the client side with `experimental_invalidateRpc(tags | null, pluginId?)`, which refreshes matching reads inside `act`, and its `experimental_rpcContract` option validates each `rpc` handler's input and output against the contract's schemas, like the real client.
 - Tags are plugin-only. Core reads refresh through `changed` messages; UI preferences use the `ui-preferences-changed` system change. Core keeps each thread once, in the same `@bb/query-tags` keyed store as plugin keyed rows, and derives thread detail, every thread list, search and sidebar navigation from it as keyed views. Every core thread write (pin and unpin through one batcher, read state, rename, section and parent moves, archive, unarchive, delete, stop, send status, environment rename) predicts on the entity with `optimisticKeyedUpdate` through `beginOptimisticMutation`, the path `cache.updateKey` uses, and confirms at the server's acknowledgement. One contract table (`@bb/query-tags/testing`) runs against core thread entities and plugin keyed rows; the pin hooks add `useTaggedMutation` with `meta.errorMessage` for core's error toast. Push-notifications thread levels are the first plugin caller; delivery retains `useRealtime`. The GitHub PR Status plugin's composer segment and Info row call `experimental_useRpcKeyedQuery` and `experimental_useRpcMutation` from their own slots. The retired sidebar pull request member calls the keyed read with an explicit `pluginId: "bb--github-pr-status"` outside any plugin slot, the call another plugin makes; the hooks require `pluginId` only when no plugin slot provides one. Stabilization requires additional plugin callers and validation of scoped tags, failures, reconnects, batching and sidebar observer counts. Cache seeding remains outside this API.
 
 ## Typed RPC refusals (`experimental_PluginRpcRefusal`)
@@ -4394,6 +4777,10 @@ These nine `PluginBbSdk.environments` methods are gone from the public typings, 
 of up to 2 MiB with a 256 KiB file list, and file sides up to the 25 MB
 text and 10 MB image limits of `host.read_file`. The running bb enforces its
 own value, so plugins built against the old constant keep working.
+
+## Retired environment pull request methods (`bb.sdk.environments.pullRequest`, `markPullRequestReady`, `markPullRequestDraft`, `mergePullRequest`)
+
+#6125 moved pull requests into the bundled GitHub PR Status plugin (`bb--github-pr-status`) and deleted these four `PluginBbSdk.environments` methods with core's routes, so published plugins that still called them threw a TypeError from bb 0.47.0. They are gone from the public typings, the Plugin Guide and the authoring docs; the plugin's RPC contract (`pullRequests`, `markReady`, `markDraft`, `merge`) replaces them. Published and git-sourced plugins keep working: `packages/sdk/src/areas/retired-environment-pull-requests.ts` adds runtime adapters that call `POST /api/v1/plugins/bb--github-pr-status/rpc/<method>` and return the old shapes. `pullRequest` returns the environment's keyed row (`available` with `pullRequest`, `absent`, or `unavailable` with `message`; the plugin's row schema is the old `ThreadPullRequest`), and `unavailable` when the plugin returns no row. The actions return `{ ok: true, action: "pull_request_ready" | "pull_request_draft" | "pull_request_merge", message }`, plus `method` for merge. A plugin `not_found` refusal becomes 404 `environment_not_found` and a `conflict` refusal becomes 409 `pull_request_action_failed` with the plugin's reason. When the plugin is disabled they fail with the RPC error, as the Git read adapters do. Inside a server plugin, `bb.sdk.environments` builds these adapters, and the Git read adapters, on the plugin's caller-token `plugins.callRpc` (`wrapSdkForPlugin` in `apps/server/src/services/plugins/plugin-api.ts`, through `createRetiredEnvironmentMembers` from `@bb/sdk`). The GitHub PR Status plugin therefore treats a `pullRequest` call as a plugin read and waits for a row fresher than 10 seconds. Without the token it would be an app viewer read, answered from the saved row, which for a merged PR can still say open. `bb-plugin-build` warns on calls to them with the replacement RPC call (`packages/plugin-build/src/retired-sdk-members.ts`), the same scan and log paths as the Git reads, and never fails a build. Callers are marketplace plugins written against the old SDK (genui and linear among them). Remove the adapters after those plugins migrate.
 
 ## Panel controller (`experimental_useAppPanel`, `ExperimentalPanelController`, `ExperimentalOpenTabOptions`, `experimental_panel`)
 

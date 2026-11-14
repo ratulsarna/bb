@@ -635,7 +635,7 @@ async function handleRequest(message) {
             threadId: params.threadId,
             turn: { id: turnId, status: "inProgress" },
           });
-        }, LATE_TURN_START_DELAY_MS);
+        }, script?.lateStartDelayMs ?? LATE_TURN_START_DELAY_MS);
         return;
       }
       if (firstInputText(params.input) === RESPOND_THEN_EXIT_PROMPT_TEXT) {
@@ -683,6 +683,10 @@ async function handleRequest(message) {
       return;
     }
     case "turn/steer":
+      if (script?.steerError) {
+        respondError(id, script.steerError.code, script.steerError.message);
+        return;
+      }
       respond(id, {});
       return;
     case "turn/interrupt": {

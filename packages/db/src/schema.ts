@@ -329,6 +329,7 @@ export const installedPlugins = sqliteTable("plugins", {
   lastFailureVersion: text("last_failure_version"),
   lastFailureAt: integer("last_failure_at"),
   lastFailureDetail: text("last_failure_detail"),
+  lastFailureLabel: text("last_failure_label"),
   activeArtifactId: text("active_artifact_id").references(
     (): AnySQLiteColumn => pluginArtifacts.id,
   ),
@@ -424,6 +425,7 @@ export const pluginStateSnapshots = sqliteTable(
       ],
     }).notNull(),
     rollbackCandidateVersion: text("rollback_candidate_version"),
+    rollbackCandidateLabel: text("rollback_candidate_label"),
     rollbackSourceFingerprint: text("rollback_source_fingerprint"),
     rollbackBbVersion: text("rollback_bb_version"),
     rollbackSdkVersion: text("rollback_sdk_version"),
@@ -511,6 +513,9 @@ export const projectSources = sqliteTable(
       table.projectId,
       table.hostId,
     ),
+    uniqueIndex("project_sources_default_project_idx")
+      .on(table.projectId)
+      .where(sql`${table.isDefault} = 1`),
     check(
       "project_sources_shape_check",
       sql`(
@@ -708,6 +713,17 @@ export const threadPluginMetadata = sqliteTable(
     metadataJson: text("metadata_json").notNull(),
   },
   (table) => [primaryKey({ columns: [table.threadId, table.pluginId] })],
+);
+
+export const threadPurges = sqliteTable(
+  "thread_purges",
+  {
+    threadId: text("thread_id")
+      .primaryKey()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    requestedAt: integer("requested_at").notNull(),
+  },
+  (table) => [index("thread_purges_requested_idx").on(table.requestedAt)],
 );
 
 export const threadTabs = sqliteTable("thread_tabs", {
@@ -951,6 +967,19 @@ export const maintenanceScanCursors = sqliteTable(
       table.outputPath,
     ),
   ],
+);
+
+export const sweepItemFailures = sqliteTable(
+  "sweep_item_failures",
+  {
+    sweep: text("sweep").notNull(),
+    itemKey: text("item_key").notNull(),
+    attempts: integer("attempts").notNull(),
+    firstFailedAt: integer("first_failed_at").notNull(),
+    retryAt: integer("retry_at").notNull(),
+    lastError: text("last_error").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.sweep, table.itemKey] })],
 );
 
 export const promptHistoryEntries = sqliteTable(

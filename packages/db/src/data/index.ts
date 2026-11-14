@@ -131,7 +131,6 @@ export {
   getPluginRecommendationId,
   setPluginRecommendationId,
   getAppKeybindingOverrides,
-  claimInstallTurnNumber,
   getAppSettings,
   getDisabledPluginProviderCatalog,
   getDisabledProviderIds,
@@ -150,6 +149,19 @@ export {
   setSkippedAppUpdate,
 } from "./app-settings.js";
 export { getStoredThreadTabs, replaceStoredThreadTabs } from "./thread-tabs.js";
+export {
+  deleteThreadPurgeBatch,
+  nextThreadPurge,
+  requestThreadPurge,
+} from "./thread-purges.js";
+export {
+  deleteSweepItemFailures,
+  deleteSweepItemFailuresOfUnknownSweeps,
+  getSweepItemFailure,
+  listSweepItemFailures,
+  upsertSweepItemFailure,
+} from "./sweep-item-failures.js";
+export type { SweepItemFailure } from "./sweep-item-failures.js";
 export {
   getStoredUiPreferenceDefault,
   listStoredUiPreferenceDefaults,
@@ -229,6 +241,7 @@ export {
   claimPluginScheduledRun,
   deletePluginSchedules,
   listDuePluginSchedules,
+  pluginScheduleKey,
   listPluginSchedules,
   prunePluginSchedules,
   recordPluginScheduleResult,
@@ -304,6 +317,7 @@ export {
   appendDaemonEventsInTransaction,
   appendStoredThreadEvent,
   copyStoredThreadEventsInTransaction,
+  listStoredEventRowMetadata,
   findLastCompletedRootStoredTurn,
   findLastRootStoredTurnStarted,
   appendStoredThreadEventsInTransaction,
@@ -332,6 +346,7 @@ export {
   getStoredTurnRequestEventForTurn,
   getLatestStoredConversationOutlineSequence,
   getLatestCompletedThreadContextClearSequence,
+  getLatestModelFallbackRowSinceTurnRequest,
   getLatestThreadSystemErrorEventRow,
   getLatestThreadSequence,
   insertEvents,
@@ -419,6 +434,7 @@ export type {
   InlineOutputCharLimit,
   ScopedItemRef,
   StoredEventRow,
+  StoredEventRowMetadata,
   StoredThreadEventDataRow,
   TimelineWindowHint,
   ThreadClientTurnRequestKey,
@@ -550,7 +566,9 @@ export * from "./machines.js";
 export {
   advanceThreadPruning,
   deleteThreadScopedPruningCursors,
+  findUnprunableThreadEventSequence,
   getNextThreadPruningPolicy,
+  pickThreadPruningThread,
   THREAD_PRUNING_POLICIES,
 } from "./thread-pruning.js";
 export {

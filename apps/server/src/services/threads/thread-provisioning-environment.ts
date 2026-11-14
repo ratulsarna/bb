@@ -154,9 +154,7 @@ export function failThreadProvisioning(
       "Failed environment preparation cleanup will retry",
     ),
   );
-  if (outcome.applied) {
-    queueChildSetupFailureNotification(deps, args.thread);
-  }
+  if (outcome.applied) queueChildSetupFailureNotification(deps, args.thread);
 }
 
 export function queueChildSetupFailureNotification(

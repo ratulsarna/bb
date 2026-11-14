@@ -123,6 +123,151 @@ describe("PluginDetailReleaseControl", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("offers a release outside the saved range for review and never one that cannot run here", () => {
+    const rangeUpgrade = {
+      currentRange: "^1.6.0",
+      range: "^2.0.0",
+      basis: "catalog" as const,
+      candidate: { version: "2.0.0", label: "2.0.0", display: "2.0.0" },
+      breaking: true,
+      reasons: [],
+    };
+    const wrapper = ({ children }: { children: import("react").ReactNode }) => (
+      <MemoryRouter>
+        {createQueryClientTestHarness().wrapper({ children })}
+      </MemoryRouter>
+    );
+    const offered = plugin({
+      updateState: {
+        ...EMPTY_PLUGIN_UPDATE_STATE,
+        outcome: "current",
+        rangeUpgrade,
+      },
+    });
+    render(
+      <>
+        <PluginDetailReleaseControl plugin={offered} />
+        <PluginDetailReleaseStatus plugin={offered} />
+      </>,
+      { wrapper },
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "Review the update of Linear to 2.0.0",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("status", { name: "Update outside the version range" })
+        .textContent,
+    ).toBe(
+      "2.0.0 is available outside the version range ^1.6.0 this plugin follows. The marketplace now lists ^2.0.0. It may include breaking changes, so bb won’t install it until you review it.",
+    );
+
+    cleanup();
+    const blocked = plugin({
+      updateState: {
+        ...EMPTY_PLUGIN_UPDATE_STATE,
+        outcome: "current",
+        rangeUpgrade: { ...rangeUpgrade, reasons: ["requires bb >= 9"] },
+      },
+    });
+    render(
+      <>
+        <PluginDetailReleaseControl plugin={blocked} />
+        <PluginDetailReleaseStatus plugin={blocked} />
+      </>,
+      { wrapper },
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(
+      screen.getByRole("status", { name: "Update outside the version range" })
+        .textContent,
+    ).toContain("Requires bb >= 9. 1.6.2 remains installed.");
+  });
+
+  it("reviews and confirms a range upgrade after a historical activation failure", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json(
+        {
+          job: {
+            id: "range-update",
+            pluginId: "linear",
+            displayName: "Linear",
+            state: "running",
+            phase: "preparing",
+          },
+        },
+        { status: 202 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { wrapper } = createQueryClientTestHarness();
+    const failedThenOffered = plugin({
+      version: "3.4.1",
+      source: "npm:@example/linear@^3.4.0",
+      provenance: "catalog",
+      updateState: {
+        ...EMPTY_PLUGIN_UPDATE_STATE,
+        outcome: "current",
+        lastFailure: {
+          version: "4.0.0",
+          label: "4.0.0",
+          at: null,
+          detail: "Activation failed and the previous version was restored.",
+        },
+        rangeUpgrade: {
+          currentRange: "^3.4.0",
+          range: "^4.0.0",
+          basis: "catalog",
+          candidate: {
+            version: "4.2.0",
+            label: "4.2.0",
+            display: "4.2.0",
+          },
+          breaking: true,
+          reasons: [],
+        },
+      },
+    });
+    render(
+      <>
+        <PluginDetailReleaseControl plugin={failedThenOffered} />
+        <PluginDetailReleaseStatus plugin={failedThenOffered} />
+      </>,
+      {
+        wrapper: ({ children }) => (
+          <MemoryRouter>{wrapper({ children })}</MemoryRouter>
+        ),
+      },
+    );
+
+    expect(
+      screen.getByRole("status", { name: "Update failed" }).textContent,
+    ).toContain("bb couldn’t activate 4.0.0.");
+    expect(
+      screen.getByRole("status", { name: "Update outside the version range" })
+        .textContent,
+    ).toContain("4.2.0 is available outside the version range ^3.4.0");
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Review the update of Linear to 4.2.0",
+      }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Update Linear to 4.2.0?" }),
+    ).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Update to 4.2.0" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({ range: "^4.0.0", expectedVersion: "4.2.0" }),
+    );
+  });
+
   it("retries a failed update from the release action without opening a modal", async () => {
     let completeUpdate: (() => void) | undefined;
     const fetchMock = vi.fn(

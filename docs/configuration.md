@@ -125,7 +125,8 @@ These entries are startup-only:
 - `BB_HOST_DAEMON_PORT` and `BB_INHERITED_SKILLS_ROOTS`
 - `BB_CONNECT_GATE_KEYS_URL`, `BB_LOG_LEVEL`,
   `BB_MANAGED_DEV_BUILTIN_PLUGIN_HOT_RELOAD`, `BB_MARKETPLACE_URL`,
-  `BB_PERF_DIAGNOSTICS`, `BB_POSTHOG_API_KEY`, and `BB_TELEMETRY`
+  `BB_PERF_DIAGNOSTICS`, `BB_POSTHOG_API_KEY`, `BB_QUERY_PLAN_AUDIT`, and
+  `BB_TELEMETRY`
 - `BB_SERVER_BIND_HOST`, `BB_SERVER_PORT`, and all `BB_FF_*` feature flags
 
 Setting or unsetting one still reloads any other pending changes, but running
@@ -238,24 +239,25 @@ change the host-daemon protocol.
 
 ## Common Keys
 
-| Key                            | Set with                                           | When to set             | Used for                                                                                                                                                                                                                                                                   |
-| ------------------------------ | -------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BB_APP_URL`                   | `bb-app config`                                    | Optional for remote use | Human-facing app URL used for generated links, allowed browser origins, and the allowed DNS hostname for requests. Leave empty for local-only use. Live when set with `bb-app config`.                                                                                     |
-| `BB_EXTERNAL_URL`              | `bb-app env`, or environment                       | Startup-only            | Internet-facing HTTPS base URL for generated public links; the fallback for `machineServerUrl`.                                                                                                                                                                            |
-| `BB_MARKETPLACE_URL`           | `bb-app env`, or environment                       | Startup-only testing    | Manifest URL of the reserved `bb-community` marketplace. Default `https://getbb.app/marketplace/v2/marketplace.json` (falls back to v1 on 404); a custom URL is requested without fallback. Changes only `bb-community`.                                                   |
-| `BB_CONNECT_GATE_KEYS_URL`     | `bb-app env`, or environment                       | Startup-only testing    | Public key set the bb connect next tunnel ingress verifies gate assertions with. Default `https://getbb.app/.well-known/bb-connect-gate-keys.json`. See [connect-next.md](connect-next.md).                                                                                |
-| `BB_SERVER_URL`                | `bb-app config`                                    | Remote CLI/host use     | Server targeted by the standalone `bb` CLI and `host-daemon` commands on this machine. Defaults to `http://127.0.0.1:38886`. It does not change where `npx bb-app` binds.                                                                                                  |
-| `BB_SERVER_BIND_HOST`          | `bb-app env`, environment, or `--server-bind-host` | Startup-only            | Server listener host: `127.0.0.1` (default) or `0.0.0.0`. Not a `bb-app config` key. See [Startup Flags](#startup-flags).                                                                                                                                                  |
-| `BB_SERVER_PORT`               | `bb-app env`, environment, or `--server-port`      | Startup-only            | HTTP listener port. Defaults to `38886`.                                                                                                                                                                                                                                   |
-| `BB_HOST_DAEMON_PORT`          | `bb-app env`, environment, or `--host-daemon-port` | Startup-only            | Local host-daemon API port. Defaults to `38887`.                                                                                                                                                                                                                           |
-| `BB_LOG_LEVEL`                 | `bb-app config`                                    | Startup-only debugging  | `trace`, `debug`, `info`, `warn`, `error`, or `fatal`.                                                                                                                                                                                                                     |
-| `BB_TELEMETRY`                 | `bb-app env`, or environment                       | Startup-only            | `false` always disables anonymous usage telemetry, overriding the `telemetryEnabled` setting.                                                                                                                                                                              |
-| `BB_SKIP_ONBOARDING`           | Environment                                        | Startup-only            | Default false. `1` marks first-run setup completed at startup when it is not yet, so the setup screen is skipped. Settings → General can still replay it. `pnpm dev`, `pnpm start:worktree`, and `pnpm desktop:worktree` default it to `1`; an explicit `0` retains setup. |
-| `BB_SETUP_GUIDE_VARIANT`       | Environment                                        | Startup-only QA         | `control` or `new` forces the first-run setup guide variant, ignoring telemetry and the `setup-guide-redesign` experiment. Unset by default. See [General settings](#general-settings).                                                                                    |
-| `BB_PERF_DIAGNOSTICS`          | `bb-app env`, environment, or `--perf-diagnostics` | Startup-only            | Default false. Permits the `performanceDiagnostics` experiment; see [Experiments](#experiments).                                                                                                                                                                           |
-| `BB_CLI_ERROR_LOG`             | Environment of the `bb` process                    | Optional                | `0` stops the CLI recording failed invocations (command path, error code, no argument values) to `<dataDir>/logs/cli-errors.jsonl`. See `bb guide overview`.                                                                                                               |
-| `BB_ACCOUNT_POOL_PARENT_URL`   | Set automatically by a parent bb server            | Nested bb servers       | Account Pooler hub of the bb server whose thread launched this one. When present the Account Pooler plugin is enabled on first run and proxies to that parent; `bb pool parent isolate` opts out. Not a `bb-app config` key.                                               |
-| `BB_ACCOUNT_POOL_PARENT_TOKEN` | Set automatically by a parent bb server            | Nested bb servers       | Machine token this nested server presents to the parent hub. Both parent variables must be well formed or proxying stays off.                                                                                                                                              |
+| Key                            | Set with                                           | When to set             | Used for                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------ | -------------------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BB_APP_URL`                   | `bb-app config`                                    | Optional for remote use | Human-facing app URL used for generated links, allowed browser origins, and the allowed DNS hostname for requests. Leave empty for local-only use. Live when set with `bb-app config`.                                                                                                                                              |
+| `BB_EXTERNAL_URL`              | `bb-app env`, or environment                       | Startup-only            | Internet-facing HTTPS base URL for generated public links; the fallback for `machineServerUrl`.                                                                                                                                                                                                                                     |
+| `BB_MARKETPLACE_URL`           | `bb-app env`, or environment                       | Startup-only testing    | Manifest URL of the reserved `bb-community` marketplace. Default `https://getbb.app/marketplace/v2/marketplace.json` (falls back to v1 on 404); a custom URL is requested without fallback. Changes only `bb-community`.                                                                                                            |
+| `BB_CONNECT_GATE_KEYS_URL`     | `bb-app env`, or environment                       | Startup-only testing    | Public key set the bb connect next tunnel ingress verifies gate assertions with. Default `https://getbb.app/.well-known/bb-connect-gate-keys.json`. See [connect-next.md](connect-next.md).                                                                                                                                         |
+| `BB_SERVER_URL`                | `bb-app config`                                    | Remote CLI/host use     | Server targeted by the standalone `bb` CLI and `host-daemon` commands on this machine. Defaults to `http://127.0.0.1:38886`. It does not change where `npx bb-app` binds.                                                                                                                                                           |
+| `BB_SERVER_BIND_HOST`          | `bb-app env`, environment, or `--server-bind-host` | Startup-only            | Server listener host: `127.0.0.1` (default) or `0.0.0.0`. Not a `bb-app config` key. See [Startup Flags](#startup-flags).                                                                                                                                                                                                           |
+| `BB_SERVER_PORT`               | `bb-app env`, environment, or `--server-port`      | Startup-only            | HTTP listener port. Defaults to `38886`.                                                                                                                                                                                                                                                                                            |
+| `BB_HOST_DAEMON_PORT`          | `bb-app env`, environment, or `--host-daemon-port` | Startup-only            | Local host-daemon API port. Defaults to `38887`.                                                                                                                                                                                                                                                                                    |
+| `BB_LOG_LEVEL`                 | `bb-app config`                                    | Startup-only debugging  | `trace`, `debug`, `info`, `warn`, `error`, or `fatal`.                                                                                                                                                                                                                                                                              |
+| `BB_TELEMETRY`                 | `bb-app env`, or environment                       | Startup-only            | `false` always disables anonymous usage telemetry, overriding the `telemetryEnabled` setting.                                                                                                                                                                                                                                       |
+| `BB_SKIP_ONBOARDING`           | Environment                                        | Startup-only            | Default false. `1` marks first-run setup completed at startup when it is not yet, so the setup screen is skipped. Settings → General can still replay it. `pnpm dev`, `pnpm start:worktree`, and `pnpm desktop:worktree` default it to `1`; an explicit `0` retains setup.                                                          |
+| `BB_SETUP_GUIDE_VARIANT`       | Environment                                        | Startup-only QA         | `control` or `new` forces the first-run setup guide variant, ignoring telemetry and the `setup-guide-redesign` experiment. Unset by default. See [General settings](#general-settings).                                                                                                                                             |
+| `BB_PERF_DIAGNOSTICS`          | `bb-app env`, environment, or `--perf-diagnostics` | Startup-only            | Default false. Permits the `performanceDiagnostics` experiment; see [Experiments](#experiments).                                                                                                                                                                                                                                    |
+| `BB_QUERY_PLAN_AUDIT`          | Environment                                        | Startup-only debugging  | Default false. `1` logs `Slow SQLite query plan` for each query whose plan walks a large table or picks a weaker index; see [diagnostics](debugging-and-qa.md#slow-sqlite-query-plans). `pnpm dev`, `pnpm start:worktree`, and `pnpm desktop:worktree` default it to `1`. The `performanceDiagnostics` experiment also turns it on. |
+| `BB_CLI_ERROR_LOG`             | Environment of the `bb` process                    | Optional                | `0` stops the CLI recording failed invocations (command path, error code, no argument values) to `<dataDir>/logs/cli-errors.jsonl`. See `bb guide overview`.                                                                                                                                                                        |
+| `BB_ACCOUNT_POOL_PARENT_URL`   | Set automatically by a parent bb server            | Nested bb servers       | Account Pooler hub of the bb server whose thread launched this one. When present the Account Pooler plugin is enabled on first run and proxies to that parent; `bb pool parent isolate` opts out. Not a `bb-app config` key.                                                                                                        |
+| `BB_ACCOUNT_POOL_PARENT_TOKEN` | Set automatically by a parent bb server            | Nested bb servers       | Machine token this nested server presents to the parent hub. Both parent variables must be well formed or proxying stays off.                                                                                                                                                                                                       |
 
 BB accepts request hosts that are `localhost`, IP addresses (including LAN and
 Tailscale IPs), or the hostname in `BB_APP_URL`. For a custom DNS name or
@@ -349,8 +351,10 @@ saved in `<dataDir>/setup-guide-assignment.json` is reused.
 
 **Anonymous usage telemetry.** PostHog events carry a random install id, app
 version, install kind, platform, OS release, architecture, and Node version.
+Every event sets `$process_person_profile: false`, so PostHog keeps no person
+profile for an install.
 The server sends events such as `app_started`, `telemetry_disabled`, `thread_created`,
-`user_message_sent`, `turn_finished`, and `plugin_installed`. The app reports setup-guide and
+`user_message_sent`, and `plugin_installed`. The app reports setup-guide and
 first-send events through `POST /api/v1/system/telemetry/events`
 (`sdk.system.experimental_recordTelemetryEvent`), such as `onboarding_started`,
 `onboarding_step_reached`, `onboarding_step_completed`,
@@ -372,15 +376,16 @@ guide (by either route), and Continue on the plugins step only when a featured
 plugin is on; otherwise each counts as skipped.
 `onboarding_exposed` (`entry` `first_run` or `replay`) marks the setup guide
 being shown: the server saves the flag assignment, adds `setup_guide_variant`
-and `setup_guide_source` (`override`, `flag`, or `default`), sets
-`setup_guide_variant` as a person property, and sends PostHog's
+and `setup_guide_source` (`override`, `flag`, or `default`), and sends PostHog's
 `$feature_flag_called` when the flag decided the variant. The server adds
 `setup_guide_variant` to every setup-guide event (`onboarding_*` and onboarding
-`recommendation`), and once the flag assignment is known every event, including
-`turn_finished`, carries `$feature/setup-guide-redesign`.
+`recommendation`), and once the flag assignment is known every event carries
+`$feature/setup-guide-redesign`.
 `onboarding_operation` records a setup-guide action's `started`,
 `succeeded`, or `failed` outcome with counts only, the same way in both
-guides. A Projects step `scan` adds `timed_out` (true when the repo scan ran
+guides. A Projects step `scan` records nothing after the guide's first
+successful scan, such as the rescan after an import, and adds `timed_out`
+(true when the repo scan ran
 out of time and the list may be partial) and `unreadable_count` (how many
 folders the scan was not allowed to open, such as macOS Documents or Desktop;
 never their paths). A failed Projects `import` reports `item_count` (repos
@@ -389,22 +394,38 @@ selected) and `succeeded_count` (imported before the failure). Plugins step
 `disable` carry the plugin's public id in `resource_id`; `install` succeeds or
 fails when its install job finishes, not when the request is accepted, even
 if the guide moved to another step meanwhile; a cancelled install job records
-no outcome. `load`
-records only `failed`, once each time the Agent step's agent states or the
-Plugins step's catalog start failing to load; in the new guide the Agent step
-also records `timed_out` when its agent states haven't loaded after 10
-seconds and it offers Retry, once per attempt. `finish` records only `failed`,
+no outcome. `load` records `succeeded` the first time the Agent step's agent
+states or the Plugins step's catalog load, with `duration_ms` (time from the
+step first opening to the data arriving), and `failed` the first time they
+fail to load before any data arrives, each at most once per step per guide (a
+failed background refresh after the data loaded is not a load failure); in the new guide the Agent
+step also fails with `timed_out` when its agent states haven't loaded after 10
+seconds and it offers Retry. `finish` records only `failed`,
 with the step the guide closed from, when saving that setup was finished
 fails. Every `failed` outcome except `remote_access` adds `failure_reason`:
-`no_host` (no computer was available: once per guide for `scan`, and each
-time the Agent step opens without one for agent `load`), `host_unavailable`, `timed_out`,
+`no_host` (no computer was available: once per guide for `scan` and agent
+`load`), `host_unavailable`, `timed_out`,
 `not_found`, `permission`, `command_failed` (the agent install command, plugin
 install job, or new machine's setup ran and failed), or `other`. A failed
 `remote_access` adds `failure_stage`: `sign_in` (getbb.app sign-in couldn't
 start or ended denied, expired, or failed), `pairing` (a pairing code was
 rejected), or `turn_on` (turning remote access on failed); a retry after a
-failure records a new `started`. `add_machine` can fail before `started` when
-the setup command couldn't be prepared.
+failure records a new `started`. A failed `sign_in` or `pairing` stage also
+adds `failure_detail`: `denied`, `expired`, `login_failed`, `rate_limited`,
+`service_unavailable`, `account_unavailable`, or `network` for sign-in, and
+the rejected code's reason (`invalid_code`, `expired_code`, `already_used`,
+`network`, `unauthorized`, `profile_unavailable`, `superseded`, or
+`account_unavailable`) for pairing; anything else is `other`. An agent
+`install` or `update` that fails with `command_failed` adds `failure_detail`,
+classified on this computer from the install's output, and `exit_code` when
+the command exited: `not_found` (the installer or a command it needs is
+missing), `permission`, `network`, `disk_full`, `npm_error`,
+`verification_failed` (the command exited 0 but the agent still isn't
+installed or updated), `unavailable` (the install is no longer offered),
+`in_progress` (another agent install was running), `signal`, `exit_nonzero`,
+or `other`. Only the class and the number are sent, never the output, paths,
+or messages. `add_machine` can fail before `started` when the setup command
+couldn't be prepared.
 `onboarding_left` (`step`, the step on screen, and `entry`) is sent at most
 once per guide, in either guide, when the page unloads (the browser's
 `pagehide`: closing the tab or window, reloading, or navigating away) while the
@@ -433,8 +454,11 @@ status: `ready`, `not_installed`, `unauthenticated`, `expired`,
 again only when one of these values changes.
 `onboarding_sign_in` carries the agent's public id in `resource_id`
 (custom agents report `other`, as agent installs do). A `failed` sign-in adds
-`failure_reason`: `command_failed` (the sign-in command exited non-zero),
-`no_host`, `not_found` (the agent's state wasn't loaded), or `unsupported`
+`failure_reason`: `command_failed` (the sign-in command exited non-zero, with
+`failure_detail` `not_found` for exit 127, `permission` for 126, `signal` when
+killed, or `exit_nonzero`, plus `exit_code`; or the agent reported the
+sign-in failed, with `failure_detail` `login_failed`), `no_host`, `not_found`
+(the agent's state wasn't loaded), or `unsupported`
 (the agent has no sign-in command) when it couldn't start, and
 `host_unavailable`, `timed_out`, `not_found`, `permission`, or `other` when
 its terminal couldn't be created. A sign-in that couldn't start records only
@@ -454,14 +478,6 @@ plugin), `plugin` (any other plugin), or `system` (bb's own retries and follow-u
 runs into an existing thread report `automation`. `bb thread spawn` run inside a thread
 sends that thread as `senderThreadId`; the new thread reports `agent` when the sender has a
 turn running, and `user` otherwise.
-
-`turn_finished` sends `outcome` (`succeeded`, `failed`, or `stopped`),
-`error_category` (`none`, `auth`, `billing`, `rate_limit`, `limit_reached`,
-`provider_unavailable`, `start_failed`, `process_exited`, `host_lost`, or `other`),
-`provider` (a shipped built-in provider ID, otherwise `other`), and
-`install_turn_number`, in addition to the standard event properties. The stored
-per-install number increments atomically on each enabled finish. It pauses while
-telemetry is off and resumes at the next number when enabled again.
 
 ## AI services
 
@@ -972,13 +988,22 @@ bb stores only the experiments you set; the others follow the shipped default.
 The `earlyAdopter` general setting (the Become an early adopter banner on
 Settings → Experiments, `bb settings general earlyAdopter on`) switches the
 shipped default to the early adopter default: experiments marked Early adopter
-(currently `timelinePush`, `compactExpiredCache`, `pluginUpdates`,
-`skipFocusedThreadNotifications`, `threadRowMetadata`, and `updateWhenIdle`)
-turn on, and the rest stay off. An experiment you set yourself keeps your value
+(currently `agentCpuPriority`, `compactExpiredCache`, `dismissReadNotifications`,
+`pluginUpdates`, `skipFocusedThreadNotifications`, `threadRowMetadata`, and
+`updateWhenIdle`) turn on, and the rest stay off. An experiment you set yourself keeps your value
 either way.
 `/system/config` and `sdk.system.config()` return the resolved values in
 `experiments`.
 
+- `agentCpuPriority` keeps bb responsive when agents saturate the CPU. The
+  host daemon starts provider processes and environment setup and teardown
+  scripts at nice 10 (below-normal on Windows), inherited by
+  the builds and tests they run; terminals keep normal priority. On macOS the
+  launcher also starts the server and daemon with application scheduling
+  (`taskpolicy -a`). Turning it on or off takes effect after restarting bb,
+  including the restart an update performs: running provider processes serve
+  new threads too, and a lowered process cannot be raised again. See
+  [slow database operations](debugging-and-qa.md#slow-database-operations).
 - `compactExpiredCache` (on for early adopters) reports `compactionOfferAt` on a thread's context
   usage (timeline `contextWindowUsage` and `bb thread context`) once the
   provider has reported a prompt-cache lifetime, the provider supports manual
@@ -987,7 +1012,7 @@ either way.
   next send passes `compactFirst` so the server runs `/compact` and queues the
   message behind it. Clicking the chip keeps the full history for that one
   send.
-- `dismissReadNotifications` makes the push-notifications plugin remove a
+- `dismissReadNotifications` (on for early adopters) makes the push-notifications plugin remove a
   thread's notifications once the thread is read on any client (opened, marked
   read, or sent a message). Registered phones and tablets get a silent push
   (`{"kind":"dismiss","threadId":…}`; `_contentAvailable` on iOS, data-only on
@@ -995,23 +1020,16 @@ either way.
   delivered notifications, and open web and desktop clients close the system
   notification they are showing for it. Phones need a mobile app version with
   the background task; an older Android app in the foreground would list the
-  silent push as a blank notification, so it is off for early adopters too.
+  silent push as a blank notification.
   The plugin reads it on each delivery and read, so a toggle applies live.
-- `narrowPluginCss` makes the app request each plugin's
-  stylesheet with `css-scope=owned-root-v1`. bb then serves utilities that
-  match only inside that plugin's own roots, not inside any root without a
-  plugin id, which makes style recalculation cheaper with many plugins. A
-  bundle whose `app.js` sets `data-bb-plugin-root` without `data-bb-plugin`
-  keeps the slower stylesheet either way. The app reads the experiment when it
-  loads a plugin's stylesheet, so a toggle applies after a reload. See
-  [Plugin Stylesheet Version Skew](debugging-and-qa.md#plugin-stylesheet-version-skew).
 - `serverMove` enables Move server here in Settings → Machines,
   `bb server move`, `bb server export`, and old server copy deletion; while off
   those routes return 403 `server_move_experiment_disabled` (status and cancel
   stay available). See `bb guide machines`.
 - `performanceDiagnostics` turns on server performance diagnostics: slow
-  database, API, and event-loop logging, periodic performance samples, and
-  continuous V8 CPU profiles written every 30 seconds to
+  database, API, and event-loop logging, slow SQLite query plan warnings,
+  periodic performance samples, and continuous V8 CPU profiles written every
+  30 seconds to
   `<dataDir>/logs/performance/`. Profiles are kept for 12 hours with a 1 GB
   total cap (oldest first), and a profile over 12 MiB is discarded. It needs
   startup permission from `BB_PERF_DIAGNOSTICS=1` or the launcher flag
@@ -1069,6 +1087,7 @@ either way.
   plugin releases can go out ahead of a retry scheduled for later (for example
   a provider-retry row waiting hours for a subscription window) and overtake
   it; with it, those rows wait for the retry.
+
 - `threadContextCard` moves a running thread's
   details into the thread context card at the upper-right of its pane: bb's parent
   thread and child threads, the Git plugin's changes, which open the Diff tab,
@@ -1096,12 +1115,6 @@ either way.
   plugin reads it with
   `experimental_useExperiment("skipFocusedThreadNotifications")` and follows a
   toggle live.
-- `timelinePush` makes an open thread view subscribe to its latest timeline
-  window over the WebSocket (`thread-timeline` subscription target); the server
-  pushes the full window once, then row deltas after new events, instead of the
-  client refetching the latest window after every update. A missed push falls
-  back to the delta request used when it is off. Open views follow a toggle
-  live.
 - `updateWhenIdle` (on for early adopters) lets bb update itself once no
   thread is running instead of interrupting them. Settings → Updates gains an
   "Restart and update bb automatically" switch ("Restart and update the server
@@ -1131,6 +1144,21 @@ either way.
   experiment is off, the schedule and automatic update routes return 403
   `update_when_idle_experiment_disabled`, the CLI commands print how to turn it
   on, and turning it off drops a waiting update. See `bb guide machines`.
+- `walCheckpointWorker` moves SQLite WAL checkpoints for `bb.db` and plugin
+  `data.db` files off the server's main thread. A background worker thread
+  opens its own connection to each database and runs `wal_checkpoint(PASSIVE)`
+  every 100 ms, and right away again while the WAL holds 4,096 frames or more
+  and is still growing; the server's own connections set
+  `wal_autocheckpoint=0`, so a commit no longer copies the WAL into the
+  database file and fsyncs it. If sustained writes grow the WAL past 16,384
+  frames across two worker passes, the server checkpoints the small remaining
+  tail itself between tasks and logs "Sustained writes outpaced the WAL
+  checkpoint worker". The hourly incremental vacuum waits for a worker pass
+  around each chunk instead of checkpointing inline. If the worker exits or
+  cannot open a database, those connections go back to checkpointing on
+  commit and bb logs a warning; a worker that had started restarts after
+  10 seconds. The experiment applies live: turning it off stops the worker
+  after a final checkpoint and restores `wal_autocheckpoint=1000`.
 
 ## Thread Timeline Window
 
@@ -1149,8 +1177,8 @@ that is still running or has no answer puts it above the first row after your
 read point, and the divider never lands on your own message.
 
 Timeline builds slower than 150 ms log `Thread timeline build blocked the event
-loop`, and event-loop stalls over 500 ms log `Event loop stalled`, both at
-`info`.
+loop` with main-thread CPU time and context-switch counts, and event-loop
+stalls over 500 ms log `Event loop stalled`, both at `info`.
 
 ## Plugins
 

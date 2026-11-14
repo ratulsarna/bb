@@ -300,34 +300,43 @@ export function registerActionsCommands(
         async (id: string | undefined, opts: ThreadArchiveCommandOptions) => {
           const threadId = requireThreadIdOrSelf(id, opts);
           const sdk = createCliBbSdk(getUrl());
-          let archivedThreadIds: string[] = [threadId];
+          let archivedThreadIds: string[];
           try {
-            const result = await sdk.threads.archive({ threadId });
-            archivedThreadIds = result.archivedThreadIds;
+            archivedThreadIds = (await sdk.threads.archive({ threadId }))
+              .archivedThreadIds;
           } catch (err: unknown) {
             throw prependErrorContext(
               `Failed to archive thread ${threadId}`,
               err,
             );
           }
+          const alreadyArchived = !archivedThreadIds.includes(threadId);
+          const { archivedAt } = await sdk.threads.get({ threadId });
           if (
             outputJson(opts, {
               ok: true,
               threadId,
+              alreadyArchived,
+              archivedAt,
               archivedThreadIds,
             })
           ) {
             return;
           }
+          const headline = !alreadyArchived
+            ? `Thread ${threadId} archived`
+            : archivedAt === null
+              ? `Thread ${threadId} was already archived`
+              : `Thread ${threadId} was already archived at ${new Date(archivedAt).toLocaleString()}`;
           const cascadedCount = archivedThreadIds.filter(
             (archivedId) => archivedId !== threadId,
           ).length;
           if (cascadedCount === 0) {
-            console.log(`Thread ${threadId} archived`);
+            console.log(headline);
             return;
           }
           console.log(
-            `Thread ${threadId} archived (${cascadedCount} related thread${cascadedCount === 1 ? "" : "s"} also archived)`,
+            `${headline} (${cascadedCount} related thread${cascadedCount === 1 ? "" : "s"} ${alreadyArchived ? "" : "also "}archived)`,
           );
         },
       ),
@@ -747,10 +756,11 @@ async function withRestoreEnvironmentHint(
   if (!parsed.success || parsed.data.details.reason !== "destroyed") {
     return error;
   }
-  const { canRestoreEnvironment } = await sdk.threads.get({ threadId });
+  const thread = await sdk.threads.get({ threadId }).catch(() => null);
+  if (thread === null) return error;
   return new CliExitError(error.message, 1, {
     code: parsed.data.code,
-    hint: canRestoreEnvironment
+    hint: thread.canRestoreEnvironment
       ? `Its workspace was removed. Restore it with \`bb thread restore-environment ${threadId}\`, then send again.`
       : "Its workspace was removed and its environment provider cannot restore it. Start a new thread to continue.",
   });

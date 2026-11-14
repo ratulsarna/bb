@@ -1,4 +1,7 @@
-import type { PluginRuntimeStatus } from "@bb/server-contract";
+import type {
+  PluginRangeUpgrade,
+  PluginRuntimeStatus,
+} from "@bb/server-contract";
 import type { IconName } from "@bb/shared-ui/icon";
 import type { PluginListItem } from "@/hooks/queries/plugin-settings-queries";
 
@@ -117,9 +120,23 @@ export type PluginRowSignal =
       detail: string | null;
     };
 
-export function pluginRowSignal(
+export function reviewableRangeUpgrade(
   plugin: PluginListItem,
-): PluginRowSignal | null {
+): PluginRangeUpgrade | null {
+  const state = plugin.updateState;
+  return state.availableLabel === null &&
+    state.rangeUpgrade !== null &&
+    state.rangeUpgrade.reasons.length === 0
+    ? state.rangeUpgrade
+    : null;
+}
+
+type PluginRowStatusSignal = Extract<PluginRowSignal, { kind: "status" }>;
+type PluginRowUpdateSignal = Extract<PluginRowSignal, { kind: "update" }>;
+
+function pluginRowStatusSignal(
+  plugin: PluginListItem,
+): PluginRowStatusSignal | null {
   const state = plugin.updateState;
   if (state.lastFailure !== null) {
     return {
@@ -152,8 +169,30 @@ export function pluginRowSignal(
       detail: state.detail,
     };
   }
-  if (state.availableLabel !== null) {
-    return { kind: "update", version: state.availableLabel };
-  }
   return null;
+}
+
+export function pluginRowSignals(plugin: PluginListItem): {
+  status: PluginRowStatusSignal | null;
+  update: PluginRowUpdateSignal | null;
+} {
+  const status = pluginRowStatusSignal(plugin);
+  const state = plugin.updateState;
+  if (status === null && state.availableLabel !== null) {
+    return {
+      status,
+      update: { kind: "update", version: state.availableLabel },
+    };
+  }
+  const rangeUpgrade = reviewableRangeUpgrade(plugin);
+  if (
+    rangeUpgrade !== null &&
+    (status === null || state.lastFailure !== null)
+  ) {
+    return {
+      status,
+      update: { kind: "update", version: rangeUpgrade.candidate.label },
+    };
+  }
+  return { status, update: null };
 }

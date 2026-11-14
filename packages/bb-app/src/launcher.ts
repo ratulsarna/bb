@@ -2,11 +2,13 @@
 import {
   hostToolchain,
   nodeNetworkArgs,
+  readAgentCpuPriority,
   spawnHostProcess as spawn,
 } from "@bb/process-utils";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { relayDesktopAppUpdates } from "@bb/config/desktop-app-update";
+import { announceDesktopRuntimeReady } from "@bb/config/desktop-runtime-ready";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { spawnLoggedProcess } from "./logged-process.js";
 import {
@@ -438,6 +440,7 @@ export interface ManagedFullStackProcesses {
 }
 
 interface SpawnNamedManagedProcessArgs {
+  appScheduling: boolean;
   ipc?: boolean;
   logDir: string;
   args: string[];
@@ -541,6 +544,7 @@ interface SuperviseBbAppStartArgs {
   findMachineService: () => Promise<string | null>;
   isShutdownRequested: () => boolean;
   onFullStackReady?: () => Promise<void>;
+  onRuntimeReady: () => void;
   prepareFullStack: (entry: FullStackEntry) => Promise<FullStackStarters>;
   processes: ManagedFullStackProcesses;
   readServerMoveMarkers: ReadServerMoveMarkersFn;
@@ -2863,6 +2867,7 @@ Exits with code 3 without starting when the server on this data directory moved 
 
   log(" ", dim(`logs: ${runtime.context.logDir}/`));
   const childProcess = spawnLoggedProcess({
+    appScheduling: readAgentCpuPriority(runtime.context.dataDir),
     command: process.execPath,
     args: [...nodeNetworkArgs(runtime.serverEnv), runtime.context.serverEntry],
     logDir: runtime.context.logDir,
@@ -2935,6 +2940,7 @@ async function runHostDaemonOnly(args: RunHostDaemonOnlyArgs): Promise<void> {
 
   const startDaemon = (): ChildManagedProcessRun =>
     spawnNamedManagedProcess({
+      appScheduling: readAgentCpuPriority(args.context.dataDir),
       args: [...nodeNetworkArgs(daemonEnv), args.context.daemonEntry],
       command: process.execPath,
       env: daemonEnv,
@@ -3159,6 +3165,7 @@ export async function startFullStackServerProcess(
 
   const launchId = randomUUID();
   const serverRun = spawnNamedManagedProcess({
+    appScheduling: readAgentCpuPriority(args.context.dataDir),
     args: [...nodeNetworkArgs(args.env), args.context.serverEntry],
     command: process.execPath,
     env: { ...args.env, BB_SERVER_LAUNCH_ID: launchId },
@@ -3195,6 +3202,7 @@ async function startDaemonProcess(
   args: StartDaemonProcessArgs,
 ): Promise<ManagedProcessRun> {
   const daemonRun = spawnNamedManagedProcess({
+    appScheduling: readAgentCpuPriority(args.context.dataDir),
     args: [...nodeNetworkArgs(args.env), args.context.daemonEntry],
     command: process.execPath,
     env: args.env,
@@ -3737,6 +3745,7 @@ export async function superviseBbAppStart(
     log(" ", formatReadyOutputRow("lock", args.context.daemonLockFile));
     process.stdout.write("\n");
     log(" ", dim("Press Ctrl+C to stop"));
+    args.onRuntimeReady();
     await args.onFullStackReady?.();
 
     return superviseFullStackProcesses({
@@ -3754,6 +3763,7 @@ export async function superviseBbAppStart(
   const enterMovedMode = async (
     movedFile: ServerMovedFile,
   ): Promise<FullStackSupervisionResult> => {
+    args.onRuntimeReady();
     const movedModeResult = await runMovedMode({
       bindHost: args.serverBindHost,
       context: args.context,
@@ -4279,6 +4289,7 @@ export async function runBbApp(
         : {
             onFullStackReady: () => appUpdateController.onFullStackReady(),
           }),
+      onRuntimeReady: announceDesktopRuntimeReady,
       prepareFullStack: async (entry) => {
         const fullStackRuntime = await resolveFullStackRuntime(entry);
         const serverEnv = createServerEnv({

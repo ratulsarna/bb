@@ -308,7 +308,7 @@ async function retryPortCollisions(label, run) {
 }
 
 async function waitForHttp({
-  acceptResponse = () => true,
+  acceptResponse = async () => true,
   label,
   portCollisionLogPaths = [],
   processRef,
@@ -1361,7 +1361,7 @@ try {
   await timed("plugin host worker bundle", () =>
     smokePluginHostWorkerBundle(installedPackageDir),
   );
-  if (process.platform === "linux" || process.platform === "darwin") {
+  if (["linux", "darwin", "win32"].includes(process.platform)) {
     const results = await Promise.allSettled([
       timed("full stack", () => smokeFullStack(installedBinDir, sdkDir)),
       timed("daemon join", () => smokeDaemonJoin(installedBinDir)),

@@ -67,6 +67,9 @@ Inspecting:
     --self                                 Target current thread
 
   Shows pull request status for the attached environment branch when available.
+  An archived thread's status line names the archive time, as in `Status: idle
+  (archived 11/6/2026, 4:18:02 PM)`; status alone is the run state, so check
+  `thread.archivedAt` in `--json`.
   Read the thread's git status and diff with `bb git status|diff
   <environment-id>`; `--json` prints the environment ID as `environment.id`.
   The deprecated `--work-status`, `--git-diff`, `--diff-target`, `--diff-sha`
@@ -115,6 +118,11 @@ Inspecting:
   Exit codes: 2 on timeout, 3 on invalid arguments, 4 when waiting for idle on
   a thread in error with nothing queued to recover it. A failed thread whose
   retry is queued to send by itself is still waited on.
+
+  To follow a child thread, block on `bb thread wait <id>` rather than polling.
+  `bb thread show`, `bb thread list --json`, `thread commands` and `thread
+  options` read stored state and do not build the thread's timeline, so they
+  stay cheap on long threads; `bb thread log` builds timeline pages.
 
 Opening threads and files in the app:
 

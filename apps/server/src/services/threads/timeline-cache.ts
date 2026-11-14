@@ -5,7 +5,7 @@ import { timelineWindowJsonLength } from "./timeline-window-tag.js";
 
 const DEFAULT_MAX_ENTRIES = 512;
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
-const DEFAULT_MAX_ENTRY_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MAX_ENTRY_BYTES = 8 * 1024 * 1024;
 
 interface ThreadTimelineCacheOptions {
   maxEntries?: number;
@@ -13,12 +13,19 @@ interface ThreadTimelineCacheOptions {
   maxEntryBytes?: number;
 }
 
+interface ThreadTimelineCacheBuild {
+  expiresAt: number | null;
+  response: ThreadTimelineResponse;
+}
+
 interface ThreadTimelineCache {
   getOrBuild(
     threadId: string,
     key: string,
     revision: string,
-    build: () => ThreadTimelineResponse,
+    build: (
+      previous: ThreadTimelineResponse | undefined,
+    ) => ThreadTimelineCacheBuild,
   ): ThreadTimelineResponse;
   invalidateThread(threadId: string): void;
   readonly size: number;
@@ -26,6 +33,7 @@ interface ThreadTimelineCache {
 
 interface ThreadTimelineCacheEntry {
   bytes: number;
+  expiresAt: number | null;
   response: ThreadTimelineResponse;
   revision: string;
   threadId: string;
@@ -57,17 +65,26 @@ export function createThreadTimelineCache(
       const cached = entries.get(key);
       if (cached !== undefined) {
         deleteEntry(key);
-        if (cached.revision === revision) {
+        if (
+          cached.revision === revision &&
+          (cached.expiresAt === null || Date.now() < cached.expiresAt)
+        ) {
           entries.set(key, cached);
           totalBytes += cached.bytes;
           return cached.response;
         }
       }
 
-      const value = build();
+      const { expiresAt, response: value } = build(cached?.response);
       const bytes = timelineWindowJsonLength(value);
       if (bytes <= maxEntryBytes) {
-        entries.set(key, { bytes, response: value, revision, threadId });
+        entries.set(key, {
+          bytes,
+          expiresAt,
+          response: value,
+          revision,
+          threadId,
+        });
         totalBytes += bytes;
         while (entries.size > maxEntries || totalBytes > maxBytes) {
           const oldest = entries.keys().next().value;
@@ -95,13 +112,14 @@ export function createThreadTimelineCache(
 export interface ThreadTimelineCacheKeyArgs {
   threadId: string;
   page: ThreadTimelinePageRequest;
-  summaryOnly: boolean;
   deferContent: boolean;
   includeNestedRows: boolean;
 }
 
 export interface ThreadTimelineCacheRevisionArgs {
   maxSeq: number;
+  page: ThreadTimelinePageRequest;
+  rewriteGeneration: number;
   status: ThreadStatus;
   surface: string;
 }
@@ -118,7 +136,6 @@ export function buildThreadTimelineCacheKey(
   return [
     args.threadId,
     pageKeyPart(args.page),
-    args.summaryOnly ? "1" : "0",
     args.deferContent ? "1" : "0",
     args.includeNestedRows ? "1" : "0",
   ].join("|");
@@ -127,5 +144,9 @@ export function buildThreadTimelineCacheKey(
 export function buildThreadTimelineCacheRevision(
   args: ThreadTimelineCacheRevisionArgs,
 ): string {
-  return JSON.stringify([args.maxSeq, args.status, args.surface]);
+  return JSON.stringify(
+    args.page.kind === "older"
+      ? [args.rewriteGeneration, args.surface]
+      : [args.rewriteGeneration, args.maxSeq, args.status, args.surface],
+  );
 }
