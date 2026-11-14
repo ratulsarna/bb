@@ -1644,15 +1644,15 @@ describe("strict dispatch admission", () => {
           else await sending;
         }
         if (fail) {
-          await vi.waitFor(() =>
+          await vi.waitFor(() => {
             expect(
               listQueuedThreadMessages(harness.db, second.thread.id),
-            ).toEqual([]),
-          );
+            ).toEqual([]);
+            expect(getThread(harness.db, second.thread.id)?.status).toBe(
+              "active",
+            );
+          });
           expect(getThread(harness.db, first.thread.id)?.status).toBe("idle");
-          expect(getThread(harness.db, second.thread.id)?.status).toBe(
-            "active",
-          );
         }
       });
     },
