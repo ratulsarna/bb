@@ -13,7 +13,6 @@ import {
   deleteQueuedThreadMessage,
   getThread,
   getLatestSessionForHost,
-  listEvents,
   listQueuedThreadMessages,
   listQueuedThreadMessagesForApi,
   listRunningThreads,
@@ -70,6 +69,7 @@ import {
 import { withTestHarness, type TestAppHarness } from "../helpers/test-app.js";
 import { failThreadProvisioning } from "../../src/services/threads/thread-provisioning-environment.js";
 import { settleDanglingBackgroundTasks } from "../../src/services/threads/background-task-reconciliation.js";
+import { listEvents } from "@bb/db/testing";
 
 const WORKSPACE_PATH = "/tmp/dispatch-hooks-project";
 

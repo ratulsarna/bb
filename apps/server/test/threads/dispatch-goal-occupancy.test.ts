@@ -1,9 +1,5 @@
-import {
-  getThread,
-  listEvents,
-  listQueuedThreadMessages,
-  threads,
-} from "@bb/db";
+import { listEvents } from "@bb/db/testing";
+import { getThread, listQueuedThreadMessages, threads } from "@bb/db";
 import { eq } from "drizzle-orm";
 import { threadScope, turnScope, type ThreadEvent } from "@bb/domain";
 import { afterEach, expect, it, vi } from "vitest";

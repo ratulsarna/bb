@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { eq } from "drizzle-orm";
-import { environments, getThread, listEvents, markThreadDeleted } from "@bb/db";
+import { environments, getThread, markThreadDeleted } from "@bb/db";
 import type { EnvironmentRow } from "@bb/db";
 import {
   LEGACY_CODEX_GOAL_EXTENSION_KIND,
@@ -34,6 +34,7 @@ import {
 import { withTestHarness, type TestAppHarness } from "../helpers/test-app.js";
 import { listRunningThreadsWithIntendedHosts } from "../../src/services/threads/dispatch-attempt.js";
 import { runThreadPurges } from "../helpers/thread-purges.js";
+import { listEvents } from "@bb/db/testing";
 
 interface ActiveThreadStopFixture {
   environment: EnvironmentRow;

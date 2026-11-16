@@ -110,6 +110,8 @@ export {
   listThreadAncestors,
   listThreadDescendants,
   searchThreadsWithPendingInteractionState,
+  listTurnStartDeadlineCandidates,
+  isThreadAwaitingTurnStartPastDeadline,
   THREAD_SEARCH_LIMIT_PER_GROUP_DEFAULT,
   THREAD_SEARCH_LIMIT_PER_GROUP_MAX,
 } from "./threads.js";
@@ -121,6 +123,7 @@ export type {
   ThreadSearchResultGroup,
   ThreadWithPendingInteractionState,
   ThreadExecutionOverride,
+  TurnStartDeadlineCandidate,
   UpdateThreadInput,
 } from "./threads.js";
 
@@ -354,7 +357,6 @@ export {
   listThreadDispatchOccupancy,
   listContextWindowUsageRows,
   getLatestTokenUsageRow,
-  listEvents,
   listStoredConversationOutlineEventRows,
   listStoredRootConversationOutlineEventRows,
   getStoredConversationOutlineProjectionState,
@@ -407,6 +409,11 @@ export {
   listThreadIdsStoppedSinceLastTurnStart,
   listThreadIdsWithLatestHostDaemonRestartInterruption,
   listThreadTurnInterruptionEventStates,
+  findStoredEditMessageOperationRow,
+  findLatestEditableUserTurnRequestRow,
+  hasStoredThreadInterruptedSince,
+  hasStoredProviderTurnCompletedSince,
+  hasStoredCancelledThreadProvisioning,
   MissingStoredTurnStartedError,
 } from "./events.js";
 export {
