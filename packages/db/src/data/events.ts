@@ -1999,21 +1999,19 @@ function latestThreadStateEventRowsQuery(
   requestedThreads: SQL | undefined,
 ) {
   const requested =
-    requestedThreads ??
-    sql`SELECT ${threads.id} AS column1 FROM ${threads}`;
-  const latestStates = db.$with("latest_dispatch_thread_states").as(
-    db
-      .select({
-        rowid: sql<number>`${events}.rowid`.as("rowid"),
-        threadId: events.threadId,
-      })
-      .from(events)
-      .where(
-        and(
-          args.status === undefined
-            ? undefined
-            : sql`coalesce(json_extract(${events.data}, '$.payload.status'), json_extract(${events.data}, '$.status')) = ${args.status}`,
-          sql`${events}.rowid IN (
+    requestedThreads ?? sql`SELECT ${threads.id} AS column1 FROM ${threads}`;
+  const latestStatesQuery = db
+    .select({
+      rowid: sql<number>`${events}.rowid`.as("rowid"),
+      threadId: events.threadId,
+    })
+    .from(events)
+    .where(
+      and(
+        args.status === undefined
+          ? undefined
+          : sql`coalesce(json_extract(${events.data}, '$.payload.status'), json_extract(${events.data}, '$.status')) = ${args.status}`,
+        sql`${events}.rowid IN (
             SELECT (
               SELECT candidate.rowid
               FROM ${events} AS candidate INDEXED BY events_thread_state_thread_sequence_idx
@@ -2024,12 +2022,13 @@ function latestThreadStateEventRowsQuery(
             )
             FROM (${requested}) AS requested
           )`,
-        ),
       ),
-  );
-  return db
-    .with(latestStates)
-    .select(storedEventRowFields)
+    );
+  const latestStates = db
+    .$with("latest_dispatch_thread_states")
+    .as(latestStatesQuery);
+  const filteredRows = db
+    .select(storedEventRowAliasedSqlFields(null))
     .from(events)
     .where(
       and(
@@ -2063,6 +2062,7 @@ function latestThreadStateEventRowsQuery(
           : undefined,
       ),
     );
+  return sql`WITH ${sql.identifier("latest_dispatch_thread_states")} AS MATERIALIZED (${latestStatesQuery.getSQL()}) ${filteredRows.getSQL()}`;
 }
 
 function listFilteredLatestThreadStateEventRows(
@@ -2077,7 +2077,9 @@ function listFilteredLatestThreadStateEventRows(
             threadIds.map((id) => sql`(${id})`),
             sql`, `,
           )}`;
-    return latestThreadStateEventRowsQuery(db, args, requestedThreads).all();
+    return db.all<StoredEventRow>(
+      latestThreadStateEventRowsQuery(db, args, requestedThreads),
+    );
   };
   return args.threadIds === undefined
     ? queryBatch(undefined)
@@ -3089,7 +3091,7 @@ export function listThreadDispatchOccupancy(
     WHERE ${threads.id} IN (
       SELECT ${threads.id} FROM ${threads} WHERE ${statusFilter}
       UNION SELECT threadId FROM active_background_tasks
-      UNION SELECT thread_id FROM active_goals
+      UNION SELECT threadId FROM active_goals
     )
     ORDER BY ${threads.id}
   `);

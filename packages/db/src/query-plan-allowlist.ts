@@ -41,7 +41,7 @@ export const QUERY_PLAN_ALLOWLIST: readonly QueryPlanAllowlistEntry[] = [
   ),
   boundedCorrelatedEvents(
     `${EVENTS}#listThreadDispatchOccupancy`,
-    "Latest-goal lookups use ORDER BY sequence DESC LIMIT 1 on the thread/state index; 2,500 to 10,000 goal updates measured 0.96 to 0.85 ms; stop/restart history is grouped only for matching goals; check:query-costs measures scoped and global occupancy",
+    "Latest-goal lookups use ORDER BY sequence DESC LIMIT 1 on the thread/state index and are materialized once before runtime checks; interleaved reads on an 11 GB live database measured median global occupancy 284 ms vs 408 ms before the merge and 552 ms with the inlined CTE; check:query-costs measures scoped and global occupancy",
   ),
   boundedCorrelatedEvents(
     `${EVENTS}#queryBatch`,
