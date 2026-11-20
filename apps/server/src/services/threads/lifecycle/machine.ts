@@ -1058,6 +1058,7 @@ export function transitionThreadLifecycle(
           draft.effect({ kind: "release-goal-capacity" });
         }
         draft.effect({ kind: "settle-background-tasks" });
+        draft.effect({ kind: "drain-queue", wake: "thread-ready" });
         if (draft.status === "idle" || draft.status === "error") {
           draft.effect({
             kind: "end-pending-interactions",

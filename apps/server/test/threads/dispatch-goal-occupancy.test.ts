@@ -1,6 +1,7 @@
 import { handleDaemonSocketClosed } from "../../src/internal/session-owner-side-effects.js";
 import { listEvents } from "@bb/db/testing";
 import {
+  createQueuedThreadMessage,
   getThread,
   listQueuedThreadMessages,
   readThreadRunState,
@@ -15,6 +16,7 @@ import { acceptThreadSendRequest } from "../../src/services/threads/thread-send-
 import {
   interruptActiveThreadsForHost,
   reconcileDaemonReportedThreads,
+  stopThreadForCurrentState,
 } from "../../src/services/threads/thread-lifecycle.js";
 import {
   installAdmissionHooks,
@@ -135,6 +137,46 @@ it.each([false, true])(
     });
   },
 );
+
+it("dispatches a persisted stopping waiter immediately after an idle release", async () => {
+  await withTestHarness(async (harness) => {
+    const fixture = seedDispatchThread(harness, { hostId: "release-waiter" });
+    const stopped = stopThreadForCurrentState(
+      harness.deps,
+      fixture.thread,
+      fixture.environment,
+    );
+    const stop = await waitForQueuedCommand(
+      harness,
+      ({ command }) =>
+        command.type === "thread.stop" &&
+        command.threadId === fixture.thread.id &&
+        command.intent === "release",
+    );
+    createQueuedThreadMessage(harness.db, harness.deps.hub, {
+      threadId: fixture.thread.id,
+      content: textInput("Resume after stopping"),
+      model: "gpt-5",
+      reasoningLevel: "medium",
+      permissionMode: "full",
+      serviceTier: "default",
+      payload: { kind: "inline" },
+      waitingOn: { kind: "stopping" },
+      sendAt: null,
+      systemNotice: null,
+    });
+    await reportQueuedCommandSuccess(harness, stop, {
+      providerCheckpointId: null,
+    });
+    await stopped;
+    await vi.waitFor(() => {
+      expect(listQueuedThreadMessages(harness.db, fixture.thread.id)).toEqual(
+        [],
+      );
+      expect(getThread(harness.db, fixture.thread.id)?.status).toBe("active");
+    });
+  });
+});
 
 it("keeps a restarted native goal occupied when an earlier archive is confirmed late", async () => {
   await withTestHarness(async (harness) => {
