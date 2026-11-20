@@ -1,3 +1,4 @@
+import { requestDispatchAdmissionReleased } from "./services/threads/dispatch-admission.js";
 import { createDesktopAppUpdateService } from "./services/system/desktop-app-update.js";
 import {
   AUTO_UPDATE_CHECK_MS,
@@ -20,7 +21,6 @@ import { createLogger } from "@bb/logger";
 import {
   getAppSettings,
   getDisabledProviderIds,
-  getExperiments,
   getAutoAppUpdate,
   getSkippedAppUpdate,
   setAutoAppUpdate,
@@ -65,10 +65,6 @@ import {
   appInstallFromServerConfig,
   createTelemetryService,
 } from "./services/system/telemetry.js";
-import {
-  createSetupGuideExperiment,
-  SETUP_GUIDE_FLAG_TIMEOUT_MS,
-} from "./services/system/setup-guide-experiment.js";
 import { TerminalSessionLifecycle } from "./services/terminals/terminal-session-lifecycle.js";
 import { createLifecycleDedupers } from "./lifecycle-dedupers.js";
 import type { ServerLogger, ServerRuntimeConfig } from "./types.js";
@@ -256,14 +252,6 @@ export async function runServer(serverConfig: ServerConfig): Promise<void> {
     telemetryEnabled: getAppSettings(db).telemetryEnabled,
     logger,
   });
-  const setupGuideExperiment = await createSetupGuideExperiment({
-    dataDir: serverConfig.BB_DATA_DIR,
-    fetch: globalThis.fetch,
-    flagTimeoutMs: SETUP_GUIDE_FLAG_TIMEOUT_MS,
-    logger,
-    override: serverConfig.BB_SETUP_GUIDE_VARIANT ?? null,
-    telemetry,
-  });
 
   const machineAuth = await createMachineAuthService({
     dataDir: serverConfig.BB_DATA_DIR,
@@ -308,7 +296,7 @@ export async function runServer(serverConfig: ServerConfig): Promise<void> {
       : null;
   const countRunningThreads = (): number => listRunningThreads(db).length;
   const threadsResumeAfterRestart = (): boolean =>
-    getExperiments(db).resumeThreadsAfterRestart;
+    getAppSettings(db).resumeThreadsAfterRestart;
   const sendHoldDeps = {
     aiServices,
     config: runtimeConfig,
@@ -360,7 +348,6 @@ export async function runServer(serverConfig: ServerConfig): Promise<void> {
     autoCheckMs: AUTO_UPDATE_CHECK_MS,
     countRunningThreads,
     inner: appUpdateService,
-    isEnabled: () => getExperiments(db).updateWhenIdle,
     logger,
     notifyChanged: notifyAppUpdateChanged,
     onChangedMessage: (listener) => hub.onChangedMessage(listener),
@@ -394,7 +381,6 @@ export async function runServer(serverConfig: ServerConfig): Promise<void> {
       appVersion,
       bbAppManagedConfig,
       cliCommand,
-      setupGuideExperiment,
       config: runtimeConfig,
       db,
       hub,
@@ -548,6 +534,7 @@ export async function runServer(serverConfig: ServerConfig): Promise<void> {
         pluginService,
         providerRegistry,
       }).finally(() => {
+        requestDispatchAdmissionReleased(sweepDeps);
         void serverMove.handlePluginsStarted();
       });
     }

@@ -45,7 +45,7 @@ import {
 } from "../../src/services/threads/dispatch-attempt.js";
 import { runQueuedMessageDispatch } from "../../src/services/threads/queued-message-dispatch.js";
 import { createThreadFromRequest } from "../../src/services/threads/thread-create.js";
-import { applyLoggedThreadLifecycleEvent } from "../../src/services/threads/lifecycle-outcome.js";
+import { moveThreadStatus } from "../helpers/thread-status.js";
 import { createClientTurnRequestId } from "../../src/services/threads/thread-events.js";
 import { toThreadQueuedMessage } from "../../src/services/threads/thread-queued-messages.js";
 import { textInput } from "../helpers/prompt-input.js";
@@ -222,7 +222,7 @@ async function queueStrictOccupancyWaiter(
       payload: { input: textInput("Wait for capacity"), mode: "auto" },
     }),
   ).resolves.toMatchObject({ delivery: "queued" });
-  noteDispatchRequeued(args.waiter.id);
+  noteDispatchRequeued(args.waiter.id, "capacity");
 }
 
 describe("message.dispatch hook context", () => {
@@ -402,8 +402,8 @@ describe("thread status races under a send", () => {
         handler: () => {
           passes += 1;
           if (passes === 1) {
-            applyLoggedThreadLifecycleEvent(harness.deps, {
-              event: { type: "run.started" },
+            moveThreadStatus(harness.deps, {
+              move: "run.started",
               threadId: thread.id,
             });
             seedTurnStarted(harness.deps, {
@@ -414,8 +414,8 @@ describe("thread status races under a send", () => {
             });
           }
           if (passes === 2) {
-            applyLoggedThreadLifecycleEvent(harness.deps, {
-              event: { type: "run.succeeded" },
+            moveThreadStatus(harness.deps, {
+              move: "run.succeeded",
               threadId: thread.id,
             });
           }
@@ -1460,8 +1460,8 @@ describe("message.dispatch hooks on the queue drain", () => {
       });
       await entered.promise;
       try {
-        applyLoggedThreadLifecycleEvent(harness.deps, {
-          event: { type: "run.started" },
+        moveThreadStatus(harness.deps, {
+          move: "run.started",
           threadId: thread.id,
         });
         seedTurnStarted(harness.deps, {
@@ -1637,7 +1637,7 @@ describe("strict dispatch admission", () => {
               payload: { input: textInput("second"), mode: "auto" },
             }),
           ).toMatchObject({ delivery: "queued" });
-          if (fail) noteDispatchRequeued(second.thread.id);
+          if (fail) noteDispatchRequeued(second.thread.id, "capacity");
         } finally {
           release.resolve();
           if (fail) await expect(sending).rejects.toThrow("Preparation failed");
@@ -1854,8 +1854,8 @@ describe("strict dispatch admission", () => {
       expect(onlyQueuedRow(harness, strictWaiter.id).waitingOn).toMatchObject({
         pluginId: "capacity",
       });
-      noteDispatchRequeued(ordinaryWaiter.id);
-      noteDispatchRequeued(strictWaiter.id);
+      noteDispatchRequeued(ordinaryWaiter.id, "ordinary");
+      noteDispatchRequeued(strictWaiter.id, "capacity");
       strictReleased = true;
 
       await runQueuedMessageDispatch(harness.deps, {
@@ -2345,7 +2345,7 @@ it.each(["turn", "background", "goal"] as const)(
       });
       await runQueuedMessageDispatch(harness.deps, { kind: "plugin-recheck" });
       expect(queuedRows(harness, waiter.id)).toHaveLength(1);
-      noteDispatchRequeued(waiter.id);
+      noteDispatchRequeued(waiter.id, "capacity");
       const response = await harness.app.request("/internal/session/events", {
         method: "POST",
         headers: internalAuthHeaders(harness),

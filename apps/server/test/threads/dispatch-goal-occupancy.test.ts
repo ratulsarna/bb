@@ -1,5 +1,11 @@
+import { handleDaemonSocketClosed } from "../../src/internal/session-owner-side-effects.js";
 import { listEvents } from "@bb/db/testing";
-import { getThread, listQueuedThreadMessages, threads } from "@bb/db";
+import {
+  getThread,
+  listQueuedThreadMessages,
+  readThreadRunState,
+  threads,
+} from "@bb/db";
 import { eq } from "drizzle-orm";
 import { threadScope, turnScope, type ThreadEvent } from "@bb/domain";
 import { afterEach, expect, it, vi } from "vitest";
@@ -18,6 +24,7 @@ import {
 } from "../helpers/dispatch-admission.js";
 import { textInput } from "../helpers/prompt-input.js";
 import {
+  reportQueuedCommandError,
   reportQueuedCommandSuccess,
   waitForQueuedCommand,
 } from "../helpers/commands.js";
@@ -25,35 +32,118 @@ import { withTestHarness } from "../helpers/test-app.js";
 
 afterEach(() => setPluginHookProvider(undefined));
 
-it("releases an idle native goal and its waiter only after archive confirmation", async () => {
-  await withTestHarness(async (harness) => {
-    const occupied = seedDispatchThread(harness, { hostId: "archived-goal" });
-    seedDispatchGoal(harness, occupied);
-    const { thread: waiter } = seedDispatchThread(harness, {
-      hostId: "waiting",
-    });
-    installAdmissionHooks([
-      {
-        pluginId: "capacity",
-        experimental_enforcement: "strict",
-        handler: () =>
-          listRunningThreadsWithIntendedHosts(harness.deps, true).some(
-            (row) => row.id === occupied.thread.id,
+it.each([false, true])(
+  "releases an idle native goal and its waiter only after archive confirmation (unconfirmed request: %s)",
+  async (unconfirmedRequest) => {
+    await withTestHarness(async (harness) => {
+      const occupied = seedDispatchThread(harness, { hostId: "archived-goal" });
+      seedDispatchGoal(harness, occupied);
+      if (unconfirmedRequest) {
+        await acceptThreadSendRequest(harness.deps, {
+          thread: occupied.thread,
+          payload: { input: textInput("Continue the goal"), mode: "auto" },
+        });
+        const submit = await waitForQueuedCommand(
+          harness,
+          ({ command }) =>
+            command.type === "turn.submit" &&
+            command.threadId === occupied.thread.id,
+        );
+        expect(
+          (
+            await postDispatchEvents(harness, occupied.session, [
+              {
+                type: "turn/started",
+                threadId: occupied.thread.id,
+                providerThreadId: occupied.providerThreadId,
+                scope: turnScope("unconfirmed-goal-turn"),
+              },
+              {
+                type: "turn/completed",
+                threadId: occupied.thread.id,
+                providerThreadId: occupied.providerThreadId,
+                scope: turnScope("unconfirmed-goal-turn"),
+                status: "completed",
+              },
+            ])
+          ).status,
+        ).toBe(200);
+        await reportQueuedCommandError(harness, submit, {
+          errorCode: "turn_start_unconfirmed",
+          errorMessage: "The provider start answer was lost",
+        });
+        expect(getThread(harness.db, occupied.thread.id)?.status).toBe("idle");
+        expect(
+          readThreadRunState(harness.db, occupied.thread.id).requests,
+        ).toMatchObject([{ phase: "unconfirmed" }]);
+      }
+      const { thread: waiter } = seedDispatchThread(harness, {
+        hostId: "waiting",
+      });
+      installAdmissionHooks([
+        {
+          pluginId: "capacity",
+          experimental_enforcement: "strict",
+          handler: () =>
+            listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+              (row) => row.id === occupied.thread.id,
+            )
+              ? { action: "wait", reason: "Full" }
+              : { action: "proceed" },
+        },
+      ]);
+      await expect(
+        acceptThreadSendRequest(harness.deps, {
+          thread: waiter,
+          payload: { input: textInput("Waiting work"), mode: "auto" },
+        }),
+      ).resolves.toMatchObject({ delivery: "queued" });
+      expect(
+        (
+          await harness.app.request(
+            `/api/v1/threads/${occupied.thread.id}/archive-all`,
+            { method: "POST" },
           )
-            ? { action: "wait", reason: "Full" }
-            : { action: "proceed" },
-      },
-    ]);
-    await expect(
-      acceptThreadSendRequest(harness.deps, {
-        thread: waiter,
-        payload: { input: textInput("Waiting work"), mode: "auto" },
-      }),
-    ).resolves.toMatchObject({ delivery: "queued" });
+        ).status,
+      ).toBe(200);
+      const archive = await waitForQueuedCommand(
+        harness,
+        ({ command }) =>
+          command.type === "thread.archive" &&
+          command.threadId === occupied.thread.id,
+      );
+      expect(getThread(harness.db, occupied.thread.id)).toMatchObject({
+        archivedAt: expect.any(Number),
+        status: "idle",
+      });
+      expect(
+        listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+          (row) => row.id === occupied.thread.id,
+        ),
+      ).toBe(true);
+      expect(getThread(harness.db, waiter.id)?.status).toBe("idle");
+      await reportQueuedCommandSuccess(harness, archive, {});
+      expect(
+        listRunningThreadsWithIntendedHosts(harness.deps, true).some(
+          (row) => row.id === occupied.thread.id,
+        ),
+      ).toBe(false);
+      await vi.waitFor(() =>
+        expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
+      );
+      expect(listQueuedThreadMessages(harness.db, waiter.id)).toEqual([]);
+    });
+  },
+);
+
+it("keeps a restarted native goal occupied when an earlier archive is confirmed late", async () => {
+  await withTestHarness(async (harness) => {
+    const fixture = seedDispatchThread(harness, { hostId: "late-archive" });
+    seedDispatchGoal(harness, fixture);
     expect(
       (
         await harness.app.request(
-          `/api/v1/threads/${occupied.thread.id}/archive-all`,
+          `/api/v1/threads/${fixture.thread.id}/archive-all`,
           { method: "POST" },
         )
       ).status,
@@ -62,28 +152,51 @@ it("releases an idle native goal and its waiter only after archive confirmation"
       harness,
       ({ command }) =>
         command.type === "thread.archive" &&
-        command.threadId === occupied.thread.id,
+        command.threadId === fixture.thread.id,
     );
-    expect(getThread(harness.db, occupied.thread.id)).toMatchObject({
-      archivedAt: expect.any(Number),
-      status: "idle",
-    });
     expect(
-      listRunningThreadsWithIntendedHosts(harness.deps, true).some(
-        (row) => row.id === occupied.thread.id,
-      ),
-    ).toBe(true);
-    expect(getThread(harness.db, waiter.id)?.status).toBe("idle");
+      (
+        await harness.app.request(
+          `/api/v1/threads/${fixture.thread.id}/unarchive`,
+          { method: "POST" },
+        )
+      ).status,
+    ).toBe(200);
+    await acceptThreadSendRequest(harness.deps, {
+      thread: getThread(harness.db, fixture.thread.id)!,
+      payload: { input: textInput("Resume the goal"), mode: "auto" },
+    });
+    const submit = await waitForQueuedCommand(
+      harness,
+      ({ command }) =>
+        command.type === "turn.submit" &&
+        command.threadId === fixture.thread.id,
+    );
+    await reportQueuedCommandSuccess(harness, submit, { trace: { spans: [] } });
+    expect(
+      (
+        await postDispatchEvents(harness, fixture.session, [
+          {
+            type: "turn/started",
+            threadId: fixture.thread.id,
+            providerThreadId: fixture.providerThreadId,
+            scope: turnScope("restarted-goal-turn"),
+          },
+          {
+            type: "turn/completed",
+            threadId: fixture.thread.id,
+            providerThreadId: fixture.providerThreadId,
+            scope: turnScope("restarted-goal-turn"),
+            status: "completed",
+          },
+        ])
+      ).status,
+    ).toBe(200);
+    expect(getThread(harness.db, fixture.thread.id)?.status).toBe("idle");
     await reportQueuedCommandSuccess(harness, archive, {});
     expect(
-      listRunningThreadsWithIntendedHosts(harness.deps, true).some(
-        (row) => row.id === occupied.thread.id,
-      ),
-    ).toBe(false);
-    await vi.waitFor(() =>
-      expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
-    );
-    expect(listQueuedThreadMessages(harness.db, waiter.id)).toEqual([]);
+      listRunningThreadsWithIntendedHosts(harness.deps, true),
+    ).toContainEqual({ id: fixture.thread.id, hostId: fixture.host.id });
   });
 });
 
@@ -125,6 +238,7 @@ it("settles a stopping goal after a daemon restart without a failure banner", as
     await reconcileDaemonReportedThreads(harness.deps, {
       hostId: fixture.host.id,
       activeThreadIds: [],
+      turnCommandThreadIds: [],
       undeliveredEventThreadIds: [],
       sameDaemonInstance: false,
     });
@@ -143,6 +257,27 @@ it("settles a stopping goal after a daemon restart without a failure banner", as
       expect(getThread(harness.db, waiter.id)?.status).toBe("active"),
     );
     expect(listQueuedThreadMessages(harness.db, waiter.id)).toEqual([]);
+  });
+});
+
+it("retains an idle native goal through a socket drop and same-instance reconciliation", async () => {
+  await withTestHarness(async (harness) => {
+    const fixture = seedDispatchThread(harness, { hostId: "resumable-goal" });
+    seedDispatchGoal(harness, fixture);
+    handleDaemonSocketClosed(harness.deps, { sessionId: fixture.session.id });
+    expect(
+      listRunningThreadsWithIntendedHosts(harness.deps, true),
+    ).toContainEqual({ id: fixture.thread.id, hostId: fixture.host.id });
+    await reconcileDaemonReportedThreads(harness.deps, {
+      hostId: fixture.host.id,
+      activeThreadIds: [],
+      turnCommandThreadIds: [],
+      undeliveredEventThreadIds: [],
+      sameDaemonInstance: true,
+    });
+    expect(
+      listRunningThreadsWithIntendedHosts(harness.deps, true),
+    ).toContainEqual({ id: fixture.thread.id, hostId: fixture.host.id });
   });
 });
 

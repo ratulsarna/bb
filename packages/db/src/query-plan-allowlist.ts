@@ -41,19 +41,11 @@ export const QUERY_PLAN_ALLOWLIST: readonly QueryPlanAllowlistEntry[] = [
   ),
   boundedCorrelatedEvents(
     `${EVENTS}#listThreadDispatchOccupancy`,
-    "Latest-goal lookups use ORDER BY sequence DESC LIMIT 1 on the thread/state index and are materialized once before runtime checks; interleaved reads on an 11 GB live database measured median global occupancy 284 ms vs 408 ms before the merge and 552 ms with the inlined CTE; check:query-costs measures scoped and global occupancy",
+    "Latest goals are materialized once through the partial thread/state index; restart probes read one entry per event type, and terminal checks seek only the suffix after that restart through the thread/type/sequence index. Global and scoped reads are measured by check:query-costs.",
   ),
   boundedCorrelatedEvents(
     `${EVENTS}#queryBatch`,
-    "ORDER BY sequence DESC LIMIT 1 reads one index entry per requested thread",
-  ),
-  boundedCorrelatedEvents(
-    `${EVENTS}#listThreadTurnInterruptionEventStates`,
-    "The subquery supplies the outer search's sequence, so it runs once per thread; check:query-costs measures it",
-  ),
-  boundedCorrelatedEvents(
-    `${EVENTS}#listThreadIdsStoppedSinceLastTurnStart`,
-    "The subquery supplies the outer search's sequence, so it runs once per thread; check:query-costs measures it",
+    "Latest-state and restart probes use ORDER BY sequence DESC LIMIT 1 per requested thread; terminal checks seek only the suffix after the latest restart. check:query-costs measures filtered goal reads.",
   ),
   boundedCorrelatedEvents(
     `${EVENTS}#listThreadIdsWithLatestHostDaemonRestartInterruption`,

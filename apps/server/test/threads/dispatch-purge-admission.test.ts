@@ -61,7 +61,7 @@ async function queueCapacityWaiter(
       payload: { input: textInput("Waiting work"), mode: "auto" },
     }),
   ).resolves.toMatchObject({ delivery: "queued" });
-  noteDispatchRequeued(thread.id);
+  noteDispatchRequeued(thread.id, "capacity");
   return thread;
 }
 
@@ -141,6 +141,7 @@ it.each(["project deletion", "reconnect"] as const)(
         await reconcileDaemonReportedThreads(harness.deps, {
           hostId: occupied.host.id,
           activeThreadIds: [],
+          turnCommandThreadIds: [],
           undeliveredEventThreadIds: [],
           sameDaemonInstance: false,
         });

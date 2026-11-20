@@ -2,15 +2,13 @@ import type { ThreadStatus } from "./thread-status.js";
 
 export const THREAD_RUNTIME_STOPPED_OPERATION = "thread_runtime_stopped";
 
-export type ThreadLifecycleEvent =
-  | { type: "run.preparing" }
-  | { type: "run.started" }
-  | { type: "run.succeeded" }
-  | { type: "run.failed" }
-  | { type: "stop.requested" }
-  | { type: "stop.settled" };
-
-export type ThreadLifecycleEventType = ThreadLifecycleEvent["type"];
+export type ThreadStatusMove =
+  | "run.preparing"
+  | "run.started"
+  | "run.succeeded"
+  | "run.failed"
+  | "stop.requested"
+  | "stop.settled";
 
 interface ThreadLifecycleSupersessionPredicates {
   notArchived?: true;
@@ -18,7 +16,7 @@ interface ThreadLifecycleSupersessionPredicates {
 }
 
 export const THREAD_LIFECYCLE_EVENT_PREDICATES: Record<
-  ThreadLifecycleEventType,
+  ThreadStatusMove,
   ThreadLifecycleSupersessionPredicates
 > = {
   "run.preparing": { notArchived: true, notDeleted: true },
@@ -31,7 +29,7 @@ export const THREAD_LIFECYCLE_EVENT_PREDICATES: Record<
 
 export const THREAD_LIFECYCLE: Record<
   ThreadStatus,
-  Partial<Record<ThreadLifecycleEventType, ThreadStatus>>
+  Partial<Record<ThreadStatusMove, ThreadStatus>>
 > = {
   // A thread that has never dispatched. `run.preparing` is the one way out:
   // it is emitted when the first message's dispatch attempt clears every
@@ -72,42 +70,3 @@ export const THREAD_LIFECYCLE: Record<
     "run.started": "active",
   },
 };
-
-export interface ThreadLifecycleRowState {
-  archivedAt: number | null;
-  deletedAt: number | null;
-  status: ThreadStatus;
-}
-
-export type ThreadLifecycleNoopReason = "illegal-transition" | "superseded";
-
-type ThreadLifecycleEvaluation =
-  | { to: ThreadStatus }
-  | { noop: ThreadLifecycleNoopReason; detail: string };
-
-interface EvaluateThreadLifecycleEventArgs {
-  event: ThreadLifecycleEvent;
-  thread: ThreadLifecycleRowState;
-}
-
-export function evaluateThreadLifecycleEvent(
-  args: EvaluateThreadLifecycleEventArgs,
-): ThreadLifecycleEvaluation {
-  const { event, thread } = args;
-  const predicates = THREAD_LIFECYCLE_EVENT_PREDICATES[event.type];
-  if (predicates.notDeleted && thread.deletedAt !== null) {
-    return { noop: "superseded", detail: "deletedAt set" };
-  }
-  if (predicates.notArchived && thread.archivedAt !== null) {
-    return { noop: "superseded", detail: "archivedAt set" };
-  }
-
-  const to = THREAD_LIFECYCLE[thread.status][event.type];
-  if (to === undefined) {
-    return {
-      noop: "illegal-transition",
-      detail: `no transition for ${event.type} from status ${thread.status}`,
-    };
-  }
-  return { to };
-}

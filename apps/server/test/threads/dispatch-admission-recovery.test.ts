@@ -110,7 +110,9 @@ it("batches bulk runtime status notifications into one release check and wakes a
         harness.hub.notifyThread(thread.id, ["status-changed"]);
       expect(queries).toEqual([]);
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(queries).toHaveLength(1);
+      expect(
+        queries.filter((query) => query.sql.includes("active_goals AS")),
+      ).toHaveLength(1);
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(hook).not.toHaveBeenCalled();
 
@@ -278,7 +280,7 @@ it.each([
           payload: { input: textInput("Waiting work"), mode: "auto" },
         }),
       ).resolves.toMatchObject({ delivery: "queued" });
-      noteDispatchRequeued(waiter.id);
+      noteDispatchRequeued(waiter.id, "capacity");
       if (release === "daemon restart" || release === "connection loss")
         interruptActiveThreadsForHost(harness.deps, {
           hostId: occupied.host.id,
@@ -293,6 +295,7 @@ it.each([
         await reconcileDaemonReportedThreads(harness.deps, {
           hostId: occupied.host.id,
           activeThreadIds: [],
+          turnCommandThreadIds: [],
           undeliveredEventThreadIds: [],
           sameDaemonInstance: true,
         });

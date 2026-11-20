@@ -28,6 +28,7 @@ import {
 import {
   hasStrictMessageDispatchHook,
   isDispatchRequeuedRecently,
+  isPluginDispatchRequeuedRecently,
 } from "./dispatch-hooks.js";
 import { recordQueuedMessageDrainFailure } from "./queue-drain-failure.js";
 import { clearQueuedMessageWait } from "./queue-waits.js";
@@ -528,10 +529,14 @@ async function runPluginRecheckDispatch(
     const pluginId = row.waitHolder.slice(
       QUEUED_MESSAGE_PLUGIN_WAIT_HOLDER_PREFIX.length,
     );
+    if (
+      (!bypassStrictWaiterPacing || !hasStrictMessageDispatchHook(pluginId)) &&
+      isPluginDispatchRequeuedRecently(row.threadId, pluginId)
+    )
+      continue;
     await attemptAutomaticQueuedMessage(deps, row, {
       now,
-      respectRequeuePacing:
-        !bypassStrictWaiterPacing || !hasStrictMessageDispatchHook(pluginId),
+      respectRequeuePacing: false,
       retryingFailure: false,
     });
   }

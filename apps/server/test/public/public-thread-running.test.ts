@@ -1,4 +1,4 @@
-import { applyLoggedThreadLifecycleEvent } from "../../src/services/threads/lifecycle-outcome.js";
+import { moveThreadStatus } from "../helpers/thread-status.js";
 import {
   archiveThread,
   getThread,
@@ -201,16 +201,16 @@ it("keeps archived and deleted live runtimes occupied until stop settles", async
       new Set((await running(harness, true)).map((row) => row.id)),
     ).toEqual(new Set(threads.map((thread) => thread.id)));
     for (const thread of threads) {
-      applyLoggedThreadLifecycleEvent(harness.deps, {
+      moveThreadStatus(harness.deps, {
         threadId: thread.id,
-        event: { type: "stop.requested" },
+        move: "stop.requested",
       });
     }
     expect(await running(harness, true)).toHaveLength(2);
     for (const thread of threads) {
-      applyLoggedThreadLifecycleEvent(harness.deps, {
+      moveThreadStatus(harness.deps, {
         threadId: thread.id,
-        event: { type: "stop.settled" },
+        move: "stop.settled",
       });
     }
     expect(await running(harness, true)).toEqual([]);
@@ -347,9 +347,9 @@ it("holds an idle active goal until Stop confirms and counts it again after an a
       payload: { input: textInput("Restart"), mode: "auto" },
     });
     expect(await running(harness, true)).toEqual(expected);
-    applyLoggedThreadLifecycleEvent(harness.deps, {
+    moveThreadStatus(harness.deps, {
       threadId: thread.id,
-      event: { type: "run.succeeded" },
+      move: "run.succeeded",
     });
     expect(getThread(harness.db, thread.id)?.status).toBe("idle");
     expect(await running(harness, true)).toEqual(expected);
