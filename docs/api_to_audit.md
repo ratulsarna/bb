@@ -689,8 +689,8 @@ Accepted limitations:
   active, because core wakes on dispatch-occupancy release.
 - Replaying events buffered across a reconnect can restore a stopped goal's
   occupancy.
-- A Stop or archive confirmation that arrives after the goal restarted and went
-  idle again releases the newer run's slot.
+- A Stop or archive confirmation that arrives after the goal restarted releases
+  the newer run's slot once its turn ends.
 - An archived idle goal whose archive is skipped or fails keeps its slot until
   the user stops it.
 
