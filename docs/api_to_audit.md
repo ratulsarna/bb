@@ -689,6 +689,10 @@ Accepted limitations:
   active, because core wakes on dispatch-occupancy release.
 - Replaying events buffered across a reconnect can restore a stopped goal's
   occupancy.
+- A Stop or archive confirmation that arrives after the goal restarted and went
+  idle again releases the newer run's slot.
+- An archived idle goal whose archive is skipped or fails keeps its slot until
+  the user stops it.
 
 `sdk.threads.listRunning({ experimental_includeDispatchOccupancy: true })`
 returns `{ id, hostId }` rows for admitted command preparations, starting/active
@@ -696,8 +700,7 @@ threads, stopping threads, tracked background commands, agents, workflows, and
 active native goals between autonomous turns. Archived/deleted threads remain
 included while starting, active, stopping, or carrying unfinished tracked work.
 Runtime loss, confirmed archive, Stop settlement, or storage deletion releases
-stale active goal occupancy; an admitted restart reacquires it. Archive
-confirmations release native goal capacity only for the current archive.
+stale active goal occupancy; an admitted restart reacquires it.
 Starting, active and stopping statuses and outstanding reservations continue to
 hold capacity. Socket loss and same-instance reconnect preserve idle native
 goals: the daemon reports active turns and pending starts, not every live

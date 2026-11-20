@@ -1099,9 +1099,7 @@ export function transitionThreadLifecycle(
       });
       break;
     case "archive.confirmed":
-      if (state.archived) {
-        draft.effect({ kind: "release-goal-capacity" });
-      }
+      draft.effect({ kind: "release-goal-capacity" });
       break;
     case "server.restarted":
       for (const request of [...draft.requests]) {

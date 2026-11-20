@@ -479,16 +479,9 @@ export function settleThreadArchiveCommandResult(
     "thread.archive"
   >,
 ): CommandResultSideEffectsResult {
-  const thread = getThread(args.deps.db, args.command.threadId);
-  if (
-    !args.report.ok ||
-    thread?.archivedAt == null ||
-    thread.archivedAt > args.execution.createdAt
-  ) {
-    return emptyCommandResultSideEffects();
-  }
+  if (!args.report.ok) return emptyCommandResultSideEffects();
   return lifecycleSideEffects(
-    runThreadLifecycleInTransaction(args.deps, thread.id, {
+    runThreadLifecycleInTransaction(args.deps, args.command.threadId, {
       type: "archive.confirmed",
     }),
   );
